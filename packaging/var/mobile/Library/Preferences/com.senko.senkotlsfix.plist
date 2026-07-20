@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>enableAll</key>
+	<false/>
+	<key>enabled-com.apple.mobilesafari</key>
+	<true/>
+	<key>enabled-com.apple.WebKit.Networking</key>
+	<true/>
+	<key>enabled-com.apple.WebKit.WebContent</key>
+	<true/>
+	<key>enabled-com.senko.app</key>
+	<true/>
+	<key>tls13</key>
+	<true/>
+	<key>drainGuard</key>
+	<true/>
+	<key>systemFallback</key>
+	<true/>
+</dict>
+</plist>

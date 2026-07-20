@@ -1,0 +1,71 @@
+# cross-compile senkod against static openssl for jailbroken ios devices
+# static linkage keeps the runtime dependency limited to libsystem
+
+THEOS   ?= $(HOME)/theos
+TC      ?= $(THEOS)/toolchain/linux/iphone/bin
+SDK     ?= $(firstword $(wildcard $(SENKO_SDK_V7) $(HOME)/sdks-armv7 $(HOME)/sdks/iPhoneOS6.1.sdk))
+OSSL    ?= $(firstword $(wildcard $(SENKO_OSSL_V7) $(HOME)/src/openssl-build/install-arm-o1))
+LDID    ?= $(TC)/ldid
+
+# target and library variables stay overrideable for each device slice
+TRIPLE  ?= arm-apple-darwin11
+CC      := $(TC)/clang -target $(TRIPLE) -B $(TC)
+ARCH    ?= -arch armv7 -miphoneos-version-min=6.0
+IOS_BINDIR ?= build/ios
+CFLAGS  := -std=c99 -Wall -Wextra -O2 -DSENKO_RELEASE $(ARCH) -isysroot $(SDK) \
+           -Icore -Icore/third_party -I. -I$(OSSL)/include
+# link archives directly because device openssl is not a supported dependency
+LIBS    := $(OSSL)/lib/libssl.a $(OSSL)/lib/libcrypto.a -lz
+LDFLAGS := $(ARCH) -isysroot $(SDK)
+
+CORE_SRC = core/vless.c core/b64.c core/config.c core/happ.c core/third_party/cJSON.c core/net_safe.c core/socks5.c core/senko_trace.c core/senko_replay.c core/senko_upload.c \
+           core/vless_conn.c core/session.c core/store.c core/control.c \
+           core/ctl_engine.c core/http.c core/url.c core/subfetch.c \
+           core/transport_tcp.c core/transport_tls.c core/transport_ws.c \
+           core/transport_xhttp.c core/transport_pick.c \
+           core/reality_crypto.c core/reality_auth.c core/tls_clienthello.c \
+           core/tls13_kdf.c core/tls13_keysched.c core/tls13_record.c \
+           core/tls13_transcript.c core/tls13_handshake.c core/reality_handshake.c \
+           core/socks5_client.c core/http_client.c core/vision.c core/awg_config.c core/awg_handshake.c
+DAEMON_SRC = dialer.c loop.c pf_natlook.c ctl_server.c daemon_ctl.c storefile.c settings.c vpn_icon.c \
+             routing.c routing_exec.c main.c
+
+.PHONY: all senkod senkoctl senko-kick senkoawgd clean
+all: $(IOS_BINDIR)/senkod $(IOS_BINDIR)/senkoctl $(IOS_BINDIR)/senko-kick $(IOS_BINDIR)/senkoawgd
+
+senkod: $(IOS_BINDIR)/senkod
+
+senkoctl: $(IOS_BINDIR)/senkoctl
+
+senko-kick: $(IOS_BINDIR)/senko-kick
+
+senkoawgd: $(IOS_BINDIR)/senkoawgd
+
+$(IOS_BINDIR)/senkod: $(CORE_SRC) $(DAEMON_SRC)
+	mkdir -p $(IOS_BINDIR)
+	$(CC) $(CFLAGS) $(CORE_SRC) $(DAEMON_SRC) -o $@ $(LDFLAGS) $(LIBS)
+	$(LDID) -S $@
+	@echo "signed. deps:"; $(TC)/otool -L $@ | tail -n +2
+
+# senkoctl decodes the plain control protocol and fetch payloads
+$(IOS_BINDIR)/senkoctl: senkoctl.c core/b64.c
+	mkdir -p $(IOS_BINDIR)
+	$(CC) $(CFLAGS) senkoctl.c core/b64.c -o $@ $(LDFLAGS)
+	$(LDID) -S $@
+	@echo "signed. deps:"; $(TC)/otool -L $@ | tail -n +2
+
+$(IOS_BINDIR)/senkoawgd: senkoawgd.c awg_utun.c awg_route.c awg_pfroute.c core/awg_config.c core/awg_handshake.c core/awg_tunnel.c core/b64.c core/reality_crypto.c vpn_icon.c
+	mkdir -p $(IOS_BINDIR)
+	$(CC) $(CFLAGS) senkoawgd.c awg_utun.c awg_route.c awg_pfroute.c core/awg_config.c core/awg_handshake.c core/awg_tunnel.c core/b64.c core/reality_crypto.c vpn_icon.c -o $@ $(LDFLAGS) $(LIBS)
+	$(LDID) -S $@
+	@echo "signed. deps:"; $(TC)/otool -L $@ | tail -n +2
+
+# setuid root kick: mobile app restarts launchd job without rebooting
+$(IOS_BINDIR)/senko-kick: senko_kick.c
+	mkdir -p $(IOS_BINDIR)
+	$(CC) $(CFLAGS) senko_kick.c -o $@ $(LDFLAGS)
+	$(LDID) -S $@
+	@echo "signed. deps:"; $(TC)/otool -L $@ | tail -n +2
+
+clean:
+	rm -rf build/ios build/ios-armv7 build/ios-arm64

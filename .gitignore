@@ -1,0 +1,39 @@
+# build outputs
+build/
+app/build/
+daemon/build/
+.build-slices/
+
+# host / device binaries (rebuild via Makefile / build_deb.sh)
+daemon/senkod
+daemon/senkod-arm
+daemon/senkoctl
+daemon/senkoawgd
+daemon/senko-awgd
+daemon/vless4sd
+daemon/senko-kick
+tests/test_*
+!tests/test_*.c
+!tests/test_*.h
+senkotlsfix/*.dylib
+vpnicon/*.dylib
+
+# packaging stage (templates under DEBIAN/Library/var stay)
+packaging/usr/
+packaging/Applications/
+
+# release artifacts
+*.deb
+*.Packages
+
+# objects / archives
+*.o
+*.a
+*.d
+
+# runtime noise
+*.sock
+*.cfg
+*.log
+build-deb.log
+.DS_Store

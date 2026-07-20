@@ -1,0 +1,26 @@
+#!/bin/sh
+# no set -e
+
+# Senko postrm: clean up runtime + config artifacts.
+
+case "$1" in
+  remove|purge)
+    rm -f /var/tmp/senkod.sock >/dev/null 2>&1 || true
+    rm -f /var/run/senko-pf.conf >/dev/null 2>&1 || true
+    rm -f /usr/bin/redsocks-senko /var/run/senko-redsocks.conf >/dev/null 2>&1 || true
+    rm -f /Library/MobileSubstrate/DynamicLibraries/senkovpnicon.dylib \
+          /Library/MobileSubstrate/DynamicLibraries/senkovpnicon.plist \
+          /var/mobile/Library/Preferences/com.senko.vpnicon.state >/dev/null 2>&1 || true
+    # Clear uicache on remove
+    su -c uicache mobile >/dev/null 2>&1 || uicache >/dev/null 2>&1 || true
+    ;;
+esac
+
+if [ "$1" = "purge" ]; then
+  rm -f /var/mobile/Library/Preferences/senko.cfg >/dev/null 2>&1 || true
+  rm -f /var/root/Library/Preferences/senko.cfg >/dev/null 2>&1 || true
+  rm -f /var/log/senkod.log >/dev/null 2>&1 || true
+  rm -f /var/log/senko-core.log >/dev/null 2>&1 || true
+fi
+
+exit 0

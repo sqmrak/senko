@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.senko.senkod</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/senkod</string>
+    <string>--managed</string>
+    <string>--ctl</string>
+    <string>/var/tmp/senkod.sock</string>
+    <string>--config</string>
+    <string>/var/root/Library/Preferences/senko.cfg</string>
+    <string>--full-device</string>
+  </array>
+  <!-- boot + crash restart; no UserName - system LaunchDaemons already run root
+       and UserName has broken load on some jb firmwares -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>3</integer>
+  <key>StandardOutPath</key>
+  <string>/var/log/senkod.log</string>
+  <key>StandardErrorPath</key>
+  <string>/var/log/senkod.log</string>
+  <key>WorkingDirectory</key>
+  <string>/</string>
+</dict>
+</plist>

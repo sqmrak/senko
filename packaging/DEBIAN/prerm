@@ -1,0 +1,42 @@
+#!/bin/sh
+# no set -e: prerm failures must not leave package half-removed
+
+# senko daemon prerm: stop the daemon before files are removed. tearing down
+# routing is the daemon's own job on SIGTERM (it calls routing_exec_down via
+# its signal handler), so unloading it here also undoes any live ipfw/pf rules.
+
+PLIST=/Library/LaunchDaemons/com.senko.senkod.plist
+VPNICON_STATE=/var/mobile/Library/Preferences/com.senko.vpnicon.state
+AWG_ACTIVE_CONFIG=/var/run/senkoawgd.config
+UPDATE_AWG_MARKER=/var/run/senkoawgd.upgrade
+
+preserve_awg_for_upgrade() {
+  [ "$1" = upgrade ] || return 0
+  [ -x /usr/bin/senko-kick ] || return 0
+  status="$(/usr/bin/senko-kick --awg-status 2>/dev/null || true)"
+  case "$status" in
+    connecting*|connected*) ;;
+    *) return 0 ;;
+  esac
+  [ -s "$AWG_ACTIVE_CONFIG" ] || return 0
+  config="$(sed -n '1p' "$AWG_ACTIVE_CONFIG" 2>/dev/null || true)"
+  case "$config" in
+    /var/mobile/Library/Preferences/Senko/*.conf)
+      printf '%s\n' "$config" > "$UPDATE_AWG_MARKER"
+      ;;
+  esac
+  /usr/bin/senko-kick --awg-stop >/dev/null 2>&1 || true
+}
+
+preserve_awg_for_upgrade "$1"
+
+printf '0\n' > "$VPNICON_STATE" 2>/dev/null || true
+launchctl unload "$PLIST" >/dev/null 2>&1 || true
+
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+  # leave the user config in place on plain remove; purge takes it.
+  rm -f /var/tmp/senkod.sock /var/tmp/senkod.token >/dev/null 2>&1 || true
+  rm -f "$AWG_ACTIVE_CONFIG" "$UPDATE_AWG_MARKER" >/dev/null 2>&1 || true
+fi
+
+exit 0

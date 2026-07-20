@@ -1,0 +1,24 @@
+{
+  Filter = {
+    Bundles = (
+      "com.apple.UIKit",
+      "com.apple.mobilesafari",
+      "com.apple.WebKit.Networking",
+      "com.apple.WebKit.WebContent",
+      "com.saurik.Cydia",
+      "org.coolstar.SileoStore",
+      "org.coolstar.Sileo"
+    );
+    Executables = (
+      "Cydia",
+      "cydo",
+      "apt",
+      "apt-get",
+      "apt-http",
+      "apt-https",
+      "dpkg",
+      "dpkg-deb",
+      "Sileo"
+    );
+  };
+}

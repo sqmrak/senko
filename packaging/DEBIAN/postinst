@@ -1,0 +1,199 @@
+#!/bin/sh
+# keep non-fatal setup errors from breaking dpkg
+
+PLIST=/Library/LaunchDaemons/com.senko.senkod.plist
+SUBSTRATE_DIR=/Library/MobileSubstrate/DynamicLibraries
+SUBSTRATE_FILTER=/usr/lib/senkotlsfix/substrate-filter.plist
+VPNICON_DYLIB=/usr/lib/senkovpnicon.dylib
+VPNICON_PLIST=/usr/lib/senkovpnicon.plist
+VPNICON_STATE=/var/mobile/Library/Preferences/com.senko.vpnicon.state
+UPDATE_AWG_MARKER=/var/run/senkoawgd.upgrade
+CFG=/var/root/Library/Preferences/senko.cfg
+LEGACY_CFG=/var/mobile/Library/Preferences/senko.cfg
+
+tlsfix_installed() {
+  dpkg -s com.tlsfix >/dev/null 2>&1 && return 0
+  [ -e /Library/MobileSubstrate/DynamicLibraries/tlsfix.dylib ] && return 0
+  return 1
+}
+
+substrate_installed() {
+  [ -e /Library/MobileSubstrate/MobileSubstrate.dylib ] && return 0
+  [ -e /usr/lib/libsubstrate.dylib ] && return 0
+  return 1
+}
+
+firmware_major() {
+  version="$(sed -n 's/.*<string>\([0-9][0-9]*\)\..*<\/string>.*/\1/p' \
+    /System/Library/CoreServices/SystemVersion.plist 2>/dev/null | head -n 1)"
+  [ -n "$version" ] || version=6
+  printf '%s\n' "$version"
+}
+
+disable_senkotlsfix_hooks() {
+  rm -f "${SUBSTRATE_DIR}/senkotlsfix.dylib"
+  rm -f "${SUBSTRATE_DIR}/senkotlsfix.plist"
+  remove_senkod_injection
+}
+
+disable_senkovpnicon_hooks() {
+  rm -f "${SUBSTRATE_DIR}/senkovpnicon.dylib"
+  rm -f "${SUBSTRATE_DIR}/senkovpnicon.plist"
+}
+
+remove_senkod_injection() {
+  if [ -f "$PLIST" ]; then
+    skip=0
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        *'<key>EnvironmentVariables</key>'*) skip=1; continue ;;
+      esac
+      if [ "$skip" = 1 ]; then
+        case "$line" in
+          *'</dict>'*) skip=0 ;;
+        esac
+        continue
+      fi
+      printf '%s\n' "$line"
+    done < "$PLIST" > "$PLIST.tmp" && mv "$PLIST.tmp" "$PLIST"
+  fi
+}
+
+enable_senkotlsfix_hooks() {
+  [ -f "${SUBSTRATE_FILTER}" ] || return 0
+  mkdir -p "${SUBSTRATE_DIR}" || return 0
+  ln -sf /usr/lib/senkotlsfix.dylib "${SUBSTRATE_DIR}/senkotlsfix.dylib" || return 0
+  cp "${SUBSTRATE_FILTER}" "${SUBSTRATE_DIR}/senkotlsfix.plist" || return 0
+  chown root:wheel "${SUBSTRATE_DIR}/senkotlsfix.plist" || true
+  chmod 644 "${SUBSTRATE_DIR}/senkotlsfix.plist" || true
+  remove_senkod_injection
+}
+
+enable_senkovpnicon_hooks() {
+  [ -f "${VPNICON_DYLIB}" ] || return 0
+  [ -f "${VPNICON_PLIST}" ] || return 0
+  mkdir -p "${SUBSTRATE_DIR}" || return 0
+  ln -sf "${VPNICON_DYLIB}" "${SUBSTRATE_DIR}/senkovpnicon.dylib" || return 0
+  cp "${VPNICON_PLIST}" "${SUBSTRATE_DIR}/senkovpnicon.plist" || return 0
+  chown root:wheel "${SUBSTRATE_DIR}/senkovpnicon.plist" || true
+  chmod 644 "${SUBSTRATE_DIR}/senkovpnicon.plist" || true
+}
+
+chown root:wheel "$PLIST" || true
+chmod 644 "$PLIST" || true
+
+for bin in /usr/bin/senkod /usr/bin/senkoctl; do
+  [ -e "$bin" ] && chown root:wheel "$bin" && chmod 755 "$bin" || true
+done
+[ -e /usr/bin/senkoawgd ] && chown root:wheel /usr/bin/senkoawgd && chmod 755 /usr/bin/senkoawgd || true
+# app restarts daemon through senko-kick
+if [ -e /usr/bin/senko-kick ]; then
+  chown root:wheel /usr/bin/senko-kick || true
+  chmod 4755 /usr/bin/senko-kick || true
+fi
+# remove the old helper
+rm -f /usr/bin/redsocks-senko /var/run/senko-redsocks.conf >/dev/null 2>&1 || true
+[ -e /usr/lib/senkotlsfix.dylib ] && chown root:wheel /usr/lib/senkotlsfix.dylib && chmod 755 /usr/lib/senkotlsfix.dylib || true
+[ -e /usr/lib/senkovpnicon.dylib ] && chown root:wheel /usr/lib/senkovpnicon.dylib && chmod 755 /usr/lib/senkovpnicon.dylib || true
+[ -e /usr/lib/senkovpnicon.plist ] && chown root:wheel /usr/lib/senkovpnicon.plist && chmod 644 /usr/lib/senkovpnicon.plist || true
+mkdir -p /usr/lib/senkotlsfix/roots || true
+
+if tlsfix_installed; then
+  disable_senkotlsfix_hooks
+elif substrate_installed; then
+  enable_senkotlsfix_hooks
+else
+  disable_senkotlsfix_hooks
+fi
+
+if substrate_installed; then
+  enable_senkovpnicon_hooks
+else
+  disable_senkovpnicon_hooks
+fi
+
+mkdir -p /var/mobile/Library/Preferences || true
+printf '0\n' > "$VPNICON_STATE" 2>/dev/null || true
+chown mobile:mobile "$VPNICON_STATE" >/dev/null 2>&1 || true
+chmod 644 "$VPNICON_STATE" >/dev/null 2>&1 || true
+[ -e /var/mobile/Library/Preferences/com.senko.senkotlsfix.plist ] && \
+  chown mobile:mobile /var/mobile/Library/Preferences/com.senko.senkotlsfix.plist && \
+  chmod 644 /var/mobile/Library/Preferences/com.senko.senkotlsfix.plist || true
+mkdir -p /usr/lib/senkotlsfix/roots || true
+chown -R root:wheel /usr/lib/senkotlsfix || true
+chmod 755 /usr/lib/senkotlsfix /usr/lib/senkotlsfix/roots || true
+chmod 644 /usr/lib/senkotlsfix/roots/*.pem >/dev/null 2>&1 || true
+chmod 644 /usr/lib/senkotlsfix/cacert.pem >/dev/null 2>&1 || true
+touch /var/log/senkotlsfix.log >/dev/null 2>&1 || true
+chmod 666 /var/log/senkotlsfix.log >/dev/null 2>&1 || true
+# mobile must be able to open the update log
+touch /tmp/senko-update.log >/dev/null 2>&1 || true
+chmod 666 /tmp/senko-update.log >/dev/null 2>&1 || true
+
+if [ -d /Applications/Senko.app ]; then
+  chown -R root:wheel /Applications/Senko.app || true
+  chmod 755 /Applications/Senko.app || true
+  chmod 755 /Applications/Senko.app/senko || true
+  su mobile -c uicache >/dev/null 2>&1 || true
+fi
+
+mkdir -p /var/root/Library/Preferences || true
+if [ ! -s "$CFG" ]; then
+  if [ -s "$LEGACY_CFG" ] && [ ! -h "$LEGACY_CFG" ]; then
+    cp "$LEGACY_CFG" "$CFG"
+  else
+    cat > "$CFG" <<'EOF'
+V1
+SET socks_port 11080
+SET socks_public 0
+SET dns_upstream 8.8.8.8
+SET dns_local_port 10053
+SEL -1
+EOF
+  fi
+fi
+chown root:wheel "$CFG" >/dev/null 2>&1 || true
+chmod 600 "$CFG" >/dev/null 2>&1 || true
+
+# give senkod time to remove routing before the forced stop
+launchctl unload "$PLIST" >/dev/null 2>&1 || true
+launchctl remove com.senko.senkod >/dev/null 2>&1 || true
+killall -TERM senkod >/dev/null 2>&1 || true
+sleep 1
+killall -TERM senkod >/dev/null 2>&1 || true
+sleep 1
+killall -9 senkod >/dev/null 2>&1 || true
+rm -f /var/tmp/senkod.sock /var/tmp/senkod.token
+
+# load the job for this boot and keep it enabled
+launchctl load -w "$PLIST" >/dev/null 2>&1 || launchctl load "$PLIST" >/dev/null 2>&1 || true
+launchctl start com.senko.senkod >/dev/null 2>&1 || true
+
+# fall back to the setuid launcher if launchd stays silent
+if [ -x /usr/bin/senko-kick ]; then
+  /usr/bin/senko-kick >/dev/null 2>&1 || true
+fi
+
+if [ -s "$UPDATE_AWG_MARKER" ] && [ -x /usr/bin/senko-kick ]; then
+  upgrade_config="$(sed -n '1p' "$UPDATE_AWG_MARKER" 2>/dev/null || true)"
+  case "$upgrade_config" in
+    /var/mobile/Library/Preferences/Senko/*.conf)
+      [ -r "$upgrade_config" ] && /usr/bin/senko-kick --awg "$upgrade_config" >/dev/null 2>&1 || true
+      ;;
+  esac
+  rm -f "$UPDATE_AWG_MARKER" >/dev/null 2>&1 || true
+fi
+
+echo "Senko installed successfully. control socket: /var/tmp/senkod.sock"
+
+# refresh the app icon cache after install
+su mobile -c uicache >/dev/null 2>&1 || uicache >/dev/null 2>&1 || true
+
+if [ "${SENKO_SKIP_RESPRING:-0}" = "1" ]; then
+  exit 0
+fi
+
+# respring after dpkg marks the package configured
+( sleep 2; killall -9 SpringBoard backboardd >/dev/null 2>&1 || true ) >/dev/null 2>&1 &
+
+exit 0
