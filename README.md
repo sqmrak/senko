@@ -42,7 +42,7 @@ and the TLS compatibility hook; the package declares it explicitly.
 
 ## testers
 
-The release test group includes the tester `qualcomm`.
+qualcomm, ogeprint, rafal_official, nifty, wolfer, lineysom, lime, fro0n1k, inraxx
 
 ## install on ios
 
