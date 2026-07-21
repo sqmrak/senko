@@ -1,6 +1,6 @@
 # senko
 
-full-device VLESS and AmneziaWG client for iOS 6-10
+an open-source vless/amnezia client for legacy ios devices (iOS 6, iOS 7, iOS 8, iOS 9, iOS 10)
 
 > [!WARNING]
 > **Jailbreak is strictly required.** The app runs a root daemon (`senkod`) to manipulate system firewall routing rules.
@@ -25,7 +25,7 @@ Senko automatically classifies and handles the following links pasted or scanned
 ### subscription formats
 Refresh / add-subscription accepts:
 
-* classic URI lists (`vless://…` one per line, optionally base64-wrapped)
+* classic URI lists (`vless://…` one per line optionally base64-wrapped)
 * `happ://crypt` … `happ://crypt4` deep links (RSA unwrap to vless/socks/http; `crypt5` not yet)
 * **xray-core / v2rayN JSON** - a single config object or an array of configs with `outbounds` (Liberty VPN and similar panels). Supported VLESS outbounds are imported; freedom/blackhole/dns and unsupported transports (gRPC, hysteria, …) are skipped
 
