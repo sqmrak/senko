@@ -104,7 +104,8 @@ int cfg_validate_server(const vl_server_t *s, char *reason, size_t reason_cap) {
         cfg_reason(reason, reason_cap, "unsupported encryption");
         return 0;
     }
-    if (s->net != VL_NET_TCP && s->net != VL_NET_WS && s->net != VL_NET_XHTTP) {
+    if (s->net != VL_NET_TCP && s->net != VL_NET_WS &&
+        s->net != VL_NET_GRPC && s->net != VL_NET_XHTTP) {
         cfg_reason(reason, reason_cap, "unsupported transport type");
         return 0;
     }
@@ -157,6 +158,28 @@ int cfg_validate_server(const vl_server_t *s, char *reason, size_t reason_cap) {
             return 1;
         }
         cfg_reason(reason, reason_cap, "unsupported xhttp security");
+        return 0;
+    }
+
+    if (s->net == VL_NET_GRPC) {
+        if (s->flow[0]) {
+            cfg_reason(reason, reason_cap, "grpc does not use flow");
+            return 0;
+        }
+        if (s->security == VL_SEC_NONE || s->security == VL_SEC_TLS)
+            return 1;
+        if (s->security == VL_SEC_REALITY) {
+            if (!pbk_text_ok(s->pbk)) {
+                cfg_reason(reason, reason_cap, "reality requires valid pbk");
+                return 0;
+            }
+            if (!sid_text_ok(s->sid)) {
+                cfg_reason(reason, reason_cap, "reality sid must be hex <= 8 bytes");
+                return 0;
+            }
+            return 1;
+        }
+        cfg_reason(reason, reason_cap, "unsupported grpc security");
         return 0;
     }
 
@@ -293,6 +316,31 @@ static void parse_query(vl_server_t *s, const char *q, const char *end) {
     }
 }
 
+/* xray's old grpc links carry only serviceName; the wire path also contains Tun */
+static void normalize_grpc_path(vl_server_t *s) {
+    char base[sizeof s->path];
+    size_t n;
+
+    if (!s || s->net != VL_NET_GRPC) return;
+    snprintf(base, sizeof base, "%s", s->path[0] ? s->path : "/");
+    if (base[0] != '/') {
+        size_t base_len = strlen(base);
+        if (base_len + 1 >= sizeof base) return;
+        memmove(base + 1, base, base_len + 1);
+        base[0] = '/';
+    }
+    n = strlen(base);
+    while (n > 1 && base[n - 1] == '/') base[--n] = '\0';
+    if (n == 1 && base[0] == '/') {
+        snprintf(s->path, sizeof s->path, "/Tun");
+    } else if (n >= 4 && strcmp(base + n - 4, "/Tun") == 0) {
+        snprintf(s->path, sizeof s->path, "%s", base);
+    } else {
+        snprintf(s->path, sizeof s->path, "%s/Tun", base);
+    }
+    snprintf(s->mode, sizeof s->mode, "grpc");
+}
+
 cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out) {
     if (!uri || !out) return CFG_ERR_BAD_ARG;
     memset(out, 0, sizeof *out);
@@ -410,6 +458,8 @@ cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out) {
 
     if (qmark) parse_query(out, qmark + 1, body_end);
 
+    normalize_grpc_path(out);
+
     if (out->sni[0] == '\0' &&
         (out->security == VL_SEC_TLS || out->security == VL_SEC_REALITY))
         snprintf(out->sni, sizeof out->sni, "%s", out->host);
@@ -452,7 +502,7 @@ static void parse_link_lines(const char *text, size_t len,
                              vl_server_t *out, size_t max, size_t *count) {
     const char *p = text;
     const char *end = text + len;
-    char line[1024];
+    char line[8192]; /* feeds often append long xhttp metadata to each link */
 
     while (p < end && *count < max) {
         const char *nl = memchr(p, '\n', (size_t)(end - p));
@@ -621,6 +671,7 @@ static int xray_outbound_to_server(const cJSON *ob, const char *remarks,
         const cJSON *ts = cJSON_GetObjectItemCaseSensitive(stream, "tlsSettings");
         const cJSON *ws = cJSON_GetObjectItemCaseSensitive(stream, "wsSettings");
         const cJSON *xh = cJSON_GetObjectItemCaseSensitive(stream, "xhttpSettings");
+        const cJSON *gr = cJSON_GetObjectItemCaseSensitive(stream, "grpcSettings");
         if (!cJSON_IsObject(xh))
             xh = cJSON_GetObjectItemCaseSensitive(stream, "splithttpSettings");
 
@@ -651,7 +702,11 @@ static int xray_outbound_to_server(const cJSON *ob, const char *remarks,
             (void)jstr_copy(xh, "mode", s->mode, sizeof s->mode);
             (void)jstr_copy(xh, "host", s->ws_host, sizeof s->ws_host);
         }
+        if (s->net == VL_NET_GRPC && cJSON_IsObject(gr))
+            (void)jstr_copy(gr, "serviceName", s->path, sizeof s->path);
     }
+
+    normalize_grpc_path(s);
 
     if (s->sni[0] == '\0' &&
         (s->security == VL_SEC_TLS || s->security == VL_SEC_REALITY))
