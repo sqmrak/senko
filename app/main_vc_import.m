@@ -476,6 +476,7 @@
     UpdateInstallVC *vc = [[[UpdateInstallVC alloc] initWithControl:_ctl
                                                         packagePath:path] autorelease];
     vc.modalTransitionStyle = UIModalTransitionStyleCoverVertical;
+    vc.modalPresentationStyle = UIModalPresentationFullScreen;
     [self presentViewController:vc animated:YES completion:nil];
 }
 

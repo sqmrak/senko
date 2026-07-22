@@ -2,6 +2,7 @@
 #define SENKO_UPDATE_INSTALL_H
 
 #import <UIKit/UIKit.h>
+#import <QuartzCore/QuartzCore.h>
 
 @class SenkoControl;
 
@@ -11,9 +12,13 @@
     NSString *_path;
     UIProgressView *_bar;
     UILabel *_titleLbl;
+    UILabel *_pkgLbl;
     UILabel *_statusLbl;
     UITextView *_log;
     UIButton *_closeBtn;
+    UIView *_plate;
+    UIView *_logPlate;
+    CAGradientLayer *_bgGrad;
     NSTimer *_creepTimer;
     float _progressFloor;
     float _progressCap;

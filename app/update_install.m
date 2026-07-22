@@ -24,6 +24,7 @@
 - (void)dealloc {
     [_creepTimer invalidate];
     [_creepTimer release];
+    [_bgGrad release];
     [_ctl release];
     [_path release];
     [super dealloc];
@@ -149,11 +150,44 @@
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
+- (void)layoutInstall {
+    if (!_titleLbl || !_plate || !_logPlate || !_closeBtn) return;
+
+    CGRect b = SenkoViewBounds(self.view);
+    if (b.size.width < 1.0f || b.size.height < 1.0f) return;
+
+    CGFloat top = GetTopOffset() + 24.0f;
+    CGFloat pad = 18.0f;
+    CGFloat w = MAX(1.0f, b.size.width - pad * 2.0f);
+
+    _bgGrad.frame = b;
+    _titleLbl.frame = CGRectMake(pad, top, w, 28.0f);
+    _pkgLbl.frame = CGRectMake(pad, top + 32.0f, w, 22.0f);
+
+    _plate.frame = CGRectMake(pad, top + 70.0f, w, 72.0f);
+    _bar.frame = CGRectMake(14.0f, 18.0f,
+                            MAX(1.0f, _plate.bounds.size.width - 28.0f), 12.0f);
+    _statusLbl.frame = CGRectMake(14.0f, 40.0f,
+                                  MAX(1.0f, _plate.bounds.size.width - 28.0f), 20.0f);
+
+    CGFloat logY = top + 156.0f;
+    CGFloat btnH = 44.0f;
+    CGFloat btnY = b.size.height - btnH - 24.0f;
+    if (btnY < logY + 100.0f) btnY = logY + 100.0f;
+    CGFloat logH = btnY - logY - 16.0f;
+    if (logH < 80.0f) logH = 80.0f;
+
+    _logPlate.frame = CGRectMake(pad, logY, w, logH);
+    _log.frame = CGRectInset(_logPlate.bounds, 8.0f, 8.0f);
+    _closeBtn.frame = CGRectMake(pad, btnY, w, btnH);
+    StyleGlossyCapsuleLayout(_closeBtn);
+}
+
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor colorWithWhite:0.06 alpha:1.0];
-    AddVGradient(self.view, [UIColor colorWithWhite:0.10 alpha:1],
-                 [UIColor colorWithWhite:0.03 alpha:1]);
+    _bgGrad = [AddVGradient(self.view, [UIColor colorWithWhite:0.10 alpha:1],
+                            [UIColor colorWithWhite:0.03 alpha:1]) retain];
 
     CGRect b = self.view.bounds;
     CGFloat top = GetTopOffset() + 24.0f;
@@ -170,23 +204,23 @@
     _titleLbl.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     [self.view addSubview:_titleLbl];
 
-    UILabel *pkg = [[[UILabel alloc] initWithFrame:CGRectMake(pad, top + 32, w, 22)] autorelease];
-    pkg.backgroundColor = [UIColor clearColor];
-    pkg.textAlignment = NSTextAlignmentCenter;
-    pkg.font = [UIFont systemFontOfSize:15];
-    SenkoStyleAccentOnDark(pkg);
-    pkg.text = @"Senko";
-    pkg.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [self.view addSubview:pkg];
+    _pkgLbl = [[[UILabel alloc] initWithFrame:CGRectMake(pad, top + 32, w, 22)] autorelease];
+    _pkgLbl.backgroundColor = [UIColor clearColor];
+    _pkgLbl.textAlignment = NSTextAlignmentCenter;
+    _pkgLbl.font = [UIFont systemFontOfSize:15];
+    SenkoStyleAccentOnDark(_pkgLbl);
+    _pkgLbl.text = @"Senko";
+    _pkgLbl.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [self.view addSubview:_pkgLbl];
 
 /* holds bar + label */
-    UIView *plate = [[[UIView alloc] initWithFrame:CGRectMake(pad, top + 70, w, 72)] autorelease];
-    plate.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    plate.layer.cornerRadius = 10;
-    plate.layer.borderWidth = 0;
-    plate.layer.borderColor = [UIColor clearColor].CGColor;
-    plate.backgroundColor = [UIColor colorWithWhite:0.08 alpha:1];
-    [self.view addSubview:plate];
+    _plate = [[[UIView alloc] initWithFrame:CGRectMake(pad, top + 70, w, 72)] autorelease];
+    _plate.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    _plate.layer.cornerRadius = 10;
+    _plate.layer.borderWidth = 0;
+    _plate.layer.borderColor = [UIColor clearColor].CGColor;
+    _plate.backgroundColor = [UIColor colorWithWhite:0.08 alpha:1];
+    [self.view addSubview:_plate];
 
     _bar = [[[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault] autorelease];
     _bar.frame = CGRectMake(14, 18, w - 28, 12);
@@ -196,7 +230,7 @@
         _bar.progressTintColor = kAccentBlue;
         _bar.trackTintColor = [UIColor colorWithWhite:0.22 alpha:1];
     }
-    [plate addSubview:_bar];
+    [_plate addSubview:_bar];
 
     _statusLbl = [[[UILabel alloc] initWithFrame:CGRectMake(14, 40, w - 28, 20)] autorelease];
     _statusLbl.backgroundColor = [UIColor clearColor];
@@ -205,7 +239,7 @@
     SenkoStyleMutedOnDark(_statusLbl);
     _statusLbl.text = @"Starting";
     _statusLbl.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [plate addSubview:_statusLbl];
+    [_plate addSubview:_statusLbl];
 
     CGFloat logY = top + 156;
     CGFloat btnH = 44;
@@ -214,16 +248,16 @@
     CGFloat logH = btnY - logY - 16;
     if (logH < 80) logH = 80;
 
-    UIView *logPlate = [[[UIView alloc] initWithFrame:CGRectMake(pad, logY, w, logH)] autorelease];
-    logPlate.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    logPlate.layer.cornerRadius = 10;
-    logPlate.layer.borderWidth = 0;
-    logPlate.layer.borderColor = [UIColor clearColor].CGColor;
-    logPlate.backgroundColor = [UIColor colorWithWhite:0.04 alpha:1];
-    logPlate.clipsToBounds = YES;
-    [self.view addSubview:logPlate];
+    _logPlate = [[[UIView alloc] initWithFrame:CGRectMake(pad, logY, w, logH)] autorelease];
+    _logPlate.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    _logPlate.layer.cornerRadius = 10;
+    _logPlate.layer.borderWidth = 0;
+    _logPlate.layer.borderColor = [UIColor clearColor].CGColor;
+    _logPlate.backgroundColor = [UIColor colorWithWhite:0.04 alpha:1];
+    _logPlate.clipsToBounds = YES;
+    [self.view addSubview:_logPlate];
 
-    _log = [[[UITextView alloc] initWithFrame:CGRectInset(logPlate.bounds, 8, 8)] autorelease];
+    _log = [[[UITextView alloc] initWithFrame:CGRectInset(_logPlate.bounds, 8, 8)] autorelease];
     _log.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     _log.editable = NO;
     _log.backgroundColor = [UIColor clearColor];
@@ -231,7 +265,7 @@
     _log.font = [UIFont fontWithName:@"Courier" size:12];
     if (!_log.font) _log.font = [UIFont systemFontOfSize:12];
     _log.text = @"";
-    [logPlate addSubview:_log];
+    [_logPlate addSubview:_log];
 
     _closeBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     _closeBtn.frame = CGRectMake(pad, btnY, w, btnH);
@@ -247,6 +281,12 @@
     [self appendLog:[NSString stringWithFormat:@"Package: %@",
                      [_path lastPathComponent]]];
     [self startCreepTo:0.10f];
+    [self layoutInstall];
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    [self layoutInstall];
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -300,6 +340,8 @@
 }
 
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)io {
+    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad)
+        return YES;
     return UIInterfaceOrientationIsPortrait(io);
 }
 
