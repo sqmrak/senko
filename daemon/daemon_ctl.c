@@ -1,4 +1,4 @@
-#define _DEFAULT_SOURCE /* getaddrinfo needs the default feature set */
+#define _DEFAULT_SOURCE /* expose getaddrinfo */
 
 #include "daemon_ctl.h"
 #include "storefile.h"
@@ -49,7 +49,7 @@ void daemon_ctl_set_settings(daemon_ctl_t *d, const daemon_settings_t *s) {
 void daemon_ctl_shutdown(daemon_ctl_t *d) {
     if (!d) return;
     vpn_icon_set(0);
-/* remove routing before stopping */
+/* remove routing first */
     if (d->full_device) {
         loop_disable_tproxy(d->loop);
         routing_exec_down(&d->routing);
@@ -101,7 +101,7 @@ static int resolve_ipv4_addresses(const char *host, char *first_ip, size_t first
 
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_INET; /* routing rules here are ipv4 only */
+    hints.ai_family = AF_INET; /* use ipv4 for routing */
     hints.ai_socktype = SOCK_STREAM;
     if (getaddrinfo(host, NULL, &hints, &res) != 0 || !res) return -1;
 
@@ -136,7 +136,7 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
     switch (action->kind) {
         case CTL_ACT_START: {
             const vl_server_t *s = &action->server;
-            /* show the VPN icon only after the tunnel passes verification */
+            /* show the vpn icon after verification */
 
             const transport_vt_t *vt = transport_for_server(s);
             if (!vt) {
@@ -155,7 +155,7 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
                 }
             }
 
-            /* clear routing before switching servers */
+            /* clear routing before a switch */
             if (d->full_device && d->routing.mode != ROUTING_MODE_NONE) {
                 loop_disable_tproxy(d->loop);
                 routing_exec_down(&d->routing);
@@ -163,7 +163,7 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
 
             dialer_set_target(&d->dialer, s->host, s->port);
 
-            /* point the loop at the new server */
+            /* set the new server */
             if (loop_set_server(d->loop, vt, dialer_connect, &d->dialer,
                                 s->proto, uuid, s->flow, s->user, s->pass,
                                 s->sni, s->fp, s->pbk, s->sid, s->path,
@@ -173,7 +173,7 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
                 return DCTL_ERR_LOOP;
             }
 
-            /* set full-device routing after SOCKS is ready */
+            /* set routing after socks is ready */
             if (d->full_device) {
                 char first_ip[64], ip_list[4096];
                 first_ip[0] = '\0';
@@ -214,7 +214,7 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
 
         case CTL_ACT_STOP:
             vpn_icon_set(0);
-            /* stop routing before closing the loop */
+            /* stop routing before the loop */
             if (d->full_device) {
                 loop_disable_tproxy(d->loop);
                 routing_exec_down(&d->routing);
@@ -223,11 +223,11 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
             return 0;
 
         case CTL_ACT_PING:
-/* ping is handled by the control path */
+/* ping runs in the control path */
             return 0;
 
         case CTL_ACT_REFRESH:
-/* refresh is handled by ctl_server */
+/* refresh runs in ctl_server */
             return -1;
 
         case CTL_ACT_NONE:
@@ -247,7 +247,7 @@ static void subfetch_pump_loop(void *ctx) {
     if (d && d->loop) loop_step(d->loop, 0);
 }
 
-/* monotonic clock for timeouts */
+/* use a monotonic timeout clock */
 static long probe_now_ms(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
@@ -292,7 +292,7 @@ static int read_full_pumped_until(int fd, void *buf, size_t len,
     return 0;
 }
 
-/* send DNS and probes through the local SOCKS loop */
+/* send dns and probes through socks */
 static int socks5_dial_via_loop(daemon_ctl_t *d, uint16_t socks_port,
                                   const char *host, uint16_t port,
                                   long deadline_ms, const char **stage_out) {
@@ -320,7 +320,7 @@ static int socks5_dial_via_loop(daemon_ctl_t *d, uint16_t socks_port,
         return -1;
     }
     if (cr < 0) {
-/* require readiness so verify never writes into a timed-out socket */
+/* wait for socket readiness */
         int ready = 0;
         while (probe_now_ms() < deadline_ms) {
             subfetch_pump_loop(d);
@@ -362,7 +362,7 @@ static int socks5_dial_via_loop(daemon_ctl_t *d, uint16_t socks_port,
     req[n++] = 0x05;
     req[n++] = 0x01;
     req[n++] = 0x00;
-    req[n++] = 0x03; /* domain name */
+    req[n++] = 0x03; /* domain address */
     req[n++] = (uint8_t)hlen;
     memcpy(req + n, host, hlen);
     n += hlen;
@@ -376,7 +376,7 @@ static int socks5_dial_via_loop(daemon_ctl_t *d, uint16_t socks_port,
 
     uint8_t rhdr[4];
     if (read_full_pumped_until(fd, rhdr, 4, d, deadline_ms) != 0) {
-/* open worker failed / peer closed before socks reply */
+/* the socks peer closed early */
         if (stage_out) *stage_out = "tunnel open failed";
         close(fd);
         return -1;
@@ -417,7 +417,7 @@ static int socks5_dial_via_loop(daemon_ctl_t *d, uint16_t socks_port,
     return fd;
 }
 
-/* prefer ipv4 because broken ios6 v6 can make every connect fail */
+/* prefer ipv4 */
 static int subfetch_dial_direct(const char *host, uint16_t port) {
     char portstr[8];
     snprintf(portstr, sizeof portstr, "%u", port);
@@ -434,7 +434,7 @@ static int subfetch_dial_direct(const char *host, uint16_t port) {
         fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0) continue;
         if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) {
-            int fl = fcntl(fd, F_GETFL, 0); /* subfetch needs nonblocking */
+            int fl = fcntl(fd, F_GETFL, 0); /* keep fetch nonblocking */
             fcntl(fd, F_SETFL, fl | O_NONBLOCK);
             break;
         }
@@ -444,7 +444,7 @@ static int subfetch_dial_direct(const char *host, uint16_t port) {
     return fd;
 }
 
-/* prefer tunnel when full-device is up */
+/* use the tunnel when full-device is up */
 static int subfetch_dial(void *ctx, const char *host, uint16_t port) {
     daemon_ctl_t *d = (daemon_ctl_t *)ctx;
     if (d && d->full_device && d->routing.mode != ROUTING_MODE_NONE && d->loop) {
@@ -454,13 +454,14 @@ static int subfetch_dial(void *ctx, const char *host, uint16_t port) {
             int fd = socks5_dial_via_loop(d, sp, host, port, deadline, NULL);
             if (fd >= 0) return fd;
         }
-/* try direct after tunnel failure so refresh can recover a dead node */
+/* try direct after tunnel failure */
     }
     return subfetch_dial_direct(host, port);
 }
 
 int daemon_ctl_fetch(void *ctx, const char *url,
-                     unsigned char *buf, size_t cap, size_t *len) {
+                     unsigned char *buf, size_t cap, size_t *len,
+                     ctl_fetch_meta_t *meta) {
     subfetch_cfg_t cfg;
     memset(&cfg, 0, sizeof cfg);
     cfg.dial = subfetch_dial;
@@ -468,10 +469,11 @@ int daemon_ctl_fetch(void *ctx, const char *url,
     cfg.pump = subfetch_pump_loop;
     cfg.pump_ctx = ctx;
     cfg.tcp = &transport_tcp;
-    cfg.tls = &transport_tls; /* https subs use tls */
+    cfg.tls = &transport_tls; /* use tls for https */
     cfg.max_redirects = 5;
 
-    subfetch_status_t r = subfetch_get(&cfg, url, buf, cap, len, 15000);
+    subfetch_info_t info;
+    subfetch_status_t r = subfetch_get_info(&cfg, url, buf, cap, len, 15000, &info);
     if (r != SUBFETCH_OK) {
         const char *why = "unknown";
         switch (r) {
@@ -484,7 +486,7 @@ int daemon_ctl_fetch(void *ctx, const char *url,
             case SUBFETCH_ERR_REDIRECT:   why = "redirect"; break;
             default: break;
         }
-/* sub urls often carry tokens in path/query; keep those out of logs */
+/* keep subscription tokens out of logs */
         url_t u;
         if (url && url_parse(url, &u) == URL_OK)
             fprintf(stderr, "senkod: subfetch failed: %s (rc=%d) %s://%s:%u/...\n",
@@ -493,6 +495,7 @@ int daemon_ctl_fetch(void *ctx, const char *url,
             fprintf(stderr, "senkod: subfetch failed: %s (rc=%d)\n", why, (int)r);
         return -1;
     }
+    if (meta) meta->expire = info.expire;
     fprintf(stderr, "senkod: subfetch ok %zu bytes\n", len ? *len : 0);
     return 0;
 }
@@ -512,7 +515,7 @@ static int probe_tcp_ipv4(daemon_ctl_t *d, const char *ip, uint16_t port,
     if (fl < 0) { close(fd); return -1; }
     fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 
-/* exclude dns because this probe measures tcp connect latency */
+/* measure tcp without dns */
     long start = probe_now_ms();
     long deadline = start + timeout_ms;
     int r = connect(fd, (struct sockaddr *)&addr, sizeof addr);
@@ -525,7 +528,7 @@ static int probe_tcp_ipv4(daemon_ctl_t *d, const char *ip, uint16_t port,
         if (now >= deadline) { close(fd); return -1; }
 
         int remain = (int)(deadline - now);
-/* use short slices so displayed rtt does not jump in coarse steps */
+/* use short probe slices */
         int slice = remain > 5 ? 5 : remain;
         struct pollfd pfd;
         pfd.fd = fd;
@@ -557,12 +560,12 @@ static int probe_tcp_ipv4(daemon_ctl_t *d, const char *ip, uint16_t port,
 
 int daemon_ctl_probe(void *ctx, const char *host, uint16_t port) {
     daemon_ctl_t *d = (daemon_ctl_t *)ctx;
-    const int timeout_ms = 1500; /* per try; two tries stay under senkoctl 5s */
+    const int timeout_ms = 1500; /* keep two tries under the client timeout */
 
     char ip[INET_ADDRSTRLEN];
     if (resolve_ipv4_addresses(host, ip, sizeof ip, NULL, 0, 1) != 0) return -1;
 
-/* keep the faster sample so one slow syn does not dominate the ui */
+/* keep the faster sample */
     int best = -1;
     for (int n = 0; n < 2; n++) {
         int ms = probe_tcp_ipv4(d, ip, port, timeout_ms);
@@ -572,7 +575,7 @@ int daemon_ctl_probe(void *ctx, const char *host, uint16_t port) {
     return best;
 }
 
-/* dial host:port through local socks, pump loop until deadline */
+/* dial through local socks */
 static int socks_dial_retry(daemon_ctl_t *d, uint16_t sp,
                             const char *host, uint16_t port,
                             long deadline, const char **stage) {
@@ -612,7 +615,7 @@ static int read_some_pumped(int fd, char *buf, size_t cap, size_t want_min,
     return (got >= want_min) ? 0 : -1;
 }
 
-/* test reality with a tiny clienthello because any tls record proves transport */
+/* test reality with a small clienthello */
 static int build_probe_clienthello_record(uint8_t *out, size_t cap, size_t *out_len,
                                           const char *sni) {
     if (!out || !out_len || cap < 10) return -1;
@@ -620,7 +623,7 @@ static int build_probe_clienthello_record(uint8_t *out, size_t cap, size_t *out_
     memset(&chp, 0, sizeof chp);
     if (RAND_bytes(chp.random, sizeof chp.random) != 1) return -1;
     if (RAND_bytes(chp.x25519_pub, sizeof chp.x25519_pub) != 1) return -1;
-/* shape the decoy share enough to trigger a serverhello response */
+/* build the decoy share */
     chp.sni = sni;
     chp.fp = TLS_FP_CHROME;
 
@@ -629,7 +632,7 @@ static int build_probe_clienthello_record(uint8_t *out, size_t cap, size_t *out_
     if (tls_build_clienthello(&chp, hello, sizeof hello, &hello_len) != TLS_CH_OK)
         return -1;
     if (5 + hello_len > cap) return -1;
-    out[0] = 0x16; /* handshake */
+    out[0] = 0x16; /* tls handshake */
     out[1] = 0x03;
     out[2] = 0x01;
     out[3] = (uint8_t)(hello_len >> 8);
@@ -642,13 +645,13 @@ static int build_probe_clienthello_record(uint8_t *out, size_t cap, size_t *out_
 static int is_tls_record_prefix(const char *buf, size_t n) {
     if (n < 5) return 0;
     uint8_t t = (uint8_t)buf[0];
-/* handshake / alert / change_cipher_spec / app_data */
+/* accept tls record types */
     if (t != 0x14 && t != 0x15 && t != 0x16 && t != 0x17) return 0;
     if ((uint8_t)buf[1] != 0x03) return 0;
     return 1;
 }
 
-/* probe tls and http payload paths so failure reasons reach the ui */
+/* probe tls and http paths */
 static int tunnel_carry_probe(daemon_ctl_t *d, int timeout_ms, int *ms_out,
                               char *stage_out, size_t stage_cap) {
     if (ms_out) *ms_out = -1;
@@ -668,9 +671,9 @@ static int tunnel_carry_probe(daemon_ctl_t *d, int timeout_ms, int *ms_out,
         goto fail;
     }
 
-/* test tls first because vision nodes usually carry https */
+/* test tls first */
     {
-        long half = start + (timeout_ms * 6) / 10; /* 60% budget */
+        long half = start + (timeout_ms * 6) / 10; /* reserve time for http */
         if (half > deadline) half = deadline;
         int fd = socks_dial_retry(d, sp, "example.com", 443, half, &stage);
         if (fd >= 0) {
@@ -695,7 +698,7 @@ static int tunnel_carry_probe(daemon_ctl_t *d, int timeout_ms, int *ms_out,
         }
     }
 
-/* test http second because some nodes reject plain port 80 */
+/* test http second */
     {
         int fd = socks_dial_retry(d, sp, "example.com", 80, deadline, &stage);
         if (fd < 0) goto fail;
@@ -732,12 +735,12 @@ fail:
 
 int daemon_ctl_verify_tunnel(void *ctx, char *reason, size_t reason_cap) {
     daemon_ctl_t *d = (daemon_ctl_t *)ctx;
-/* keep per-try short so 4 failovers stay under the ui connect budget */
+/* keep each try short */
     const int timeout_ms = 8000;
     char stage[120];
     stage[0] = '\0';
     int r = tunnel_carry_probe(d, timeout_ms, NULL, stage, sizeof stage);
-/* retain a short failure stage so state error remains actionable */
+/* keep the failure stage */
     if (r != 0) {
         fprintf(stderr, "senkod: tunnel verify failed: %s (%dms)\n",
                 stage[0] ? stage : "unknown", timeout_ms);
@@ -747,7 +750,7 @@ int daemon_ctl_verify_tunnel(void *ctx, char *reason, size_t reason_cap) {
         vpn_icon_set(0);
     } else if (reason && reason_cap) {
         reason[0] = '\0';
-        vpn_icon_set(1); /* only show vpn after a real carry probe */
+        vpn_icon_set(1); /* show vpn after a real probe */
     }
     return r;
 }

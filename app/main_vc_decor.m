@@ -1,5 +1,16 @@
 #import "main_vc_priv.h"
 
+static void SenkoPlaceBehind(UIView *view, UIView *root) {
+    if (!view || !root) return;
+    if (view.superview != root) {
+        [root insertSubview:view atIndex:0];
+        return;
+    }
+    NSArray *views = root.subviews;
+    if (![views count] || [views objectAtIndex:0] != view)
+        [root insertSubview:view atIndex:0];
+}
+
 @implementation MainVC (Decor)
 
 - (void)bringMainChromeToFront {
@@ -25,26 +36,20 @@
 
     if (_bgGrad) {
         _bgGrad.frame = b;
-        [self.view.layer insertSublayer:_bgGrad atIndex:0];
+        if (_bgGrad.superlayer != self.view.layer)
+            [self.view.layer insertSublayer:_bgGrad atIndex:0];
     }
     if (_misidePattern && !_misidePattern.hidden) {
         _misidePattern.frame = b;
-        [self.view insertSubview:_misidePattern atIndex:0];
-        if (_bgGrad)
-            [self.view.layer insertSublayer:_bgGrad atIndex:0];
+        SenkoPlaceBehind(_misidePattern, self.view);
     }
     if (_frutigerBg && !_frutigerBg.hidden) {
         _frutigerBg.frame = b;
-        [self.view insertSubview:_frutigerBg atIndex:0];
-        if (_bgGrad)
-            [self.view.layer insertSublayer:_bgGrad atIndex:0];
+        SenkoPlaceBehind(_frutigerBg, self.view);
     }
     if (_ios26Bg && !_ios26Bg.hidden) {
         _ios26Bg.frame = b;
-        [self.view insertSubview:_ios26Bg atIndex:0];
-/* wallpaper on top of solid fill; keep _bggrad under image */
-        if (_bgGrad)
-            [self.view.layer insertSublayer:_bgGrad atIndex:0];
+        SenkoPlaceBehind(_ios26Bg, self.view);
     }
 }
 

@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 THEOS="${THEOS:-${HOME}/theos}"
 TC="${SENKO_TC:-${THEOS}/toolchain/linux/iphone/bin}"
 LIPO="${TC}/lipo"
-OUT="${ROOT}/senko-v1.0.0-stable.deb"
+OUT="${ROOT}/senko-v1.0.1-stable.deb"
 # thin armv7 sdk: fat dylib remap is flaky on linux aarch64 hosts
 SDK_V7="${SENKO_SDK_V7:-${HOME}/sdks-armv7}"
 SDK_V64="${SENKO_SDK_V64:-${HOME}/sdks/iPhoneOS11.4.sdk}"
@@ -58,7 +58,7 @@ echo "==> daemon armv7"
 make -C "${ROOT}/daemon" -f Makefile.ios clean
 make -C "${ROOT}/daemon" -f Makefile.ios \
   TRIPLE=arm-apple-darwin11 SDK="${SDK_V7}" \
-  ARCH="-arch armv7 -miphoneos-version-min=6.0" OSSL="${OSSL_V7}" \
+  ARCH="-arch armv7 -miphoneos-version-min=5.0" OSSL="${OSSL_V7}" \
   IOS_BINDIR=build/ios-armv7 all
 cp "${ROOT}/daemon/build/ios-armv7/senkod" "${SLICE}/armv7/senkod"
 cp "${ROOT}/daemon/build/ios-armv7/senkoctl" "${SLICE}/armv7/senkoctl"
@@ -86,7 +86,7 @@ echo "==> app armv7"
 make -C "${ROOT}/app" clean
 make -C "${ROOT}/app" \
   TRIPLE=arm-apple-darwin11 SDK="${SDK_V7}" \
-  ARCH="-arch armv7 -miphoneos-version-min=6.0" \
+  ARCH="-arch armv7 -miphoneos-version-min=5.0" \
   OBJDIR=build/obj-armv7 BIN=build/senko-armv7
 cp "${ROOT}/app/build/senko-armv7" "${SLICE}/senko-armv7"
 
@@ -104,7 +104,7 @@ echo "==> senkotlsfix armv7"
 make -C "${ROOT}/senkotlsfix" -f Makefile.ios clean
 make -C "${ROOT}/senkotlsfix" -f Makefile.ios \
   TRIPLE=arm-apple-darwin11 SDK="${SDK_V7}" \
-  ARCH="-arch armv7 -miphoneos-version-min=6.0" \
+  ARCH="-arch armv7 -miphoneos-version-min=5.0" \
   MBED="${MBED}" MBEDLIBS="${MBED}/lib/libmbedtls-armv7.a ${MBED}/lib/libmbedx509-armv7.a ${MBED}/lib/libmbedcrypto-armv7.a" \
   OUT=senkotlsfix-armv7.dylib
 cp "${ROOT}/senkotlsfix/senkotlsfix-armv7.dylib" "${SLICE}/"
@@ -124,7 +124,7 @@ make_fat "${SLICE}/senkotlsfix.dylib" \
 echo "==> senkovpnicon armv7"
 "${TC}/clang" -target arm-apple-darwin11 -B "${TC}" \
   -fno-objc-arc -Wall -Wextra -O2 -fPIC \
-  -arch armv7 -miphoneos-version-min=6.0 -isysroot "${SDK_V7}" \
+  -arch armv7 -miphoneos-version-min=5.0 -isysroot "${SDK_V7}" \
   "${ROOT}/vpnicon/senko_vpnicon.m" \
   -o "${SLICE}/senkovpnicon-armv7.dylib" \
   -dynamiclib \
@@ -172,6 +172,7 @@ mkdir -p "${STAGE}/Applications/Senko.app"
 cp "${SLICE}/senko" "${STAGE}/Applications/Senko.app/senko"
 cp "${ROOT}/app/Info.plist" "${STAGE}/Applications/Senko.app/"
 cp "${ROOT}/app/icons/"* "${STAGE}/Applications/Senko.app/" 2>/dev/null || true
+cp "${ROOT}/app/icons/flags/"*.png "${STAGE}/Applications/Senko.app/" 2>/dev/null || true
 
 # normalize ownership and modes because legacy dpkg rejects builder metadata
 chmod 755 "${STAGE}/usr/bin/senkod" "${STAGE}/usr/bin/senkoctl" "${STAGE}/usr/bin/senkoawgd" \

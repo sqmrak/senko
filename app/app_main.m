@@ -47,7 +47,7 @@ static BOOL ExternalTlsfixInstalled(void) {
 NSString *SenkoAboutAppReport(void) {
     int tlsfix = ExternalTlsfixInstalled();
     return [NSString stringWithFormat:
-            @"Full-device VLESS and AmneziaWG client for jailbroken iOS 6-10.\n"
+            @"Full-device VLESS and AmneziaWG client for jailbroken iOS 5-10.\n"
              "Needs root for full-device routing.\n\n"
              "Protocols\n"
              "- VLESS + TCP (none / TLS / Reality+Vision)\n"

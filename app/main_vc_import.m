@@ -52,6 +52,10 @@
 }
 
 - (void)pinSubscriptionIndex:(int)subIdx {
+    if ([self isListMutationLocked]) {
+        SetStatusDefault(_statusLabel, @"disconnect to reorder");
+        return;
+    }
     SenkoSub *sub = [self subscriptionByIndex:subIdx];
     if (!sub || ![sub->url length]) {
         SetStatusDefault(_statusLabel, @"subscription not found");
@@ -59,8 +63,21 @@
     }
     [[NSUserDefaults standardUserDefaults] setObject:sub->url forKey:SENKO_PINNED_SUB_URL_KEY];
     [[NSUserDefaults standardUserDefaults] synchronize];
-    [self rebuildSections];
-    [_table reloadData];
+    NSInteger fromSection = NSNotFound;
+    for (NSInteger i = 0; i < (NSInteger)[_sections count]; ++i) {
+        if ([[[_sections objectAtIndex:i] objectForKey:@"subIdx"] intValue] == subIdx) {
+            fromSection = i;
+            break;
+        }
+    }
+    if (fromSection != NSNotFound) {
+        if (fromSection != 0)
+            [self moveSectionAtIndex:fromSection toIndex:0];
+        else {
+            [self rebuildSections];
+            [_table reloadData];
+        }
+    }
     SetStatusRefresh(_statusLabel, @"subscription pinned");
 }
 

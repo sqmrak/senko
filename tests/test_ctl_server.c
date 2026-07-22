@@ -27,7 +27,7 @@ typedef struct {
     ctl_action_kind_t last_kind;
     int               last_index;
     char              last_host[256];
-    int               fail_next;    /* force this many start failures */
+    int               fail_next;    /* fail this many starts */
 } apply_rec_t;
 
 static int mock_apply(void *ctx, const ctl_action_t *a) {
@@ -40,19 +40,22 @@ static int mock_apply(void *ctx, const ctl_action_t *a) {
     return 0;
 }
 
-/* canned fetch hook keeps refresh tests off the network */
+/* fixed fetch hook */
 typedef struct {
     int  calls;
     char last_url[512];
     const char *blob;
     int  fail_next;
+    uint64_t expire;
 } fetch_rec_t;
 
 static fetch_rec_t g_fetch;
 
 static int mock_fetch(void *ctx, const char *url,
-                      unsigned char *buf, size_t cap, size_t *len) {
+                      unsigned char *buf, size_t cap, size_t *len,
+                      ctl_fetch_meta_t *meta) {
     (void)ctx;
+    if (meta) meta->expire = g_fetch.expire;
     g_fetch.calls++;
     snprintf(g_fetch.last_url, sizeof g_fetch.last_url, "%s", url);
     if (g_fetch.fail_next) { g_fetch.fail_next = 0; return -1; }
@@ -64,12 +67,12 @@ static int mock_fetch(void *ctx, const char *url,
     return 0;
 }
 
-/* canned probe hook keeps ping tests deterministic */
+/* fixed probe hook */
 typedef struct {
     int  calls;
     char last_host[256];
     uint16_t last_port;
-    int  ret_ms;        /* canned rtt */
+    int  ret_ms;        /* returned rtt */
 } probe_rec_t;
 
 static probe_rec_t g_probe;
@@ -145,7 +148,7 @@ static void set_nonblock(int fd) {
     fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
-/* drain after a few loop ticks because the client fd is non-blocking */
+/* drain replies after a few loop ticks */
 static size_t exchange(ctl_server_t *s, int cli, char *out, size_t cap) {
     for (int i = 0; i < 20; ++i) ctl_server_step(s, 2);
     size_t tot = 0;
@@ -162,7 +165,7 @@ static size_t exchange(ctl_server_t *s, int cli, char *out, size_t cap) {
     return tot;
 }
 
-/* CONNECT without token must fail; proves the auth gate is live */
+/* test the auth gate */
 static int auth_client(ctl_server_t *s, int cli, const char *sock) {
     char tpath[160];
     char token[48];
@@ -236,7 +239,7 @@ int main(void) {
     for (int i = 0; i < 10; ++i) ctl_server_step(&s, 2);
     ok("one client", ctl_server_client_count(&s) == 1);
 
-    char buf[512];
+    char buf[8192];
 
     write(cli, "STATUS\n", 7);
     exchange(&s, cli, buf, sizeof buf);
@@ -296,11 +299,12 @@ int main(void) {
     exchange(&s, cli, buf, sizeof buf);
     ok("fallback test disconnects", strcmp(buf, "STATE idle\n") == 0);
 
-    /* refresh uses a canned two-server blob to avoid network flake */
+    /* use a fixed refresh body */
     memset(&g_fetch, 0, sizeof g_fetch);
     g_fetch.blob =
         "vless://cccc3333-6324-4d53-ad4f-8cda48b30811@3.3.3.3:443?security=none&type=tcp#SubA\n"
         "vless://dddd4444-6324-4d53-ad4f-8cda48b30811@4.4.4.4:443?security=tls&type=ws#SubB\n";
+    g_fetch.expire = 1893456000ULL;
     ctl_server_set_fetch(&s, mock_fetch);
 
     size_t sub;
@@ -313,6 +317,8 @@ int main(void) {
     ok("fetch was called", g_fetch.calls == 1);
     ok("fetch got the sub url", strcmp(g_fetch.last_url, "https://sub.example.com/feed") == 0);
     ok("refresh added 2 servers", s.engine.store.n == n_before + 2);
+    ok("refresh stores subscription expiry",
+       s.engine.store.subs[sub].expire == 1893456000ULL);
     int sub_servers = 0;
     for (size_t i = 0; i < s.engine.store.n; ++i)
         if (s.engine.store.group[i] == (int)sub) sub_servers++;
@@ -331,7 +337,43 @@ int main(void) {
     ok("refresh fetch-fail err", strncmp(buf, "ERR ", 4) == 0);
     ok("refresh fetch-fail no change", s.engine.store.n == n_now);
 
-    /* fetch streams arbitrary bodies as fdata/fdend */
+    {
+        const char *cmd = "ADDSUB https://second.example/feed Second\n";
+        write(cli, cmd, strlen(cmd));
+    }
+    exchange(&s, cli, buf, sizeof buf);
+    ok("add second subscription", strncmp(buf, "OK ", 3) == 0);
+    {
+        const char *cmd = "MOVESECTION 1 0\n";
+        write(cli, cmd, strlen(cmd));
+    }
+    exchange(&s, cli, buf, sizeof buf);
+    ok("move section reply", strcmp(buf, "OK section moved\n") == 0);
+    ok("move section persisted", s.engine.store.section_order[0] == 1);
+
+    {
+        const char *cmd =
+            "ADDSRV vless://eeee5555-6324-4d53-ad4f-8cda48b30811@5.5.5.5:443?security=none&type=tcp#Manual2\n";
+        write(cli, cmd, strlen(cmd));
+    }
+    exchange(&s, cli, buf, sizeof buf);
+    ok("add second manual server", strncmp(buf, "OK ", 3) == 0);
+    int manual_idx = (int)s.engine.store.n - 1;
+    {
+        char cmd[64];
+        int n = snprintf(cmd, sizeof cmd, "MOVEMANUAL %d 0\n", manual_idx);
+        write(cli, cmd, (size_t)n);
+    }
+    exchange(&s, cli, buf, sizeof buf);
+    ok("move manual reply", strcmp(buf, "OK server moved\n") == 0);
+    ok("move manual changed order", strcmp(s.engine.store.servers[0].host, "5.5.5.5") == 0);
+
+    write(cli, "LIST\n", 5);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("list has subscription metadata", strstr(buf, "SUBMETA 0 1893456000\n") != NULL);
+    ok("list has section order", strstr(buf, "SECTION 1 -1 0\n") != NULL);
+
+    /* test fetch streaming */
     g_fetch.blob = "hello fetch";
     int fc_before = g_fetch.calls;
     {
@@ -356,7 +398,7 @@ int main(void) {
             && glen == 11 && memcmp(got, "hello fetch", 11) == 0);
     }
 
-    /* ping uses the direct hook only while idle */
+    /* test idle ping */
     memset(&g_probe, 0, sizeof g_probe);
     memset(&g_tunnel_probe, 0, sizeof g_tunnel_probe);
     g_probe.ret_ms = 42;
@@ -368,7 +410,7 @@ int main(void) {
     exchange(&s, cli, buf, sizeof buf);
     ok("pong reply", strcmp(buf, "PONG 0 42\n") == 0);
     ok("probe called", g_probe.calls == 1);
-    ok("probe got host", strcmp(g_probe.last_host, "1.1.1.1") == 0);
+    ok("probe got host", strcmp(g_probe.last_host, "5.5.5.5") == 0);
     ok("probe got port", g_probe.last_port == 443);
 
     g_probe.ret_ms = -1;

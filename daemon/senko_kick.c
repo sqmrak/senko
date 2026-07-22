@@ -9,6 +9,7 @@
 #include <string.h>
 #include <signal.h>
 #include <sys/socket.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/un.h>
@@ -35,6 +36,17 @@ extern char **environ;
 #define UPDATE_LOG "/tmp/senko-update.log"
 #define UPDATE_MAX_BYTES (64 * 1024 * 1024)
 #define UPDATE_AWG_MARKER "/var/run/senkoawgd.upgrade"
+#define KICK_LOCK "/var/tmp/senko-kick.lock"
+
+static int acquire_kick_lock(void) {
+    int fd = open(KICK_LOCK, O_WRONLY | O_CREAT, 0600);
+    if (fd < 0) return -1;
+    if (flock(fd, LOCK_EX) != 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
 
 static void klog(const char *msg) {
     int fd = open(KLOG, O_WRONLY | O_CREAT | O_APPEND, 0644);
@@ -715,6 +727,13 @@ int main(int argc, char **argv) {
     }
     setuid(0);
     setgid(0);
+
+    int kick_lock = acquire_kick_lock();
+    if (kick_lock < 0) {
+        klog("could not lock daemon startup");
+        return 1;
+    }
+    (void)kick_lock;
 
     if (argc == 2 && strcmp(argv[1], "--awg-stop") == 0) {
         int rc = awg_stop();

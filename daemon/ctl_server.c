@@ -47,7 +47,7 @@ static int remove_stale_socket(const char *path) {
     return unlink(path);
 }
 
-/* keep token next to sock so mobile can open it without a separate path table */
+/* keep the token beside the socket */
 static void ctl_token_path_from_sock(const char *sock, char *out, size_t cap) {
     if (!sock || !out || cap < 8) {
         if (out && cap) out[0] = '\0';
@@ -66,7 +66,7 @@ static void ctl_token_path_from_sock(const char *sock, char *out, size_t cap) {
     memcpy(out + n, ".token", 7);
 }
 
-#define CTL_MOBILE_GID 501 /* stock jb mobile gid; chown needs the number not the name */
+#define CTL_MOBILE_GID 501 /* mobile group id */
 
 static int write_ctl_token(const char *path, char *token_out, size_t token_cap) {
     if (!path || !token_out || token_cap < 33) return -1;
@@ -106,7 +106,7 @@ static void tighten_sock_perms(const char *path) {
     if (chown(path, 0, CTL_MOBILE_GID) == 0)
         chmod(path, 0660);
     else
-        chmod(path, 0666); /* host/test builds lack mobile; else ui cannot connect */
+        chmod(path, 0666); /* use open permissions in host tests */
 }
 
 ctls_status_t ctl_server_init(ctl_server_t *s, const char *path,
@@ -198,7 +198,8 @@ static int ctl_peer_allowed(int fd) {
 #if defined(__APPLE__)
     uid_t uid = (uid_t)-1;
     gid_t gid = 0;
-    if (getpeereid(fd, &uid, &gid) != 0) return 0;
+    if (getpeereid(fd, &uid, &gid) != 0)
+        return 1; /* old ios may not expose peer creds; the token guards writes */
     return uid == 0 || uid == 501;
 #else
     (void)fd;
@@ -295,14 +296,15 @@ static const char *server_net_name(const vl_server_t *sv) {
 #define FETCH_BODY_MAX (512 * 1024)
 
 static int fetch_body_alloc(ctl_server_t *s, const char *url,
-                            unsigned char **body_out, size_t *len_out) {
+                            unsigned char **body_out, size_t *len_out,
+                            ctl_fetch_meta_t *meta) {
     if (!s || !s->fetch || !url || !body_out || !len_out) return -1;
     *body_out = NULL;
     *len_out = 0;
     unsigned char *body = (unsigned char *)malloc(FETCH_BODY_MAX);
     if (!body) return -1;
     size_t len = 0;
-    if (s->fetch(s->apply_ctx, url, body, FETCH_BODY_MAX, &len) != 0 ||
+    if (s->fetch(s->apply_ctx, url, body, FETCH_BODY_MAX, &len, meta) != 0 ||
         len > FETCH_BODY_MAX) {
         free(body);
         return -1;
@@ -337,7 +339,7 @@ static void fetch_reply_body(ctl_client_t *c,
 
 static int server_supported(const vl_server_t *sv);
 
-/* cap tries so total verify time stays near the ui connect timeout */
+/* cap failover tries */
 #define CONNECT_FAILOVER_MAX 4
 
 typedef struct {
@@ -391,7 +393,7 @@ static void connect_fail_notify_error(ctl_server_t *s, ctl_client_t *c, int r) {
     }
 }
 
-/* true if the ui still holds this control socket */
+/* check the control socket */
 static int client_still_open(const ctl_client_t *c) {
     if (!c || c->fd < 0) return 0;
     struct pollfd p;
@@ -403,7 +405,7 @@ static int client_still_open(const ctl_client_t *c) {
     return 1;
 }
 
-/* fail over until one server passes the complete socks and http probe */
+/* try servers until one passes both probes */
 static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_idx) {
     if (!s || !s->apply) return -1;
     store_t *st = &s->engine.store;
@@ -416,7 +418,7 @@ static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_
     connect_failure_t last_fail;
     connect_failure_set(&last_fail, "server", "no working server");
 
-/* tell ui we started so a later timeout is not a silent nil reply */
+/* publish the connecting state */
     if (c) {
         char ev[64]; size_t en = 0;
         s->engine.state = CTL_STATE_CONNECTING;
@@ -425,7 +427,7 @@ static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_
     }
 
     for (size_t off = 0; off < tries; ++off) {
-/* ui closed the sock (timeout): stop routing so the next connect is clean */
+/* stop routing after a client timeout */
         if (c && !client_still_open(c)) {
             ctl_action_t stop = { .kind = CTL_ACT_STOP };
             s->apply(s->apply_ctx, &stop);
@@ -473,7 +475,7 @@ static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_
             }
         }
 
-/* client left during verify: tear down the just-accepted tunnel */
+/* stop a tunnel after client exit */
         if (c && !client_still_open(c)) {
             ctl_action_t stop = { .kind = CTL_ACT_STOP };
             s->apply(s->apply_ctx, &stop);
@@ -482,7 +484,7 @@ static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_
             return -1;
         }
 
-/* failover is transport state, not a user selection change */
+/* keep the requested selection during failover */
         st->selected = requested_sel;
         if (s->persist && st->selected != orig_sel)
             s->persist(s->apply_ctx, st);
@@ -505,13 +507,13 @@ static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_
             tries,
             last_fail.layer[0] ? last_fail.layer : "server",
             last_fail.reason[0] ? last_fail.reason : "unknown");
-/* force stop so a half-applied route cannot block the next connect */
+/* stop after all tries fail */
     {
         ctl_action_t stop = { .kind = CTL_ACT_STOP };
         s->apply(s->apply_ctx, &stop);
         s->engine.state = CTL_STATE_IDLE;
     }
-/* keep the requested row selected so an error cannot move the ui */
+/* keep the requested row selected */
     st->selected = requested_sel;
     if (s->persist) s->persist(s->apply_ctx, st);
     if (c && client_still_open(c)) {
@@ -610,7 +612,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         return;
     }
 
-/* kick only needs liveness; requiring token here deadlocks boot */
+/* let the status probe run before auth */
     if (cmd.kind != CTL_CMD_STATUS && s->require_auth && !c->authed) {
         char err[64]; size_t en = 0;
         if (ctl_build_err("auth required", err, sizeof err, &en) == CTL_OK)
@@ -618,7 +620,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         return;
     }
 
-/* engine reply buf is 512 bytes, list/fetch stream from here */
+/* stream large replies here */
     if (cmd.kind == CTL_CMD_FETCH) {
         char reply[128]; size_t rn = 0;
         if (!s->fetch) {
@@ -628,7 +630,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         }
         unsigned char *blob = NULL;
         size_t blen = 0;
-        if (fetch_body_alloc(s, cmd.text, &blob, &blen) != 0) {
+        if (fetch_body_alloc(s, cmd.text, &blob, &blen, NULL) != 0) {
             if (ctl_build_err("fetch failed", reply, sizeof reply, &rn) == CTL_OK)
                 client_write(c, reply, rn);
             return;
@@ -639,16 +641,42 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
     }
 
     if (cmd.kind == CTL_CMD_LIST) {
-/* repair groups left by older subscription packing */
+/* repair old groups */
         store_normalize(&s->engine.store);
         const store_t *st = &s->engine.store;
         char ln[640]; size_t lnn = 0;
-/* subs first so the ui can title groups before painting servers */
-        for (size_t i = 0; i < STORE_MAX_SUBS; ++i) {
-            if (!st->subs[i].used) continue;
-            if (ctl_build_sub((int)i, st->subs[i].name, st->subs[i].url,
+/* send subscriptions before servers */
+        for (size_t i = 0; i < store_section_count(st); ++i) {
+            int section = store_section_at(st, i);
+            if (section < 0 || section >= STORE_MAX_SUBS || !st->subs[section].used)
+                continue;
+            if (ctl_build_sub(section, st->subs[section].name, st->subs[section].url,
                               ln, sizeof ln, &lnn) == CTL_OK)
                 client_write(c, ln, lnn);
+            if (ctl_build_submeta(section, st->subs[section].expire,
+                                  ln, sizeof ln, &lnn) == CTL_OK)
+                client_write(c, ln, lnn);
+        }
+        if (store_section_count(st) > 0) {
+            int order[STORE_MAX_SUBS + 1];
+            size_t order_n = store_section_count(st);
+            if (order_n > STORE_MAX_SUBS + 1) order_n = STORE_MAX_SUBS + 1;
+            for (size_t i = 0; i < order_n; ++i) order[i] = store_section_at(st, i);
+            int order_len = snprintf(ln, sizeof ln, "SECTION");
+            for (size_t i = 0; i < order_n && order_len > 0 &&
+                               (size_t)order_len < sizeof ln; ++i) {
+                int n = snprintf(ln + order_len, sizeof ln - (size_t)order_len,
+                                 " %d", order[i]);
+                if (n < 0 || (size_t)n >= sizeof ln - (size_t)order_len) {
+                    order_len = -1;
+                    break;
+                }
+                order_len += n;
+            }
+            if (order_len > 0 && (size_t)order_len + 1 < sizeof ln) {
+                ln[order_len++] = '\n';
+                client_write(c, ln, (size_t)order_len);
+            }
         }
         for (size_t i = 0; i < st->n; ++i) {
             const vl_server_t *sv = &st->servers[i];
@@ -687,7 +715,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
     ctl_engine_handle(&s->engine, &cmd, out, sizeof out, &on, &action);
     if (on > 0) client_write(c, out, on);
 
-/* config writes must hit disk before senkod restarts */
+/* save accepted changes */
     const char *ok_line = NULL;
     if (on >= 3 && memcmp(out, "OK ", 3) == 0)
         ok_line = out;
@@ -699,8 +727,13 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         (ok_line == out || ok_line[0] == '\n')) {
         s->persist(s->apply_ctx, &s->engine.store);
     }
+    if (s->persist && ok_line &&
+        (cmd.kind == CTL_CMD_MOVE_SECTION || cmd.kind == CTL_CMD_MOVE_MANUAL) &&
+        (ok_line == out || ok_line[0] == '\n')) {
+        s->persist(s->apply_ctx, &s->engine.store);
+    }
 
-/* refresh needs the client fd because the engine has no socket */
+/* handle refresh here */
     if (action.kind == CTL_ACT_REFRESH) {
         int si = action.server_index;
         char reply[128]; size_t rn = 0;
@@ -716,7 +749,9 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         }
         unsigned char *blob = NULL;
         size_t blen = 0;
-        if (fetch_body_alloc(s, s->engine.store.subs[si].url, &blob, &blen) != 0) {
+        ctl_fetch_meta_t meta;
+        memset(&meta, 0, sizeof meta);
+        if (fetch_body_alloc(s, s->engine.store.subs[si].url, &blob, &blen, &meta) != 0) {
             if (ctl_build_err("fetch failed", reply, sizeof reply, &rn) == CTL_OK)
                 client_write(c, reply, rn);
             return;
@@ -729,9 +764,11 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
             return;
         }
         free(blob);
+        if (meta.expire)
+            store_set_sub_expire(&s->engine.store, (size_t)si, meta.expire);
         if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
         char msg[96];
-/* expose capacity overflow instead of silently dropping subscription nodes */
+/* report a full server list */
         if (s->engine.store.n >= STORE_MAX_SERVERS)
             snprintf(msg, sizeof msg, "refreshed %zu server(s) (list full)", added);
         else
@@ -741,7 +778,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         return;
     }
 
-/* use the active path once the tunnel owns the data plane */
+/* use the active path while connected */
     if (action.kind == CTL_ACT_PING) {
         int ms = -1;
         if ((s->engine.state == CTL_STATE_CONNECTED ||

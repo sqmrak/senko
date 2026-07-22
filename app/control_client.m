@@ -51,7 +51,7 @@ static void set_rcv_timeout(int fd, int ms) {
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
 }
 
-/* read until terminal line; srv/sub/fdata are multi-line */
+/* read until a terminal line */
 static int reply_complete(const char *buf, size_t len) {
     size_t start = 0;
     for (size_t i = 0; i < len; ++i) {
@@ -62,15 +62,17 @@ static int reply_complete(const char *buf, size_t len) {
             int stream =
                 (llen >= 4 && memcmp(ln, "SRV ", 4) == 0) ||
                 (llen >= 4 && memcmp(ln, "SUB ", 4) == 0) ||
+                (llen >= 8 && memcmp(ln, "SUBMETA ", 8) == 0) ||
+                (llen >= 8 && memcmp(ln, "SECTION ", 8) == 0) ||
                 (llen >= 6 && memcmp(ln, "FDATA ", 6) == 0);
-            if (!stream) return 1; /* stop only on terminal protocol records */
+            if (!stream) return 1; /* stop on terminal records */
         }
         start = i + 1;
     }
     return 0;
 }
 
-/* wait past connecting because routing finishes asynchronously */
+/* wait for the final tunnel state */
 static int tunnel_reply_complete(const char *buf, size_t len) {
     size_t start = 0;
     int terminal = 0;
@@ -94,7 +96,7 @@ static int tunnel_reply_complete(const char *buf, size_t len) {
     return terminal;
 }
 
-/* token lives beside sock so we do not hardcode a second root path */
+/* keep the token beside the socket */
 static NSString *senkoCtlTokenPath(NSString *sockPath) {
     if (![sockPath length]) return @"/var/tmp/senkod.token";
     if ([sockPath hasSuffix:@".sock"])
@@ -126,7 +128,7 @@ static int write_all_fd(int fd, const void *buf, size_t len) {
     return 0;
 }
 
-/* jailbreak: other mobile processes can open the sock without this handshake */
+/* let mobile clients open the socket */
 static int senkoCtlAuth(int fd, NSString *sockPath) {
     NSString *tok = senkoLoadCtlToken(sockPath);
     if (![tok length]) return 0;
@@ -168,7 +170,7 @@ static int senkoCtlAuth(int fd, NSString *sockPath) {
         return nil;
     }
 
-/* probeDaemon must work before token is readable after a racey restart */
+/* probe the daemon before auth */
     BOOL is_status = [cmd hasPrefix:@"STATUS"];
     if (!is_status) {
         if (senkoCtlAuth(fd, _sockPath) != 0) {
@@ -190,7 +192,7 @@ static int senkoCtlAuth(int fd, NSString *sockPath) {
         p += w; left -= (size_t)w;
     }
 
-/* recv timeout only catches a dead senkod, not end of reply */
+/* use the timeout for a dead daemon */
     int is_tunnel = ([cmd hasPrefix:@"CONNECT "] || [cmd isEqualToString:@"DISCONNECT"] ||
                      [cmd isEqualToString:@"DISCONNECT\n"]);
     int (*done_fn)(const char *, size_t) = is_tunnel ? tunnel_reply_complete : reply_complete;
@@ -241,7 +243,7 @@ static int senkoCtlAuth(int fd, NSString *sockPath) {
     }];
 }
 
-/* report kick detail because setuid failures otherwise look like daemon silence */
+/* show helper errors */
 - (void)kickDaemon:(void (^)(BOOL, NSString *))done {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         const char *path = "/usr/bin/senko-kick";
@@ -279,7 +281,7 @@ static int senkoCtlAuth(int fd, NSString *sockPath) {
             if (done) done(YES, nil);
             return;
         }
-/* kick once, then poll without recursive ui callbacks */
+/* kick once and poll */
         [self kickDaemon:^(BOOL kicked, NSString *detail) {
             if (!kicked) {
                 NSString *msg = detail ? detail : @"daemon offline";
@@ -322,7 +324,7 @@ static BOOL tokenIsSecurity(NSString *s) {
            [s isEqualToString:@"reality"] || [s isEqualToString:@"unknown"];
 }
 
-/* old daemons omit proto/net; identify the new layout by its fixed fields */
+/* parse old server rows */
 static SenkoServer *parseSRV(NSString *line) {
     NSArray *t = [line componentsSeparatedByString:@" "];
     if ([t count] < 7) return nil;
@@ -380,11 +382,12 @@ static SenkoSub *parseSUB(NSString *line) {
     return s;
 }
 
-- (void)listCatalog:(void (^)(NSArray *, NSArray *))done {
+- (void)listCatalog:(void (^)(NSArray *, NSArray *, NSArray *))done {
     [self sendCommand:@"LIST" timeoutMs:5000 reply:^(NSString *reply) {
-        if (!reply) { if (done) done(nil, nil); return; }
+        if (!reply) { if (done) done(nil, nil, nil); return; }
         NSMutableArray *srvs = [NSMutableArray array];
         NSMutableArray *subs = [NSMutableArray array];
+        NSMutableArray *order = [NSMutableArray array];
         NSInteger expectedServers = -1;
         NSArray *lines = [reply componentsSeparatedByString:@"\n"];
         for (NSString *ln in lines) {
@@ -398,20 +401,39 @@ static SenkoSub *parseSUB(NSString *line) {
                 if (s) [subs addObject:s];
                 continue;
             }
+            if ([ln hasPrefix:@"SUBMETA "]) {
+                NSArray *t = [ln componentsSeparatedByString:@" "];
+                if ([t count] >= 3) {
+                    int idx = [[t objectAtIndex:1] intValue];
+                    for (SenkoSub *s in subs) {
+                        if (s->index != idx) continue;
+                        s->expire = (unsigned long long)[[t objectAtIndex:2] longLongValue];
+                        break;
+                    }
+                }
+                continue;
+            }
+            if ([ln hasPrefix:@"SECTION "]) {
+                NSArray *t = [ln componentsSeparatedByString:@" "];
+                for (NSUInteger i = 1; i < [t count]; ++i)
+                    [order addObject:[NSNumber numberWithInt:[[t objectAtIndex:i] intValue]]];
+                continue;
+            }
             SenkoServer *sv = parseSRV(ln);
             if (sv) [srvs addObject:sv];
         }
         if (expectedServers < 0 || expectedServers != (NSInteger)[srvs count]) {
-            if (done) done(nil, nil);
+            if (done) done(nil, nil, nil);
             return;
         }
-        if (done) done(srvs, subs);
+        if (done) done(srvs, subs, order);
     }];
 }
 
 - (void)listServers:(void (^)(NSArray *))done {
-    [self listCatalog:^(NSArray *servers, NSArray *subs) {
+    [self listCatalog:^(NSArray *servers, NSArray *subs, NSArray *order) {
         (void)subs;
+        (void)order;
         if (done) done(servers);
     }];
 }
@@ -449,7 +471,7 @@ static SenkoSub *parseSUB(NSString *line) {
 }
 
 - (void)connectIndex:(int)idx reply:(void (^)(NSString *))done {
-/* 4 failovers * ~8s verify + handshake headroom; must beat daemon budget */
+/* leave room for four failovers */
     [self sendCommand:[NSString stringWithFormat:@"CONNECT %d", idx]
             timeoutMs:45000
                 reply:done];
@@ -490,8 +512,20 @@ static SenkoSub *parseSUB(NSString *line) {
                 reply:done];
 }
 
+- (void)moveSection:(int)sectionId toPosition:(int)position
+              reply:(void (^)(NSString *))done {
+    [self sendCommand:[NSString stringWithFormat:@"MOVESECTION %d %d", sectionId, position]
+                reply:done];
+}
+
+- (void)moveManualServerIndex:(int)idx toPosition:(int)position
+                        reply:(void (^)(NSString *))done {
+    [self sendCommand:[NSString stringWithFormat:@"MOVEMANUAL %d %d", idx, position]
+                reply:done];
+}
+
 - (void)pingIndex:(int)idx reply:(void (^)(int))done {
-/* bound two tcp samples below the default control timeout */
+/* keep two tcp samples under the control timeout */
     [self sendCommand:[NSString stringWithFormat:@"PING %d", idx]
             timeoutMs:5000
                 reply:^(NSString *reply) {
@@ -588,7 +622,7 @@ static SenkoSub *parseSUB(NSString *line) {
             });
             return;
         }
-/* hold path for spawn argv lifetime */
+/* keep the path for spawn */
         NSString *pathCopy = [[path copy] autorelease];
         const char *p = [pathCopy fileSystemRepresentation];
         if (!p) {
@@ -611,7 +645,7 @@ static SenkoSub *parseSUB(NSString *line) {
             });
             return;
         }
-/* stderr must be a path *mobile* can open before setuid exec */
+/* use a mobile-readable stderr path */
         const char *errlog = "/tmp/senko-update.log";
         posix_spawn_file_actions_t fa;
         posix_spawn_file_actions_init(&fa);
@@ -638,7 +672,7 @@ static SenkoSub *parseSUB(NSString *line) {
                                                            length:(NSUInteger)n
                                                          encoding:NSUTF8StringEncoding];
                 if (!chunk) {
-/* fall back if path bytes are not strict utf8 */
+/* use a fallback path for bad utf8 */
                     chunk = [[NSString alloc] initWithBytes:buf
                                                      length:(NSUInteger)n
                                                    encoding:NSISOLatin1StringEncoding];

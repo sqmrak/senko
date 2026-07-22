@@ -215,7 +215,7 @@ static BOOL SenkoHostIsIos6or7(void) {
 }
 
 - (void)modeSegChanged:(UISegmentedControl *)seg {
-/* 0 = dark, 1 = white */
+/* 0 = dark, 1 = light */
     if (!SenkoThemeAllowsDark()) {
         seg.selectedSegmentIndex = SenkoThemeIsMiside() ? 0 : 1;
         return;
@@ -244,7 +244,7 @@ static BOOL SenkoHostIsIos6or7(void) {
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
     (void)tv;
     if (s == 0) return (NSInteger)[_groups count];
-    if (s == 1) return 1; /* dark / white */
+    if (s == 1) return 1; /* dark / light */
     return 1; /* sfx toggle */
 }
 
@@ -281,11 +281,11 @@ static BOOL SenkoHostIsIos6or7(void) {
         if (SenkoThemeIsMiside())
             lab.text = @"Senko-Miside is Dark only: pattern wallpaper and candy heart ON.";
         else if (SenkoThemeIsBoykisser())
-            lab.text = @"Senko-Boykisser is White only: pink paper and falling boykissers on the home screen.";
+            lab.text = @"Senko-Boykisser is Light only: pink paper and falling boykissers on the home screen.";
         else if (SenkoThemeIsFrutigeraero())
-            lab.text = @"Senko-Aero is White only: sky wallpaper and floating gloss bubbles.";
+            lab.text = @"Senko-Aero is Light only: sky wallpaper and floating gloss bubbles.";
         else
-            lab.text = @"Dark / White applies to the selected style. Choice is stored on device.";
+            lab.text = @"Dark / Light applies to the selected style. Choice is stored on device.";
         SenkoStyleMutedLabel(lab);
         lab.autoresizingMask = UIViewAutoresizingFlexibleWidth;
         [wrap addSubview:lab];
@@ -370,7 +370,7 @@ static BOOL SenkoHostIsIos6or7(void) {
         if (![seg isKindOfClass:[UISegmentedControl class]]) {
             [[cell.contentView viewWithTag:9201] removeFromSuperview];
             seg = [[[UISegmentedControl alloc] initWithItems:
-                    [NSArray arrayWithObjects:@"Dark", @"White", nil]] autorelease];
+                    [NSArray arrayWithObjects:@"Dark", @"Light", nil]] autorelease];
             seg.tag = 9201;
             seg.autoresizingMask = UIViewAutoresizingFlexibleWidth |
                                    UIViewAutoresizingFlexibleTopMargin |

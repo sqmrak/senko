@@ -57,6 +57,10 @@ int main(void) {
                                  41001, 41002, (routing_pf_mode_t)mode,
                                  pf, sizeof pf, &pf_len);
         ok("pf config generation", rc == ROUTING_OK && pf_len > 0 && pf[pf_len] == '\0');
+        if (mode != ROUTING_PF_COMPAT_RDR) {
+            ok("pf keeps local traffic in", strstr(pf, "pass in quick on en0 inet from <senko_bypass>") != NULL);
+            ok("pf keeps local traffic out", strstr(pf, "pass out quick on en0 inet from any to <senko_bypass>") != NULL);
+        }
     }
     ok("compat pf avoids tables", routing_pf_conf("203.0.113.10", ifnames, 1,
                                                     41001, 41002,

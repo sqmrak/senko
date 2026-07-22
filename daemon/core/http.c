@@ -29,7 +29,7 @@ static const char *skip_ws(const char *s) {
     return s;
 }
 
-/* cap lengths so 32-bit armv7 shifts cannot bypass validation */
+/* cap response lengths */
 #define HTTP_LEN_CAP (64L * 1024 * 1024)
 
 static long parse_dec(const char *s) {
@@ -37,7 +37,7 @@ static long parse_dec(const char *s) {
     if (*s < '0' || *s > '9') return -1;
     for (; *s >= '0' && *s <= '9'; ++s) {
         v = v * 10 + (*s - '0');
-        if (v > HTTP_LEN_CAP) return -1; /* absurd, bail */
+        if (v > HTTP_LEN_CAP) return -1; /* reject oversized values */
     }
     return v;
 }
@@ -61,7 +61,7 @@ static long parse_hex(const char *s) {
 
 static http_status_t consume_line(http_parser_t *p) {
     if (p->state == HP_STATUS_LINE) {
-/* validate the status line before accepting headers */
+/* validate the status line */
         const char *s = p->line;
         if (!hdr_is(s, "http/")) return HTTP_ERR_PARSE;
         const char *sp = strchr(s, ' ');
@@ -75,12 +75,12 @@ static http_status_t consume_line(http_parser_t *p) {
 
     if (p->line_len == 0) {
         if (http_parser_is_redirect(p)) {
-/* finish at redirect headers because only location matters */
+/* stop after redirect headers */
             p->state = HP_COMPLETE;
             return HTTP_DONE;
         }
         if (p->status_code < 200 || p->status_code >= 300) {
-            return HTTP_ERR_STATUS; /* not 2xx and not a redirect */
+            return HTTP_ERR_STATUS; /* reject non-success status */
         }
         if (p->framing == HTTP_FRAMING_CHUNKED) {
             p->state = HP_BODY_CHUNK_SIZE;
@@ -105,7 +105,7 @@ static http_status_t consume_line(http_parser_t *p) {
         const char *v = skip_ws(p->line + 18);
         if (hdr_is(v, "chunked")) {
             p->framing = HTTP_FRAMING_CHUNKED;
-            p->content_length = 0; /* ignore any content-length */
+            p->content_length = 0; /* ignore content length */
         }
     } else if (hdr_is(p->line, "location:")) {
         const char *v = skip_ws(p->line + 9);
@@ -115,7 +115,6 @@ static http_status_t consume_line(http_parser_t *p) {
         p->location[l] = '\0';
         p->have_location = 1;
     } else if (hdr_is(p->line, "set-cookie:")) {
-/* keep name=value only (strip attributes); jar multiple with "; " */
         const char *v = skip_ws(p->line + 11);
         size_t n = 0;
         while (v[n] && v[n] != ';' && v[n] != ' ' && v[n] != '\t') n++;
@@ -132,13 +131,21 @@ static http_status_t consume_line(http_parser_t *p) {
                 p->have_set_cookie = 1;
             }
         }
+    } else if (hdr_is(p->line, "subscription-userinfo:")) {
+        const char *v = skip_ws(p->line + 22);
+        size_t n = strlen(v);
+        if (n >= sizeof p->subscription_userinfo)
+            n = sizeof p->subscription_userinfo - 1;
+        memcpy(p->subscription_userinfo, v, n);
+        p->subscription_userinfo[n] = '\0';
+        p->have_subscription_userinfo = 1;
     }
     return HTTP_NEED_MORE;
 }
 
 static http_status_t line_push(http_parser_t *p, char c) {
     if (++p->header_total > HTTP_MAX_HEADER) return HTTP_ERR_TOOBIG;
-    if (c == '\r') return HTTP_NEED_MORE; /* drop cr, act on lf */
+    if (c == '\r') return HTTP_NEED_MORE; /* wait for lf */
     if (c == '\n') {
         if (p->line_len >= sizeof p->line) return HTTP_ERR_TOOBIG;
         p->line[p->line_len] = '\0';
@@ -195,7 +202,7 @@ http_status_t http_parser_feed(http_parser_t *p, const uint8_t *in, size_t len) 
                     long sz = parse_hex(p->line);
                     p->line_len = 0;
                     if (sz < 0) { p->state = HP_ERROR; return HTTP_ERR_PARSE; }
-                    if (sz == 0) { /* last chunk; skip trailers to end */
+                    if (sz == 0) { /* finish after the last chunk */
                         p->state = HP_COMPLETE;
                         return HTTP_DONE;
                     }
@@ -233,7 +240,7 @@ http_status_t http_parser_feed(http_parser_t *p, const uint8_t *in, size_t len) 
             }
 
             case HP_COMPLETE:
-                return HTTP_DONE; /* extra bytes after body: ignore */
+                return HTTP_DONE; /* ignore extra bytes */
 
             case HP_ERROR:
             default:
@@ -247,7 +254,7 @@ http_status_t http_parser_feed(http_parser_t *p, const uint8_t *in, size_t len) 
 http_status_t http_parser_eof(http_parser_t *p) {
     if (!p) return HTTP_ERR_ARG;
     if (p->state == HP_COMPLETE) return HTTP_DONE;
-    if (p->state == HP_BODY_EOF) { /* close is the legit end of body */
+    if (p->state == HP_BODY_EOF) { /* eof closes the body */
         p->state = HP_COMPLETE;
         return HTTP_DONE;
     }

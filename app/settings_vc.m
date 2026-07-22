@@ -19,229 +19,6 @@
 #import "meow.h"
 #import "app_common.h"
 
-enum { kSenkoSettingsSide = 10 };
-
-@interface SettingsVC () <UITableViewDataSource, UITableViewDelegate,
-                          EditServerDelegate, FileImportDelegate>
-@end
-
-@interface SenkoSettingsHeaderPlate : UIView {
-    CAGradientLayer *_grad;
-    UIView *_shine;
-    UILabel *_title;
-}
-- (void)setGradColors:(NSArray *)colors title:(NSString *)title;
-@end
-
-@implementation SenkoSettingsHeaderPlate
-
-- (id)initWithFrame:(CGRect)frame {
-    self = [super initWithFrame:frame];
-    if (!self) return nil;
-    self.opaque = YES;
-    self.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    _grad = [[CAGradientLayer layer] retain];
-    _grad.masksToBounds = YES;
-    [self.layer insertSublayer:_grad atIndex:0];
-    _shine = [[UIView alloc] initWithFrame:CGRectZero];
-    _shine.userInteractionEnabled = NO;
-    _shine.backgroundColor = [UIColor colorWithWhite:1 alpha:0.22f];
-    [self addSubview:_shine];
-    _title = [[UILabel alloc] initWithFrame:CGRectZero];
-    _title.backgroundColor = [UIColor clearColor];
-    _title.font = [UIFont boldSystemFontOfSize:15];
-    _title.lineBreakMode = NSLineBreakByTruncatingTail;
-    _title.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [self addSubview:_title];
-    return self;
-}
-
-- (void)dealloc {
-    [_grad release];
-    [_shine release];
-    [_title release];
-    [super dealloc];
-}
-
-- (void)setGradColors:(NSArray *)colors title:(NSString *)title {
-    _grad.colors = colors;
-    _title.text = title;
-    if (SenkoThemeIsBoykisser() || SenkoThemeIsFrutigeraero() ||
-        (SenkoThemeIsFlat() && SenkoThemeIsLight())) {
-        _title.textColor = kInk;
-        _title.shadowColor = [UIColor colorWithWhite:1 alpha:0.55f];
-        _title.shadowOffset = CGSizeMake(0, 1);
-    } else {
-/* emboss on dark chrome */
-        _title.textColor = [UIColor colorWithRed:1.00 green:0.94 blue:0.86 alpha:1.0];
-        _title.shadowColor = [UIColor colorWithWhite:0 alpha:0.90f];
-        _title.shadowOffset = CGSizeMake(0, 1);
-    }
-    [self setNeedsLayout];
-}
-
-- (void)layoutSubviews {
-    [super layoutSubviews];
-    CGRect b = self.bounds;
-    CGFloat r = self.layer.cornerRadius;
-    _grad.frame = b;
-    _grad.cornerRadius = r;
-    _shine.frame = CGRectMake(1, 1, MAX(0, b.size.width - 2), 1);
-    _title.frame = CGRectMake(14, 3, MAX(0, b.size.width - 28), 20);
-}
-
-@end
-
-/* settings row card; keep mask rebuild rare (scroll/reuse cost) */
-@interface SenkoSettingsGroupBg : UIView {
-    UIView *_fill;
-    UIView *_sep;
-    CAShapeLayer *_mask;
-    BOOL _first;
-    BOOL _last;
-    BOOL _showSep;
-    CGSize _laidSize;
-    int _laidCornerKey;
-}
-- (void)configureFirst:(BOOL)first last:(BOOL)last showSep:(BOOL)showSep;
-@end
-
-@implementation SenkoSettingsGroupBg
-
-- (id)initWithFrame:(CGRect)frame {
-    self = [super initWithFrame:frame];
-    if (!self) return nil;
-    self.backgroundColor = [UIColor clearColor];
-    self.opaque = NO;
-    self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    _fill = [[UIView alloc] initWithFrame:CGRectZero];
-    _fill.backgroundColor = kCellHi;
-/* opaque=yes kills alpha on ios26 glass cells */
-    _fill.opaque = !SenkoThemeIsIos26();
-    _fill.clipsToBounds = YES;
-    [self addSubview:_fill];
-    _sep = [[UIView alloc] initWithFrame:CGRectZero];
-    _sep.userInteractionEnabled = NO;
-    _sep.hidden = YES;
-    [self addSubview:_sep];
-    _mask = [[CAShapeLayer layer] retain];
-    _laidCornerKey = -1;
-    return self;
-}
-
-- (void)dealloc {
-    [_fill release];
-    [_sep release];
-    [_mask release];
-    [super dealloc];
-}
-
-- (void)configureFirst:(BOOL)first last:(BOOL)last showSep:(BOOL)showSep {
-    BOOL dirty = (_first != first) || (_last != last) || (_showSep != showSep);
-    _first = first;
-    _last = last;
-    _showSep = showSep;
-    _fill.backgroundColor = kCellHi;
-    if (dirty)
-        [self setNeedsLayout];
-}
-
-- (void)layoutSubviews {
-    [super layoutSubviews];
-    CGRect b = self.bounds;
-    if (b.size.width < 2.0f || b.size.height < 2.0f)
-        return;
-
-/* match daemon/utilities plate width exactly. grouped cells can already be inset */
-    CGFloat side = (CGFloat)kSenkoSettingsSide;
-    CGFloat radius = 10.0f;
-    CGFloat fillX = 0.0f;
-    CGFloat fillW = b.size.width;
-
-    UIView *walk = self.superview;
-    UITableView *tv = nil;
-    while (walk) {
-        if ([walk isKindOfClass:[UITableView class]]) {
-            tv = (UITableView *)walk;
-            break;
-        }
-        walk = walk.superview;
-    }
-    if (tv && tv.bounds.size.width > 2.0f) {
-        CGRect plateInTable = CGRectMake(side, 0,
-                                         tv.bounds.size.width - side * 2.0f,
-                                         b.size.height);
-        CGRect plateInSelf = [self convertRect:plateInTable fromView:tv];
-        fillX = plateInSelf.origin.x;
-        fillW = plateInSelf.size.width;
-/* clamp into own bounds so we never paint past the cell */
-        if (fillX < 0.0f) {
-            fillW += fillX;
-            fillX = 0.0f;
-        }
-        if (fillX + fillW > b.size.width)
-            fillW = b.size.width - fillX;
-        if (fillW < 1.0f) {
-            fillX = 0.0f;
-            fillW = b.size.width;
-        }
-    }
-
-    _fill.frame = CGRectMake(fillX, 0, fillW, b.size.height);
-    if (SenkoThemeIsIos26()) {
-        BOOL light = SenkoThemeIsLight();
-        _fill.opaque = NO;
-        _fill.backgroundColor = light
-            ? [UIColor colorWithWhite:1.0 alpha:0.42]
-            : [UIColor colorWithWhite:1.0 alpha:0.12];
-    } else {
-        _fill.opaque = YES;
-        _fill.backgroundColor = kCellHi;
-    }
-
-    int cornerKey = (_first ? 1 : 0) | (_last ? 2 : 0);
-    BOOL sizeDirty = !CGSizeEqualToSize(_laidSize, b.size);
-    BOOL cornerDirty = (_laidCornerKey != cornerKey);
-    if (sizeDirty || cornerDirty) {
-        _laidSize = b.size;
-        _laidCornerKey = cornerKey;
-        UIRectCorner corners = 0;
-        if (_first && _last)
-            corners = UIRectCornerAllCorners;
-        else if (_first)
-            corners = UIRectCornerTopLeft | UIRectCornerTopRight;
-        else if (_last)
-            corners = UIRectCornerBottomLeft | UIRectCornerBottomRight;
-        if (corners != 0) {
-            UIBezierPath *path =
-                [UIBezierPath bezierPathWithRoundedRect:_fill.bounds
-                                      byRoundingCorners:corners
-                                            cornerRadii:CGSizeMake(radius, radius)];
-            _mask.frame = _fill.bounds;
-            _mask.path = path.CGPath;
-            _fill.layer.mask = _mask;
-        } else {
-            _fill.layer.mask = nil;
-        }
-    }
-
-    if (_showSep && !_last) {
-        CGFloat lineH = 1.0f / MAX(1.0f, [UIScreen mainScreen].scale);
-        if (lineH < 0.5f) lineH = 0.5f;
-        CGFloat pad = 12.0f;
-        if (pad >= fillW) pad = 0.0f;
-        _sep.hidden = NO;
-        _sep.frame = CGRectMake(fillX + pad, b.size.height - lineH,
-                                fillW - pad, lineH);
-        _sep.backgroundColor = SenkoThemeIsLight()
-            ? [UIColor colorWithWhite:0 alpha:0.16]
-            : [UIColor colorWithWhite:1 alpha:0.22];
-    } else {
-        _sep.hidden = YES;
-    }
-}
-
-@end
 
 @implementation SettingsVC {
 
@@ -281,9 +58,11 @@ enum { kSenkoSettingsSide = 10 };
                                         style:UITableViewStyleGrouped] autorelease];
     _tv.dataSource = self;
     _tv.delegate = self;
-    _tv.backgroundColor = [UIColor clearColor];
-/* solid cell bg kills system seps on ios6 */
-    _tv.separatorStyle = UITableViewCellSeparatorStyleNone;
+    _tv.backgroundColor = kBG;
+    _tv.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
+    _tv.separatorColor = SenkoThemeIsLight()
+        ? [UIColor colorWithWhite:0 alpha:0.14f]
+        : [UIColor colorWithWhite:1 alpha:0.16f];
     if ([_tv respondsToSelector:@selector(setBackgroundView:)])
         _tv.backgroundView = nil;
     [self.view addSubview:_tv];
@@ -298,8 +77,11 @@ enum { kSenkoSettingsSide = 10 };
 - (void)themeDidChange:(NSNotification *)n {
     (void)n;
     SenkoApplyScreenChrome(self.view);
-    _tv.backgroundColor = [UIColor clearColor];
-    _tv.separatorStyle = UITableViewCellSeparatorStyleNone;
+    _tv.backgroundColor = kBG;
+    _tv.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
+    _tv.separatorColor = SenkoThemeIsLight()
+        ? [UIColor colorWithWhite:0 alpha:0.14f]
+        : [UIColor colorWithWhite:1 alpha:0.16f];
     if (self.navigationController)
         StyleNavBarClassic(self.navigationController);
     [_tv reloadData];
@@ -314,7 +96,10 @@ enum { kSenkoSettingsSide = 10 };
     [_ctl statusState:^(NSString *state) {
         [_daemonState release];
         _daemonState = [(state ? state : @"unreachable") copy];
-        [_tv reloadData];
+        NSIndexPath *path = [NSIndexPath indexPathForRow:0 inSection:0];
+        if ([_tv numberOfRowsInSection:0] > 0)
+            [_tv reloadRowsAtIndexPaths:[NSArray arrayWithObject:path]
+                       withRowAnimation:UITableViewRowAnimationNone];
     }];
 }
 
@@ -323,7 +108,7 @@ enum { kSenkoSettingsSide = 10 };
     UIView *bg = [self.view viewWithTag:9111];
     if (bg) bg.frame = b;
     _tv.frame = CGRectMake(0, 0, b.size.width, b.size.height);
-    _tv.backgroundColor = [UIColor clearColor];
+    _tv.backgroundColor = kBG;
 }
 
 - (void)viewDidLayoutSubviews {
@@ -335,13 +120,11 @@ enum { kSenkoSettingsSide = 10 };
                                          duration:(NSTimeInterval)dur {
     (void)io; (void)dur;
     [self layoutSettings];
-    [_tv reloadData];
 }
 
 - (void)didRotateFromInterfaceOrientation:(UIInterfaceOrientation)io {
     (void)io;
     [self layoutSettings];
-    [_tv reloadData];
 }
 
 - (void)donePressed {
@@ -355,73 +138,23 @@ enum { kSenkoSettingsSide = 10 };
     return 5; /* hide, themes, logs, update, about */
 }
 
-- (UIView *)tableView:(UITableView *)tv viewForHeaderInSection:(NSInteger)s {
-/* skeuo chrome bar; gradient resizes in senkosettingsheaderplate */
-    static NSString *titles[] = { @"DAEMON", @"UTILITIES" };
-    if (s < 0 || s > 1) return nil;
-
-    CGFloat w = SenkoViewBounds(self.view).size.width;
-    if (w < 160.0f) w = tv.bounds.size.width;
-    if (w < 160.0f) w = 160.0f;
-    CGFloat wrapH = 34.0f;
-    CGFloat plateH = 26.0f;
-    CGFloat plateY = 5.0f;
-    CGFloat plateR = 7.0f;
-    CGFloat side = (CGFloat)kSenkoSettingsSide;
-    CGFloat plateW = w - side * 2.0f;
-
-    UIView *wrap = [[[UIView alloc] initWithFrame:CGRectMake(0, 0, w, wrapH)] autorelease];
-    wrap.backgroundColor = [UIColor clearColor];
-    wrap.clipsToBounds = NO;
-    wrap.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-
-    SenkoSettingsHeaderPlate *plate =
-        [[[SenkoSettingsHeaderPlate alloc]
-          initWithFrame:CGRectMake(side, plateY, plateW, plateH)] autorelease];
-    plate.layer.cornerRadius = plateR;
-    plate.layer.masksToBounds = NO;
-    plate.layer.borderWidth = 1.0f;
-    plate.layer.borderColor = [kAccentBlue colorWithAlphaComponent:0.45f].CGColor;
-    plate.layer.shadowColor = [UIColor blackColor].CGColor;
-    plate.layer.shadowOffset = CGSizeMake(0, 2);
-    plate.layer.shadowRadius = 2;
-    plate.layer.shadowOpacity = SenkoThemeIsLight() ? 0.30f : 0.70f;
-    plate.backgroundColor = [UIColor colorWithRed:0.12 green:0.08 blue:0.04 alpha:1.0];
-
-    NSArray *cols = nil;
-    if (SenkoThemeIsMiside()) {
-        cols = [NSArray arrayWithObjects:
-                (id)[UIColor colorWithRed:0.32 green:0.14 blue:0.30 alpha:1].CGColor,
-                (id)[UIColor colorWithRed:0.14 green:0.06 blue:0.16 alpha:1].CGColor, nil];
-    } else if (SenkoThemeIsBoykisser()) {
-        cols = [NSArray arrayWithObjects:
-                (id)[UIColor colorWithRed:1.00 green:0.78 blue:0.88 alpha:1].CGColor,
-                (id)[UIColor colorWithRed:0.95 green:0.55 blue:0.72 alpha:1].CGColor, nil];
-    } else if (SenkoThemeIsFrutigeraero()) {
-        cols = [NSArray arrayWithObjects:
-                (id)[UIColor colorWithRed:0.55 green:0.88 blue:1.00 alpha:1].CGColor,
-                (id)[UIColor colorWithRed:0.20 green:0.68 blue:0.92 alpha:1].CGColor, nil];
-    } else if (SenkoThemeIsFlat()) {
-        UIColor *hi = SenkoThemeIsLight()
-            ? [UIColor colorWithRed:0.92 green:0.93 blue:0.96 alpha:1]
-            : [UIColor colorWithRed:0.22 green:0.24 blue:0.30 alpha:1];
-        UIColor *lo = SenkoThemeIsLight()
-            ? [UIColor colorWithRed:0.82 green:0.84 blue:0.90 alpha:1]
-            : [UIColor colorWithRed:0.12 green:0.13 blue:0.18 alpha:1];
-        cols = [NSArray arrayWithObjects:(id)hi.CGColor, (id)lo.CGColor, nil];
-    } else {
-        cols = [NSArray arrayWithObjects:
-                (id)[UIColor colorWithRed:0.34 green:0.20 blue:0.08 alpha:1].CGColor,
-                (id)[UIColor colorWithRed:0.12 green:0.08 blue:0.04 alpha:1].CGColor, nil];
-    }
-    [plate setGradColors:cols title:titles[s]];
-    [wrap addSubview:plate];
-    return wrap;
+- (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s {
+    (void)tv;
+    if (s == 0) return @"DAEMON";
+    if (s == 1) return @"UTILITIES";
+    return nil;
 }
 
 - (CGFloat)tableView:(UITableView *)tv heightForHeaderInSection:(NSInteger)s {
     (void)tv; (void)s;
-    return 34;
+    return 28.0f;
+}
+
+- (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
+    (void)tv;
+    if (s == 0)
+        return @"SOCKS is localhost-only by default. socks_public=1 in config opens it to the LAN.";
+    return nil;
 }
 
 - (CGFloat)tableView:(UITableView *)tv heightForFooterInSection:(NSInteger)s {
@@ -429,49 +162,54 @@ enum { kSenkoSettingsSide = 10 };
     return (s == 0) ? 36.0f : 10.0f;
 }
 
-- (UIView *)tableView:(UITableView *)tv viewForFooterInSection:(NSInteger)s {
-    if (s != 0) {
-        UIView *v = [[[UIView alloc] initWithFrame:CGRectMake(0, 0, 1, 10)] autorelease];
-        v.backgroundColor = [UIColor clearColor];
-        return v;
-    }
-/* default is localhost; people flip socks_public in cfg without noticing lan risk */
-    CGFloat w = tv.bounds.size.width;
-    if (w < 160.0f) w = 320.0f;
-    UIView *wrap = [[[UIView alloc] initWithFrame:CGRectMake(0, 0, w, 36)] autorelease];
-    wrap.backgroundColor = [UIColor clearColor];
-    UILabel *lab = [[[UILabel alloc] initWithFrame:CGRectMake(14, 2, w - 28, 30)] autorelease];
-    lab.backgroundColor = [UIColor clearColor];
-    lab.numberOfLines = 2;
-    lab.font = [UIFont systemFontOfSize:11];
-    lab.textColor = [UIColor colorWithWhite:0.45 alpha:1.0];
-    lab.text = @"SOCKS is localhost-only by default. socks_public=1 in config opens it to the LAN.";
-    [wrap addSubview:lab];
-    return wrap;
+- (void)tableView:(UITableView *)tv willDisplayHeaderView:(UIView *)view
+                       forSection:(NSInteger)s {
+    (void)tv; (void)s;
+    if (![view respondsToSelector:@selector(textLabel)]) return;
+    UILabel *label = [(UITableViewHeaderFooterView *)view textLabel];
+    label.font = [UIFont boldSystemFontOfSize:13.0f];
+    SenkoStyleAccentLabel(label);
+}
+
+- (void)tableView:(UITableView *)tv willDisplayFooterView:(UIView *)view
+                       forSection:(NSInteger)s {
+    (void)tv; (void)s;
+    if (![view respondsToSelector:@selector(textLabel)]) return;
+    UILabel *label = [(UITableViewHeaderFooterView *)view textLabel];
+    label.font = [UIFont systemFontOfSize:11.0f];
+    SenkoStyleMutedLabel(label);
 }
 
 - (void)tableView:(UITableView *)tv willDisplayCell:(UITableViewCell *)cell
-forRowAtIndexPath:(NSIndexPath *)ip {
-    cell.backgroundColor = [UIColor clearColor];
-    cell.contentView.backgroundColor = [UIColor clearColor];
-    cell.textLabel.backgroundColor = [UIColor clearColor];
-    cell.detailTextLabel.backgroundColor = [UIColor clearColor];
-
-    NSInteger n = [tv numberOfRowsInSection:ip.section];
-    BOOL first = (ip.row == 0);
-    BOOL last = (ip.row == n - 1);
-
-    SenkoSettingsGroupBg *bg = nil;
-    if ([cell.backgroundView isKindOfClass:[SenkoSettingsGroupBg class]])
-        bg = (SenkoSettingsGroupBg *)cell.backgroundView;
-    else {
-        bg = [[[SenkoSettingsGroupBg alloc] initWithFrame:cell.bounds] autorelease];
+ forRowAtIndexPath:(NSIndexPath *)ip {
+    (void)tv; (void)ip;
+    UIView *bg = cell.backgroundView;
+    if (!bg) {
+        bg = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
         cell.backgroundView = bg;
     }
-    if (!CGRectEqualToRect(bg.frame, cell.bounds))
-        bg.frame = cell.bounds;
-    [bg configureFirst:first last:last showSep:!last];
-    cell.selectedBackgroundView = nil;
+    bg.backgroundColor = kCellHi;
+    bg.layer.cornerRadius = 10.0f;
+    bg.layer.masksToBounds = YES;
+    bg.opaque = !SenkoThemeIsIos26();
+    UIView *line = [bg viewWithTag:9122];
+    if (!line) {
+        line = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
+        line.tag = 9122;
+        line.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+                                 UIViewAutoresizingFlexibleTopMargin;
+        [bg addSubview:line];
+    }
+    NSInteger rowCount = [tv numberOfRowsInSection:ip.section];
+    line.hidden = (ip.row >= rowCount - 1);
+    line.frame = CGRectMake(12.0f, MAX(0.0f, bg.bounds.size.height - 1.0f),
+                            MAX(0.0f, bg.bounds.size.width - 24.0f), 1.0f);
+    line.backgroundColor = SenkoThemeIsLight()
+        ? [UIColor colorWithWhite:0 alpha:0.16f]
+        : [UIColor colorWithWhite:1 alpha:0.22f];
+    cell.backgroundColor = [UIColor clearColor];
+    cell.opaque = !SenkoThemeIsIos26();
+    cell.contentView.backgroundColor = [UIColor clearColor];
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
@@ -488,6 +226,15 @@ forRowAtIndexPath:(NSIndexPath *)ip {
     SenkoStyleAccentLabel(cell.detailTextLabel);
     cell.textLabel.font = [UIFont boldSystemFontOfSize:15];
     cell.detailTextLabel.font = [UIFont systemFontOfSize:14];
+    UIView *bg = cell.backgroundView;
+    if (!bg) {
+        bg = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
+        cell.backgroundView = bg;
+    }
+    bg.backgroundColor = kCellHi;
+    bg.layer.cornerRadius = 10.0f;
+    bg.layer.masksToBounds = YES;
+    bg.opaque = !SenkoThemeIsIos26();
     cell.backgroundColor = [UIColor clearColor];
     cell.contentView.backgroundColor = [UIColor clearColor];
     cell.textLabel.backgroundColor = [UIColor clearColor];
@@ -559,7 +306,7 @@ forRowAtIndexPath:(NSIndexPath *)ip {
 
 - (void)fileImportVCDidCancel:(FileImportVC *)vc {
     (void)vc;
-/* pop whole file-browser stack back to settings */
+/* return to settings */
     [self.navigationController popToViewController:self animated:YES];
 }
 
@@ -568,10 +315,10 @@ forRowAtIndexPath:(NSIndexPath *)ip {
     NSString *pkg = [[path copy] autorelease];
     UINavigationController *nav = self.navigationController;
     void (^showInstall)(void) = ^{
-/* present from the settings nav (or self), never from main while settings is already the active modal - ios */
+/* present from settings */
         UIViewController *host = nav ? (UIViewController *)nav : (UIViewController *)self;
         if (host.presentedViewController) {
-/* something already up; fall back to self */
+/* use self when no nav is active */
             host = self;
         }
         UpdateInstallVC *uvc = [[[UpdateInstallVC alloc] initWithControl:_ctl
@@ -581,7 +328,7 @@ forRowAtIndexPath:(NSIndexPath *)ip {
         [host presentViewController:uvc animated:YES completion:nil];
     };
     if (nav && nav.topViewController != self) {
-/* wait for pop animation; presenting mid-transition fails on ios 6 */
+/* wait for the pop animation */
         [CATransaction begin];
         [CATransaction setCompletionBlock:showInstall];
         [nav popToViewController:self animated:YES];
@@ -617,8 +364,9 @@ forRowAtIndexPath:(NSIndexPath *)ip {
             [av show];
             return;
         }
-        [_ctl listCatalog:^(NSArray *servers, NSArray *subs) {
+        [_ctl listCatalog:^(NSArray *servers, NSArray *subs, NSArray *order) {
             (void)subs;
+            (void)order;
             SenkoServer *selected = nil;
             for (SenkoServer *server in servers) {
                 if (server->selected) { selected = server; break; }
@@ -674,4 +422,3 @@ forRowAtIndexPath:(NSIndexPath *)ip {
 }
 
 @end
-

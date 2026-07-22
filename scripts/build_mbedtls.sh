@@ -55,7 +55,7 @@ rm -rf "${OUT}"
 mkdir -p "${OUT}/lib"
 cp -a "${SRC}/include" "${OUT}/include"
 
-build_arch armv7 arm-apple-darwin11 "${SDK_V7}" armv7 6.0
+build_arch armv7 arm-apple-darwin11 "${SDK_V7}" armv7 5.0
 build_arch arm64 arm64-apple-darwin "${SDK_V64}" arm64 7.0
 
 echo "mbedtls static archives ready: ${OUT}"

@@ -1,6 +1,6 @@
 # senko
 
-an open-source vless/amnezia client for legacy ios devices (iOS 6, iOS 7, iOS 8, iOS 9, iOS 10)
+an open-source full-device vless/amneziawg client for legacy ios devices (ios 5-10)
 
 > [!WARNING]
 > **Jailbreak is strictly required.** The app runs a root daemon (`senkod`) to manipulate system firewall routing rules.
@@ -98,7 +98,7 @@ manual packaging (after binaries are already fat under `packaging/`):
 echo "2.0" > debian-binary
 (cd packaging/DEBIAN && tar -czf ../../control.tar.gz control md5sums postinst postrm prerm)
 (cd packaging && tar -czf ../data.tar.gz --exclude='./DEBIAN' .)
-ar -r senko-v1.0.0-stable.deb debian-binary control.tar.gz data.tar.gz
+ar -r senko-v1.0.1-stable.deb debian-binary control.tar.gz data.tar.gz
 rm -f debian-binary control.tar.gz data.tar.gz
 ```
 

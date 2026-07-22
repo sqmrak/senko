@@ -11,6 +11,10 @@ fetch_one() {
     local url="$1"
     local dest="$2"
     local required="${3:-0}"
+    if [ -s "${dest}" ] && [ "${SENKO_REFRESH_ROOTS:-0}" != "1" ]; then
+        echo "cached ${dest}"
+        return 0
+    fi
     if curl -fsSL --connect-timeout 12 --max-time 30 "${url}" -o "${dest}.tmp"; then
         mv "${dest}.tmp" "${dest}"
         echo "ok ${dest}"

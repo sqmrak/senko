@@ -9,7 +9,7 @@ MBED    ?= $(firstword $(wildcard $(SENKO_MBED) $(HOME)/.cache/senko/mbedtls-ios
 
 TRIPLE  ?= arm-apple-darwin11
 CC      := $(TC)/clang -target $(TRIPLE) -B $(TC)
-ARCH    ?= -arch armv7 -miphoneos-version-min=6.0
+ARCH    ?= -arch armv7 -miphoneos-version-min=5.0
 CFLAGS  := -std=c99 -Wall -Wextra -O2 -fPIC $(ARCH) -isysroot $(SDK) \
            -I$(MBED)/include -DMBEDTLS_PLATFORM_MS_TIME_ALT
 LDFLAGS := $(ARCH) -isysroot $(SDK) -dynamiclib -Wl,-no_warn_inits \

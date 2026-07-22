@@ -13,7 +13,7 @@
 #include <unistd.h>
 #include <zlib.h>
 
-/* inflate gzip because binary subscription bodies contain no parseable links */
+/* unpack gzip bodies */
 static int maybe_gunzip_body(uint8_t *buf, size_t *len, size_t cap) {
     if (!buf || !len || *len < 10) return 0;
     if (buf[0] != 0x1f || buf[1] != 0x8b) return 0;
@@ -28,7 +28,7 @@ static int maybe_gunzip_body(uint8_t *buf, size_t *len, size_t cap) {
     zs.avail_in = (uInt)in_len;
     zs.next_out = out;
     zs.avail_out = (uInt)cap;
-/* select the gzip wrapper expected by subscription servers */
+/* use the gzip wrapper */
     if (inflateInit2(&zs, 16 + MAX_WBITS) != Z_OK) {
         free(out);
         return -1;
@@ -53,7 +53,40 @@ static long now_ms(void) {
     return (long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
-/* wait with a deadline while pumping the shared loop between polls */
+static uint64_t userinfo_expire(const char *value) {
+    if (!value) return 0;
+    const char *p = value;
+    while (*p) {
+        while (*p == ' ' || *p == ';' || *p == '\t') ++p;
+        const char *eq = strchr(p, '=');
+        if (!eq) break;
+        const char *end = strchr(eq + 1, ';');
+        if (!end) end = eq + strlen(eq + 1);
+        size_t key_len = (size_t)(eq - p);
+        while (key_len > 0 && (p[key_len - 1] == ' ' || p[key_len - 1] == '\t'))
+            key_len--;
+        if (key_len == 6 && memcmp(p, "expire", 6) == 0) {
+            char number[32];
+            size_t n = (size_t)(end - eq - 1);
+            if (n == 0 || n >= sizeof number) return 0;
+            memcpy(number, eq + 1, n);
+            number[n] = '\0';
+            char *stop = NULL;
+            unsigned long long v = strtoull(number, &stop, 10);
+            if (stop == number + n) return (uint64_t)v;
+            return 0;
+        }
+        p = *end ? end + 1 : end;
+    }
+    return 0;
+}
+
+static void parser_info(const http_parser_t *hp, subfetch_info_t *info) {
+    if (!hp || !info || !hp->have_subscription_userinfo) return;
+    info->expire = userinfo_expire(hp->subscription_userinfo);
+}
+
+/* wait with a deadline */
 static int wait_io(int fd, int want_write, long deadline, const subfetch_cfg_t *cfg) {
     while (now_ms() < deadline) {
         if (cfg && cfg->pump) cfg->pump(cfg->pump_ctx);
@@ -68,7 +101,7 @@ static int wait_io(int fd, int want_write, long deadline, const subfetch_cfg_t *
     return 0;
 }
 
-/* retain redirect cookies so the next request can authenticate */
+/* keep redirect cookies */
 static void cookie_jar_merge(char *jar, size_t cap, const char *add) {
     if (!jar || !cap || !add || !add[0]) return;
     if (!jar[0]) {
@@ -87,20 +120,21 @@ static void cookie_jar_merge(char *jar, size_t cap, const char *add) {
     jar[cur + n] = '\0';
 }
 
-/* fetch one url and return redirect data without hiding cookie state */
+/* fetch one url */
 static subfetch_status_t fetch_once(const subfetch_cfg_t *cfg, const url_t *u,
                                     uint8_t *body, size_t body_cap, size_t *body_len,
                                     char *redir, size_t redir_cap, long deadline,
-                                    char *cookie_jar, size_t cookie_cap) {
+                                    char *cookie_jar, size_t cookie_cap,
+                                    subfetch_info_t *info) {
     const transport_vt_t *vt = u->is_https ? cfg->tls : cfg->tcp;
-    if (!vt) return SUBFETCH_ERR_TRANSPORT; /* https requested, no tls vt */
+    if (!vt) return SUBFETCH_ERR_TRANSPORT; /* tls transport is missing */
 
     int fd = cfg->dial(cfg->dial_ctx, u->host, u->port);
     if (fd < 0) return SUBFETCH_ERR_DIAL;
 
     transport_tls_cfg_t tcfg;
     memset(&tcfg, 0, sizeof tcfg);
-    tcfg.sni = u->host; /* present the sub host as sni for https */
+    tcfg.sni = u->host; /* use the subscription host */
 
     void *th = vt->open(fd, &tcfg);
     if (!th) { close(fd); return SUBFETCH_ERR_TRANSPORT; }
@@ -139,9 +173,10 @@ static subfetch_status_t fetch_once(const subfetch_cfg_t *cfg, const url_t *u,
                         size_t ll = strlen(hp.location);
                         if (ll + 1 > redir_cap) { result = SUBFETCH_ERR_REDIRECT; break; }
                         memcpy(redir, hp.location, ll + 1);
-                        result = SUBFETCH_ERR_REDIRECT; /* signal: follow it */
+                        result = SUBFETCH_ERR_REDIRECT; /* follow the redirect */
                     } else {
                         *body_len = hp.body_len;
+                        parser_info(&hp, info);
                         result = SUBFETCH_OK;
                     }
                     break;
@@ -165,6 +200,7 @@ static subfetch_status_t fetch_once(const subfetch_cfg_t *cfg, const url_t *u,
                         } else result = SUBFETCH_ERR_REDIRECT;
                     } else {
                         *body_len = hp.body_len;
+                        parser_info(&hp, info);
                         result = SUBFETCH_OK;
                     }
                 } else {
@@ -186,9 +222,18 @@ static subfetch_status_t fetch_once(const subfetch_cfg_t *cfg, const url_t *u,
 subfetch_status_t subfetch_get(const subfetch_cfg_t *cfg, const char *url,
                                uint8_t *body_buf, size_t body_cap,
                                size_t *body_len, int timeout_ms) {
+    return subfetch_get_info(cfg, url, body_buf, body_cap, body_len,
+                             timeout_ms, NULL);
+}
+
+subfetch_status_t subfetch_get_info(const subfetch_cfg_t *cfg, const char *url,
+                                    uint8_t *body_buf, size_t body_cap,
+                                    size_t *body_len, int timeout_ms,
+                                    subfetch_info_t *info) {
     if (!cfg || !cfg->dial || !cfg->tcp || !url || !body_buf || !body_len)
         return SUBFETCH_ERR_ARG;
     *body_len = 0;
+    if (info) memset(info, 0, sizeof *info);
 
     int max_redir = cfg->max_redirects > 0 ? cfg->max_redirects : 5;
     long deadline = now_ms() + (timeout_ms > 0 ? timeout_ms : 15000);
@@ -198,21 +243,21 @@ subfetch_status_t subfetch_get(const subfetch_cfg_t *cfg, const char *url,
     if (ul + 1 > sizeof current) return SUBFETCH_ERR_URL;
     memcpy(current, url, ul + 1);
 
-/* carry retry cookies so guarded redirects can reach the body */
+/* carry cookies across redirects */
     char cookie_jar[512];
     cookie_jar[0] = '\0';
 
     for (int hop = 0; hop <= max_redir; ++hop) {
         url_t u;
         if (url_parse(current, &u) != URL_OK) return SUBFETCH_ERR_URL;
-/* stop ssrf into lan/loopback before we open a socket */
+/* reject local addresses */
         if (!net_ipv4_host_allowed(u.host)) return SUBFETCH_ERR_URL;
 
         char redir[HTTP_MAX_LOCATION];
         redir[0] = '\0';
         subfetch_status_t r = fetch_once(cfg, &u, body_buf, body_cap, body_len,
                                          redir, sizeof redir, deadline,
-                                         cookie_jar, sizeof cookie_jar);
+                                         cookie_jar, sizeof cookie_jar, info);
         if (r == SUBFETCH_OK) {
             if (maybe_gunzip_body(body_buf, body_len, body_cap) != 0)
                 return SUBFETCH_ERR_HTTP;
@@ -220,17 +265,17 @@ subfetch_status_t subfetch_get(const subfetch_cfg_t *cfg, const char *url,
         }
         if (r != SUBFETCH_ERR_REDIRECT) return r;
 
-/* require absolute redirects because relative resolution is unsupported */
+/* require absolute redirects */
         if (strncmp(redir, "http://", 7) != 0 &&
             strncmp(redir, "https://", 8) != 0) {
             return SUBFETCH_ERR_REDIRECT;
         }
         size_t rl = strlen(redir);
         if (rl + 1 > sizeof current) return SUBFETCH_ERR_REDIRECT;
-/* reject a same-url redirect without a cookie because it cannot progress */
+/* reject a redirect that cannot progress */
         if (strcmp(redir, current) == 0 && !cookie_jar[0])
             return SUBFETCH_ERR_REDIRECT;
         memcpy(current, redir, rl + 1);
     }
-    return SUBFETCH_ERR_REDIRECT; /* too many hops */
+    return SUBFETCH_ERR_REDIRECT; /* redirect limit reached */
 }

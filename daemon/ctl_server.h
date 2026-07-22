@@ -2,6 +2,7 @@
 #define CTL_SERVER_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "ctl_engine.h"
 
@@ -12,29 +13,33 @@ extern "C" {
 #define CTL_SERVER_MAX_CLIENTS 4
 #define CTL_CLIENT_OUT_MAX (1024 * 1024)
 
-/* apply engine actions to the data path and report only immediate errors */
+/* apply engine actions */
 typedef int (*ctl_apply_fn)(void *ctx, const ctl_action_t *action);
 
-/* persist store mutations after the command has been accepted */
+/* save accepted store changes */
 typedef void (*ctl_persist_fn)(void *ctx, const store_t *store);
 
-/* fetch subscription bytes with a bounded timeout so refresh cannot hang control */
-typedef int (*ctl_fetch_fn)(void *ctx, const char *url,
-                            unsigned char *buf, size_t cap, size_t *len);
+typedef struct {
+    uint64_t expire;
+} ctl_fetch_meta_t;
 
-/* measure idle-server latency while continuing the data-path loop */
+typedef int (*ctl_fetch_fn)(void *ctx, const char *url,
+                            unsigned char *buf, size_t cap, size_t *len,
+                            ctl_fetch_meta_t *meta);
+
+/* measure an idle server */
 typedef int (*ctl_probe_fn)(void *ctx, const char *host, uint16_t port);
 
-/* verify the active tunnel and return a short failure reason for the ui */
+/* verify the active tunnel */
 typedef int (*ctl_verify_fn)(void *ctx, char *reason, size_t reason_cap);
 
-/* measure the active tunnel without mutating routing or selection */
+/* measure the active tunnel */
 typedef int (*ctl_tunnel_probe_fn)(void *ctx);
 
 typedef struct {
-    int   fd; /* connected ui client, or -1 */
+    int   fd; /* connected ui client */
     int   authed;
-    char  inbuf[1024]; /* retain an incomplete control line */
+    char  inbuf[1024]; /* partial control line */
     size_t in_len;
     char  *outbuf;
     size_t out_len;
@@ -43,16 +48,16 @@ typedef struct {
 
 typedef struct {
     int           listen_fd;
-    char          sock_path[108]; /* match the unix socket path limit */
+    char          sock_path[108]; /* unix socket path */
     char          token_path[108];
     char          token[40];
     int           require_auth;
     ctl_engine_t  engine;
     ctl_apply_fn  apply;
-    ctl_persist_fn persist; /* save accepted store mutations */
-    ctl_fetch_fn  fetch; /* fetch subscription data */
+    ctl_persist_fn persist; /* save store changes */
+    ctl_fetch_fn  fetch; /* fetch subscriptions */
     ctl_probe_fn  probe; /* probe an idle server */
-    ctl_verify_fn verify; /* verify a newly connected tunnel */
+    ctl_verify_fn verify; /* verify a new tunnel */
     ctl_tunnel_probe_fn tunnel_probe; /* probe the active tunnel */
     void         *apply_ctx;
     ctl_client_t  clients[CTL_SERVER_MAX_CLIENTS];
@@ -65,7 +70,7 @@ typedef enum {
     CTLS_ERR      = -3
 } ctls_status_t;
 
-/* bind the control socket and remove only an unresponsive stale path */
+/* bind the control socket */
 ctls_status_t ctl_server_init(ctl_server_t *s, const char *path,
                               ctl_apply_fn apply, void *apply_ctx);
 
@@ -79,13 +84,13 @@ void ctl_server_set_verify(ctl_server_t *s, ctl_verify_fn verify);
 
 void ctl_server_set_tunnel_probe(ctl_server_t *s, ctl_tunnel_probe_fn probe);
 
-/* restore the persisted selection during daemon startup */
+/* restore the saved selection */
 int ctl_server_restore_tunnel(ctl_server_t *s);
 
-/* accept clients, dispatch complete lines, and flush replies for one interval */
+/* accept clients and flush replies */
 ctls_status_t ctl_server_step(ctl_server_t *s, int timeout_ms);
 
-/* publish an asynchronous state or ping result to connected ui clients */
+/* publish an async result */
 void ctl_server_broadcast(ctl_server_t *s, const char *line, size_t len);
 
 size_t ctl_server_client_count(const ctl_server_t *s);

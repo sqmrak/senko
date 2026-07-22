@@ -1,4 +1,4 @@
-/* ios 6 lacks clock_gettime, so provide the millisecond hook with gettimeofday */
+/* old ios lacks clock_gettime, so provide the millisecond hook with gettimeofday */
 #include "mbedtls/build_info.h"
 #include "mbedtls/platform_util.h"
 #include <sys/time.h>

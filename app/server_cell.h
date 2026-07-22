@@ -12,6 +12,7 @@
     UILabel *_detail;
     UILabel *_unsupported;
     UILabel *_ping;
+    UIImageView *_serverIcon;
     CAGradientLayer *_plateGrad;
 }
 - (void)configureWithServer:(SenkoServer *)server

@@ -46,6 +46,38 @@ int main(void) {
        strcmp(st.servers[st.selected].host, "ok.example") == 0 &&
        strcmp(st.servers[st.selected].remark, "renamed") == 0);
 
+    size_t manual_two = 99;
+    ok("add second manual",
+       store_add_manual(&st,
+           "vless://44444444-4444-4444-8444-444444444444@manual.example:443?security=none&type=tcp#manual2",
+           &manual_two) == STORE_OK);
+    ok("section order starts with manual",
+       store_section_count(&st) == 2 &&
+       store_section_at(&st, 0) == STORE_GROUP_MANUAL &&
+       store_section_at(&st, 1) == (int)sub);
+    ok("move subscription section",
+       store_move_section(&st, (int)sub, 0) == STORE_OK &&
+       store_section_at(&st, 0) == (int)sub &&
+       store_section_at(&st, 1) == STORE_GROUP_MANUAL);
+    ok("move manual server",
+       store_move_manual(&st, manual_two, 0) == STORE_OK &&
+       strcmp(st.servers[0].host, "manual.example") == 0);
+    ok("move keeps selected endpoint", st.selected >= 0 &&
+       strcmp(st.servers[st.selected].host, "ok.example") == 0);
+
+    store_set_sub_expire(&st, sub, 1893456000ULL);
+    char saved[8192];
+    size_t saved_len = 0;
+    ok("serialize order and expiry",
+       store_serialize(&st, saved, sizeof saved, &saved_len) == STORE_OK &&
+       strstr(saved, "ORDER ") != NULL && strstr(saved, "SUBMETA ") != NULL);
+    store_t restored;
+    ok("deserialize order and expiry",
+       store_deserialize(&restored, saved, saved_len) == STORE_OK &&
+       restored.subs[sub].expire == 1893456000ULL &&
+       store_section_at(&restored, 0) == (int)sub &&
+       store_section_at(&restored, 1) == STORE_GROUP_MANUAL);
+
     const size_t before_empty = st.n;
     const char empty[] = "not a server\n";
     added = 99;

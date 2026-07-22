@@ -33,6 +33,7 @@
     UITableView  *_table;
     NSMutableArray *_servers;
     NSMutableArray *_subs;
+    NSMutableArray *_sectionOrder;
     NSMutableArray *_sections;
     NSMutableSet *_collapsedSubs;
     NSString     *_state;
@@ -58,8 +59,16 @@
     BOOL          _headerSnapAnimating;
     CGSize        _laidChromeSize;
     NSString     *_laidStatusKey;
+    NSMutableSet  *_pingingSubs;
     UIActionSheet *_actionSheet;
     NSString      *_pendingUpdatePath;
+    int            _dragSection;
+    int            _sectionDragOrigin;
+    BOOL           _sectionDragSending;
+    UIView        *_sectionDragSnapshot;
+    UIView        *_sectionDragHeader;
+    CGFloat        _sectionDragGrabOffset;
+    BOOL           _sectionDragActive;
     SenkoBackendKind _selectedBackend;
     SenkoBackendKind _activeBackend;
 }
@@ -115,7 +124,7 @@
 - (void)openScanner;
 - (void)qrScanner:(QRScanVC *)s didDecode:(NSString *)text;
 - (void)qrScannerDidCancel:(QRScanVC *)s;
-- (void)applyCatalog:(NSArray *)servers subs:(NSArray *)subs;
+- (void)applyCatalog:(NSArray *)servers subs:(NSArray *)subs order:(NSArray *)order;
 - (void)rebuildSections;
 - (void)setListHeaderProgress:(CGFloat)progress animated:(BOOL)animated;
 - (SenkoServer *)serverAtIndexPath:(NSIndexPath *)ip;
@@ -125,6 +134,7 @@
 - (void)reconcileSelectionAfterListKeeping:(SenkoServer *)anchor;
 - (BOOL)isTunnelActive;
 - (BOOL)isServerSelectionLocked;
+- (BOOL)isListMutationLocked;
 - (void)applyServerListLock;
 - (void)setLastErr:(NSString *)msg;
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv;
@@ -133,6 +143,9 @@
 - (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate;
 - (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView;
 - (void)sectionToggleTapped:(UIButton *)button;
+- (void)moveSectionAtIndex:(NSInteger)from toIndex:(NSInteger)to;
+- (void)sectionLongPressed:(UILongPressGestureRecognizer *)gesture;
+- (void)rowLongPressed:(UILongPressGestureRecognizer *)gesture;
 - (NSString *)awgProfilePath;
 - (BOOL)hasAWGProfile;
 - (BOOL)isManualSection:(NSInteger)section;
@@ -147,6 +160,9 @@
 - (BOOL)tableView:(UITableView *)tv canEditRowAtIndexPath:(NSIndexPath *)ip;
 - (UITableViewCellEditingStyle)tableView:(UITableView *)tv editingStyleForRowAtIndexPath:(NSIndexPath *)ip;
 - (void)tableView:(UITableView *)tv commitEditingStyle:(UITableViewCellEditingStyle)style forRowAtIndexPath:(NSIndexPath *)ip;
+- (BOOL)tableView:(UITableView *)tv canMoveRowAtIndexPath:(NSIndexPath *)ip;
+- (void)tableView:(UITableView *)tv moveRowAtIndexPath:(NSIndexPath *)from
+      toIndexPath:(NSIndexPath *)to;
 - (void)subRefreshTapped:(UIButton *)btn;
 - (void)subPingTapped:(UIButton *)btn;
 - (void)subMenuTapped:(UIButton *)btn;
@@ -156,6 +172,7 @@
 - (void)refreshPressed;
 - (void)pingPressed;
 - (void)startPingSweep;
+- (void)updateSubscriptionPingButtons:(NSSet *)subIndexes;
 - (void)reloadServerRowForIndex:(int)serverIndex;
 - (void)checkStatusOfServerAtIndex:(NSUInteger)idx generation:(NSInteger)gen;
 - (void)pingServersInSub:(int)subIdx;
@@ -165,6 +182,7 @@
 - (void)forceTunnelCleanupWithReason:(NSString *)reason;
 - (void)togglePressed;
 - (void)toggleAfterAWGCheck;
+- (void)switchActiveServerIndex:(int)idx;
 - (void)editAWGProfile;
 - (void)editAWGVC:(EditAWGVC *)vc saveConfig:(NSString *)config;
 - (void)startSavedAWGProfile;

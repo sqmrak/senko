@@ -181,15 +181,6 @@ static int run_managed(const char *ctl_path, const char *config_path,
                     cs.engine.store.n, config_path);
     }
 
-    if (full_device && cs.engine.store.selected >= 0) {
-        if (ctl_server_restore_tunnel(&cs) == 0)
-            fprintf(stderr, "senkod: restored tunnel to server %d\n",
-                    cs.engine.store.selected);
-        else
-            fprintf(stderr, "senkod: could not restore tunnel (server %d)\n",
-                    cs.engine.store.selected);
-    }
-
     install_signals();
     if (socks_public) {
         fprintf(stderr,
@@ -201,7 +192,7 @@ static int run_managed(const char *ctl_path, const char *config_path,
             socks_public ? "0.0.0.0" : "127.0.0.1",
             loop_listen_port(&lp), ctl_path);
 
-    /* service the control and data loops in short steps */
+    /* selected server is restored by the ui when the user connects */
     while (!g_stop) {
         if (loop_step(&lp, 50) != LOOP_OK) break;
         ctl_server_step(&cs, 50);

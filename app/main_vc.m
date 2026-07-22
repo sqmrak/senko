@@ -21,12 +21,16 @@
     [_ctl release];
     [_servers release];
     [_subs release];
+    [_sectionOrder release];
     [_sections release];
     [_collapsedSubs release];
     [_state release];
     [_lastErr release];
     [_serverStatus release];
+    [_pingingSubs release];
     [_pendingUpdatePath release];
+    [_sectionDragSnapshot removeFromSuperview];
+    [_sectionDragSnapshot release];
     [super dealloc];
 }
 
@@ -102,6 +106,10 @@
     [self styleListWell];
     if (_table) {
         _table.backgroundColor = [UIColor clearColor];
+        _table.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
+        _table.separatorColor = SenkoThemeIsLight()
+            ? [UIColor colorWithWhite:0 alpha:0.12f]
+            : [UIColor colorWithWhite:1 alpha:0.16f];
         if ([_table respondsToSelector:@selector(setBackgroundView:)])
             _table.backgroundView = nil;
     }
@@ -110,7 +118,7 @@
     [self layoutMainChrome];
 }
 
-/* list tray under table */
+/* list tray */
 - (void)styleListWell {
     UIView *well = [self.view viewWithTag:9001];
     if (!well) return;
@@ -133,23 +141,23 @@
             UIColor *veil = [UIColor colorWithRed:1.0 green:0.94 blue:0.97 alpha:0.35];
             wg.colors = [NSArray arrayWithObjects:(id)veil.CGColor, (id)veil.CGColor, nil];
         } else if (SenkoThemeIsFrutigeraero()) {
-/* soft glass so sky wallpaper reads through */
+/* use a soft glass tray */
             UIColor *veil = [UIColor colorWithWhite:1 alpha:0.28];
             wg.colors = [NSArray arrayWithObjects:(id)veil.CGColor, (id)veil.CGColor, nil];
         } else if (SenkoThemeIsIos26()) {
-/* clear so silver/black wallpaper shows; cells are glass */
+/* let the wallpaper show through */
             wg.colors = [NSArray arrayWithObjects:
                          (id)[UIColor clearColor].CGColor,
                          (id)[UIColor clearColor].CGColor, nil];
             wg.hidden = YES;
         } else if (SenkoThemeIsMiside()) {
-/* soft transparent so pattern wallpaper shows through */
+/* keep the pattern visible */
             wg.colors = [NSArray arrayWithObjects:
                          (id)[UIColor clearColor].CGColor,
                          (id)[UIColor clearColor].CGColor, nil];
             wg.hidden = YES;
         } else {
-/* match bg; cells/plates carry chrome */
+/* let cells and plates carry chrome */
             wg.colors = [NSArray arrayWithObjects:(id)kBG.CGColor, (id)kBGBot.CGColor, nil];
         }
     }
@@ -179,7 +187,7 @@
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
-/* restart overlays when returning from modal */
+/* restart overlays after a modal */
     [self syncBoykisserField];
     [self syncBubbleField];
     [_boyField setPaused:NO];
@@ -193,7 +201,7 @@
     (void)animated;
 }
 
-/* scroll path: geometry only, no wallpaper rebuild */
+/* scroll only changes geometry */
 - (void)layoutMainChromeGeometry {
     BOOL active = [self isTunnelActive];
     UIColor *top = active ? kConnOn : kIdleGrey;
@@ -217,7 +225,7 @@
     NSString *key = [self backgroundStatusKey];
     BOOL sizeChanged = !CGSizeEqualToSize(sz, _laidChromeSize);
     BOOL statusChanged = !(_laidStatusKey && [key isEqualToString:_laidStatusKey]);
-/* wallpaper is expensive; only on size/status change */
+/* rebuild wallpaper on size or status change */
     if (sizeChanged || statusChanged) {
         _laidChromeSize = sz;
         [_laidStatusKey release];
@@ -252,7 +260,7 @@
     (void)io;
     [self.view setNeedsLayout];
     [self.view layoutIfNeeded];
-/* reapply connect styling after rotation */
+/* restyle connect after rotation */
     if (_connectBtn) {
         CGAffineTransform t = _connectBtn.transform;
         _connectBtn.transform = CGAffineTransformIdentity;
@@ -281,6 +289,7 @@
     _activeBackend = SenkoBackendNone;
     _state = [@"idle" copy];
     _serverStatus = [[NSMutableDictionary alloc] init];
+    _pingingSubs = [[NSMutableSet alloc] init];
     _checkGeneration = 0;
     _catalogGeneration = 0;
     _sections = [[NSMutableArray alloc] init];
@@ -296,8 +305,8 @@
     CGRect b = self.view.bounds;
     CGFloat topOffset = GetTopOffset();
     BOOL pad = ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad);
-    BOOL compact = (!pad && b.size.height <= 568.0f); /* iphone 5 family */
-/* title below status bar; layout keeps connect under title */
+    BOOL compact = (!pad && b.size.height <= 568.0f); /* small iphone layout */
+/* keep the title below the status bar */
     CGFloat headerY = (pad ? 16.0f : (compact ? 14.0f : 12.0f)) + topOffset;
     CGFloat headerH = pad ? 42.0f : (compact ? 28.0f : 34.0f);
     CGFloat headerButtonSide = pad ? 46.0f : (compact ? 32.0f : 38.0f);
@@ -331,7 +340,7 @@
     UIImage *gearImg = TintedIconNamed(@"icon-settings.png", headerIcon, kAccentBlue);
     UIImage *refreshImg = TintedIconNamed(@"icon-refresh.png", headerIcon, kAccentBlue);
 
-/* icon buttons without border plates */
+/* use icon buttons without plates */
     UIButton *gear = [UIButton buttonWithType:UIButtonTypeCustom];
     gear.tag = 8002;
     gear.frame = CGRectMake(headerPad, headerButtonY, headerButtonSide, headerButtonSide);
@@ -347,7 +356,7 @@
     [_pingAllBtn setTitle:@"Ping All" forState:UIControlStateNormal];
     _pingAllBtn.autoresizingMask = UIViewAutoresizingFlexibleRightMargin;
     [_pingAllBtn addTarget:self action:@selector(pingPressed) forControlEvents:UIControlEventTouchUpInside];
-/* style once; scroll only calls styleglossycapsulelayout */
+/* style once before scrolling */
     StyleGlossyCapsule(_pingAllBtn, kAccentBlue, kAccentBlueLo);
     [self.view addSubview:_pingAllBtn];
 
@@ -370,7 +379,7 @@
     [plus setTitle:@"+" forState:UIControlStateNormal];
     plus.titleLabel.font = [UIFont boldSystemFontOfSize:(compact ? 24.0f : (pad ? 30.0f : 28.0f))];
     plus.titleEdgeInsets = UIEdgeInsetsMake(-2, 0, 2, 0);
-/* plus uses accent title, not capsule fill */
+/* keep plus as an accent title */
     SenkoStylePaperGlyph(plus);
     plus.tag = 8004;
     [plus addTarget:self action:@selector(addPressed) forControlEvents:UIControlEventTouchUpInside];
@@ -379,11 +388,11 @@
 
     CGFloat d = 128;
     _connectBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    _connectBtn.tag = 8005; /* main_layout finds connect by tag */
+    _connectBtn.tag = 8005; /* layout finds connect by tag */
     _connectBtn.frame = CGRectMake((b.size.width - d) / 2, 68 + topOffset, d, d);
     _connectBtn.titleLabel.font = [UIFont boldSystemFontOfSize:20];
     [_connectBtn setTitle:@"OFF" forState:UIControlStateNormal];
-/* layout owns frame/transform; no autoresize on connect */
+/* let layout own the frame and transform */
     _connectBtn.autoresizingMask = UIViewAutoresizingNone;
     [_connectBtn addTarget:self action:@selector(togglePressed) forControlEvents:UIControlEventTouchUpInside];
     _btnBody = ApplyGlossyDome(_connectBtn, kIdleGrey, kIdleGreyLo);
@@ -413,7 +422,7 @@
     _statusLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     [self.view addSubview:_statusLabel];
 
-/* list tray under table */
+/* list tray */
     UIView *well = [[[UIView alloc] initWithFrame:CGRectMake(0, 242 + topOffset,
                                                              b.size.width,
                                                              b.size.height - 248 - topOffset)] autorelease];
@@ -436,13 +445,16 @@
     _table.backgroundColor = [UIColor clearColor];
     if ([_table respondsToSelector:@selector(setBackgroundView:)])
         _table.backgroundView = nil;
-    _table.separatorStyle = UITableViewCellSeparatorStyleNone;
+    _table.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
+    _table.separatorColor = SenkoThemeIsLight()
+        ? [UIColor colorWithWhite:0 alpha:0.12f]
+        : [UIColor colorWithWhite:1 alpha:0.16f];
     _table.rowHeight = pad ? 100.0f : 88.0f;
     _table.sectionHeaderHeight = pad ? 60.0f : 52.0f;
-/* fixed row heights; no dynamic measure on recycle */
+/* use fixed row heights */
     _table.delaysContentTouches = NO;
     _table.canCancelContentTouches = YES;
-/* ios26 list: less gpu thrash while flinging on armv7 */
+/* reduce gpu work while scrolling */
     _table.showsVerticalScrollIndicator = YES;
     if ([_table respondsToSelector:@selector(setEstimatedRowHeight:)])
         ((void (*)(id, SEL, CGFloat))objc_msgSend)(_table, @selector(setEstimatedRowHeight:), 0.0f);
@@ -453,6 +465,10 @@
     _table.autoresizingMask = UIViewAutoresizingFlexibleHeight |
                               UIViewAutoresizingFlexibleLeftMargin |
                               UIViewAutoresizingFlexibleRightMargin;
+    UILongPressGestureRecognizer *rowDrag = [[[UILongPressGestureRecognizer alloc]
+                                              initWithTarget:self action:@selector(rowLongPressed:)] autorelease];
+    rowDrag.minimumPressDuration = 0.55;
+    [_table addGestureRecognizer:rowDrag];
     [self.view addSubview:_table];
 }
 
@@ -461,15 +477,13 @@
     [self ensureDaemonThenRefresh];
 }
 
-/* restart dead senkod via setuid helper */
+/* restart a dead senkod */
 - (void)ensureDaemonThenRefresh {
-/* skip noisy probe while tunnel already up */
+    /* skip the probe while connected */
     BOOL quiet = [self isTunnelActive];
-    if (!quiet)
-        SetStatusDefault(_statusLabel, @"checking daemon...");
     [_ctl ensureDaemon:^(BOOL up, NSString *detail) {
         if (!up) {
-/* if we were live, refresh may still succeed without flashing offline */
+/* keep the live strip during refresh */
             if (quiet) {
                 [self refresh];
                 return;
@@ -480,8 +494,11 @@
             [self applyState];
             return;
         }
+        /* an already running daemon returns no detail, so clear the probe text */
         if (!quiet && detail && [detail length])
             SetStatusRefresh(_statusLabel, detail);
+        else if (!quiet)
+            SetStatusDefault(_statusLabel, @"idle");
         [self refresh];
     }];
 }
@@ -504,4 +521,3 @@
 }
 
 @end
-

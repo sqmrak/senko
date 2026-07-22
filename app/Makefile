@@ -1,23 +1,22 @@
-# cross-compile the non-arc ui bundle for jailbroken ios devices
-# blocks come from libsystem on supported ios versions, so no extra runtime is linked
+# build the non-arc ui bundle for jailbroken ios
+# blocks come from libsystem
 
-# override with THEOS / SENKO_SDK_V7; defaults live under $HOME
+# override the toolchain and sdk paths
 THEOS   ?= $(HOME)/theos
 TC      ?= $(firstword $(wildcard $(THEOS)/toolchain/linux/iphone/bin $(HOME)/theos/toolchain/linux/iphone/bin))
 SDK     ?= $(firstword $(wildcard $(SENKO_SDK_V7) $(HOME)/sdks-armv7 $(HOME)/sdks/iPhoneOS6.1.sdk $(HOME)/sdks))
 LDID    ?= $(TC)/ldid
 
-# override the target triple and arch to build another device slice
+# set the target triple and arch for another slice
 #   make TRIPLE=arm64-apple-darwin SDK=$HOME/sdks/iPhoneOS10.3.sdk \
 #        ARCH="-arch arm64 -miphoneos-version-min=7.0"
 TRIPLE  ?= arm-apple-darwin11
 CC      := $(TC)/clang -target $(TRIPLE) -B $(TC)
-ARCH    ?= -arch armv7 -miphoneos-version-min=6.0
+ARCH    ?= -arch armv7 -miphoneos-version-min=5.0
 CFLAGS  := -fno-objc-arc -fblocks -Wall -Wextra -O2 $(ARCH) -isysroot $(SDK) \
            -I. -Itheme -Ithird_party/quirc
-# qr scanning needs raw frames because ios 6 has no metadata output
-# weak-link av/media: arm64+SDK11 used to hard-pull AVFAudio via AVAudioPlayer
-# and that can abort dyld on ios10 before main. sfx avoids that class link.
+# qr scanning uses raw frames
+# keep av/media weak for old ios
 LDFLAGS := $(ARCH) -isysroot $(SDK) \
            -framework UIKit -framework Foundation \
            -framework CFNetwork \
@@ -27,8 +26,10 @@ LDFLAGS := $(ARCH) -isysroot $(SDK) \
            -weak_framework CoreMedia -weak_framework CoreVideo
 
 QUIRC   := third_party/quirc
+FLAG_SRC := $(wildcard icons/flags/*.png)
+ICON_SRC := icons/server-placeholder.png
 
-# theme: one file per family + registry. add theme_foo.m and theme_table.m entry.
+# keep one theme file per family
 THEME_SRC := \
 	theme/theme_core.m \
 	theme/theme_table.m \
@@ -81,22 +82,23 @@ QUIRC_OBJ := $(patsubst $(QUIRC)/%.c,$(OBJDIR)/quirc_%.o,$(QUIRC_SRC))
 .PHONY: all clean
 all: $(BIN)
 
-# build vendored quirc without warnings because it is external code
+# build vendored quirc without warnings
 $(OBJDIR)/quirc_%.o: $(QUIRC)/%.c
 	mkdir -p $(OBJDIR)
 	$(CC) $(ARCH) -isysroot $(SDK) -O2 -w -I$(QUIRC) -c $< -o $@
 
-$(BIN): $(APP_SRC) $(QUIRC_OBJ) control_client.h qr_scan.h Info.plist app_common.h ui_theme.h theme/theme_def.h
+$(BIN): $(APP_SRC) $(QUIRC_OBJ) $(FLAG_SRC) $(ICON_SRC) control_client.h qr_scan.h Info.plist app_common.h ui_theme.h theme/theme_def.h
 	@mkdir -p $(dir $(BIN))
 	$(CC) $(CFLAGS) $(APP_SRC) $(QUIRC_OBJ) -o $(BIN) $(LDFLAGS)
 	@if [ "$(BIN)" = "$(APP)/senko" ]; then \
 		$(LDID) -Sentitlements.plist $(BIN); \
 		mkdir -p $(APP); \
 		cp Info.plist $(APP)/; \
-		cp icons/Icon.png icons/Icon@2x.png icons/sqmrak.jpg icons/about-bg.png icons/boykisser.png icons/meow.caf icons/meow.wav icons/ouch.wav icons/miside-bg.jpg icons/miside-logo.png icons/frutiger-bg.jpg \
+		cp icons/Icon.png icons/Icon@2x.png icons/sqmrak.jpg icons/about-bg.png icons/boykisser.png icons/meow.caf icons/meow.wav icons/ouch.wav icons/miside-bg.jpg icons/miside-logo.png icons/frutiger-bg.jpg icons/server-placeholder.png \
 		   icons/ios26-bg-light.jpg icons/ios26-bg-dark.jpg \
 		   icons/Default.png icons/Default@2x.png icons/Default-568h@2x.png \
 		   icons/Default-Portrait.png icons/Default-Portrait@2x.png $(APP)/ 2>/dev/null || true; \
+		cp icons/flags/*.png $(APP)/ 2>/dev/null || true; \
 	fi
 	@echo "built $(BIN); deps:"; $(TC)/otool -L $(BIN) | tail -n +2
 

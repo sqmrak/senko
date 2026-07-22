@@ -32,7 +32,7 @@ typedef enum {
     VL_PROTO_HTTPS
 } vl_proto_t;
 
-/* fixed storage avoids heap ownership ambiguity on ios 6 */
+/* fixed storage avoids heap ownership ambiguity on old ios */
 typedef struct {
     vl_proto_t proto;
     char     user[64];

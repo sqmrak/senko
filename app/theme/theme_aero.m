@@ -1,7 +1,7 @@
 #import "theme_def.h"
 #import "ui_theme.h"
 
-/* sky gloss + soft glass; white only */
+/* sky gloss + soft glass; light only */
 static void Fill(void) {
     SenkoThemeSetSlot(&kBG,         SenkoThemeC(0.720, 0.900, 0.980)); /* sky */
     SenkoThemeSetSlot(&kBGBot,      SenkoThemeC(0.900, 0.970, 0.920)); /* soft green haze */

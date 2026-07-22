@@ -13,7 +13,7 @@
         [NSObject cancelPreviousPerformRequestsWithTarget:self
                                                  selector:@selector(refresh)
                                                    object:nil];
-/* recolor connect; keep layout transform */
+/* recolor connect and keep its transform */
     if (_connectBtn) {
         CGAffineTransform t = _connectBtn.transform;
         _connectBtn.transform = CGAffineTransformIdentity;
@@ -26,7 +26,7 @@
                      forState:UIControlStateNormal];
     }
 
-/* strip prefers live state, then lasterr, never sticky bare "error" */
+/* show live state before the last error */
     NSString *strip = nil;
     if (connecting) {
         strip = @"connecting...";
@@ -44,7 +44,7 @@
     }
     SetStatusDefault(_statusLabel, strip);
 
-/* wallpaper wash tracks tunnel status (animated crossfade) */
+/* update the wallpaper wash */
     [self applyBackgroundForCurrentState:YES];
 
     if (_busy)
@@ -52,7 +52,7 @@
     [self applyServerListLock];
 }
 
-/* drop status-bar vpn glyph when we know the tunnel is dead */
+/* clear the vpn glyph after tunnel failure */
 static void senkoClearVpnIcon(void) {
     const char *path = "/var/mobile/Library/Preferences/com.senko.vpnicon.state";
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -75,7 +75,7 @@ static void senkoClearVpnIcon(void) {
             [self setLastErr:nil];
         [self applyState];
         [self setToggleBusy:NO];
-/* second status pull so strip matches daemon after a stuck connect */
+/* pull status after a stuck connect */
         [self refresh];
     }];
 }
@@ -89,7 +89,7 @@ static void senkoClearVpnIcon(void) {
     [_ctl awgStatus:^(NSString *status) {
         NSString *s = [status stringByTrimmingCharactersInSet:
                        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-/* error* is a dead profile, not a live tunnel */
+/* ignore a dead awg profile */
         BOOL awgLive = [s isEqualToString:@"connecting"] ||
                        [s isEqualToString:@"connected"];
         if (awgLive) {
@@ -176,7 +176,7 @@ static void senkoClearVpnIcon(void) {
                     }
                 }
             }
-/* nil, or only "connecting" (ui rcv timeout mid-failover): force full teardown */
+/* tear down a missing or stuck reply */
             BOOL stuckConnecting = finalState &&
                 [finalState isEqualToString:@"connecting"] && !errReason;
             if (!reply || stuckConnecting) {
@@ -196,14 +196,57 @@ static void senkoClearVpnIcon(void) {
                 [_state isEqualToString:@"idle"])
                 senkoClearVpnIcon();
             [self applyState];
-/* catalog reply not mixed into status strip */
-            [_ctl listCatalog:^(NSArray *servers, NSArray *subs) {
-                if (servers) [self applyCatalog:servers subs:subs];
+/* keep catalog data out of the status strip */
+            [_ctl listCatalog:^(NSArray *servers, NSArray *subs, NSArray *order) {
+                if (servers) [self applyCatalog:servers subs:subs order:order];
                 [self setToggleBusy:NO];
             }];
             }];
         }];
     }
+}
+
+- (void)switchActiveServerIndex:(int)idx {
+    if (_busy || _activeBackend != SenkoBackendServer) return;
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(refresh)
+                                               object:nil];
+    [self setToggleBusy:YES];
+    [_state release];
+    _state = [@"connecting" copy];
+    [self setLastErr:nil];
+    [self applyState];
+    [_ctl connectIndex:idx reply:^(NSString *reply) {
+        NSString *errReason = nil;
+        NSString *finalState = nil;
+        if (reply) {
+            for (NSString *line in [reply componentsSeparatedByString:@"\n"]) {
+                if ([line hasPrefix:@"ERR "])
+                    errReason = [[line substringFromIndex:4]
+                                 stringByTrimmingCharactersInSet:
+                                 [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                else if ([line hasPrefix:@"STATE "])
+                    finalState = [[line substringFromIndex:6]
+                                  stringByTrimmingCharactersInSet:
+                                  [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            }
+        }
+        if (!reply || !finalState) {
+            [self forceTunnelCleanupWithReason:@"switch timeout"];
+            [self setToggleBusy:NO];
+            return;
+        }
+        if (errReason && [errReason length]) [self setLastErr:errReason];
+        [_state release];
+        _state = [finalState copy];
+        if ([finalState isEqualToString:@"error"] || [finalState isEqualToString:@"idle"])
+            senkoClearVpnIcon();
+        [self applyState];
+        [_ctl listCatalog:^(NSArray *servers, NSArray *subs, NSArray *order) {
+            if (servers) [self applyCatalog:servers subs:subs order:order];
+            [self setToggleBusy:NO];
+        }];
+    }];
 }
 
 - (void)editAWGProfile {

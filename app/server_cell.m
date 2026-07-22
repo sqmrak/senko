@@ -3,6 +3,69 @@
 
 #import <QuartzCore/QuartzCore.h>
 
+static BOOL SenkoCellRegional(unichar c) {
+    return c >= 0xDDE6 && c <= 0xDDFF;
+}
+
+static NSString *SenkoCellFlag(NSString *raw) {
+    if (![raw length]) return nil;
+    NSString *text = [raw stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+    if (!text) text = raw;
+    for (NSUInteger i = 0; i + 3 < [text length]; ++i) {
+        unichar a = [text characterAtIndex:i];
+        unichar b = [text characterAtIndex:i + 1];
+        unichar c = [text characterAtIndex:i + 2];
+        unichar d = [text characterAtIndex:i + 3];
+        if (a == 0xD83C && c == 0xD83C &&
+            SenkoCellRegional(b) && SenkoCellRegional(d))
+            return [text substringWithRange:NSMakeRange(i, 4)];
+    }
+    return nil;
+}
+
+static NSString *SenkoCellFlagCode(NSString *flag) {
+    if ([flag length] != 4) return nil;
+    unichar a = [flag characterAtIndex:1];
+    unichar b = [flag characterAtIndex:3];
+    if (!SenkoCellRegional(a) || !SenkoCellRegional(b)) return nil;
+    return [NSString stringWithFormat:@"%c%c",
+            (char)('a' + a - 0xDDE6),
+            (char)('a' + b - 0xDDE6)];
+}
+
+static UIImage *SenkoCellServerIcon(NSString *raw) {
+    NSString *flag = SenkoCellFlag(raw);
+    NSString *code = SenkoCellFlagCode(flag);
+    UIImage *image = [code length]
+        ? [UIImage imageNamed:[NSString stringWithFormat:@"flag-%@.png", code]]
+        : nil;
+    return image ? image : [UIImage imageNamed:@"server-placeholder.png"];
+}
+
+static BOOL SenkoCellHasFlag(NSString *raw) {
+    NSString *code = SenkoCellFlagCode(SenkoCellFlag(raw));
+    return [code length] &&
+           [UIImage imageNamed:[NSString stringWithFormat:@"flag-%@.png", code]] != nil;
+}
+
+static NSString *SenkoCellRemark(NSString *raw) {
+    if (![raw length]) return @"";
+    NSString *text = [raw stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+    if (!text) text = raw;
+    for (NSUInteger i = 0; i + 3 < [text length]; ++i) {
+        unichar a = [text characterAtIndex:i];
+        unichar b = [text characterAtIndex:i + 1];
+        unichar c = [text characterAtIndex:i + 2];
+        unichar d = [text characterAtIndex:i + 3];
+        if (a != 0xD83C || c != 0xD83C || !SenkoCellRegional(b) || !SenkoCellRegional(d))
+            continue;
+        text = [text stringByReplacingCharactersInRange:NSMakeRange(i, 4) withString:@""];
+        break;
+    }
+    return [text stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
 static NSString *ServerProtocolLabel(SenkoServer *server) {
     if ([server->proto isEqualToString:@"vless"])
         return [NSString stringWithFormat:@"%@/%@/%@",
@@ -39,10 +102,12 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
         _plate.layer.shadowOpacity = 0.0f;
         _plate.layer.shadowRadius = 0;
         _plate.layer.shadowPath = nil;
-/* ios26: rasterize after style; alpha gradient bakes once for scroll */
-        _plate.layer.shouldRasterize = YES;
-        _plate.layer.rasterizationScale = [UIScreen mainScreen].scale;
-        _plate.layer.drawsAsynchronously = YES;
+/* cache modern glass cards, let classic themes stay on the normal gpu path */
+        _plate.layer.shouldRasterize = SenkoThemeIsIos16() || SenkoThemeIsIos26();
+        if (_plate.layer.shouldRasterize)
+            _plate.layer.rasterizationScale = [UIScreen mainScreen].scale;
+        if ([_plate.layer respondsToSelector:@selector(setDrawsAsynchronously:)])
+            _plate.layer.drawsAsynchronously = YES;
         _plateGrad = [CAGradientLayer layer];
         _plateGrad.actions = [NSDictionary dictionaryWithObjectsAndKeys:
                               [NSNull null], @"colors",
@@ -56,6 +121,17 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
         _accent.layer.borderWidth = 1;
         _accent.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.25].CGColor;
         [_plate addSubview:_accent];
+
+        _serverIcon = [[UIImageView alloc] initWithFrame:CGRectZero];
+        _serverIcon.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.94f];
+        _serverIcon.contentMode = UIViewContentModeScaleAspectFill;
+        _serverIcon.clipsToBounds = YES;
+        _serverIcon.layer.masksToBounds = YES;
+        _serverIcon.layer.cornerRadius = 8.0f;
+        _serverIcon.layer.borderWidth = 0.7f;
+        _serverIcon.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.16f].CGColor;
+        _serverIcon.image = [UIImage imageNamed:@"server-placeholder.png"];
+        [_plate addSubview:_serverIcon];
 
         _title = [[UILabel alloc] initWithFrame:CGRectZero];
         _title.backgroundColor = [UIColor clearColor];
@@ -103,6 +179,7 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
     [_detail release];
     [_unsupported release];
     [_ping release];
+    [_serverIcon release];
     [super dealloc];
 }
 
@@ -126,10 +203,23 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
     SenkoEndSilentLayers();
     _accent.frame = CGRectMake(10, 10, SenkoThemeIsIos16() ? 4 : 6, _plate.bounds.size.height - 20);
     _accent.layer.cornerRadius = SenkoThemeIsIos16() ? 2 : 3;
-    _title.frame = CGRectMake(24, 8, _plate.bounds.size.width - 118, 23);
-    _detail.frame = CGRectMake(24, 38, _plate.bounds.size.width - 118, 20);
-    _unsupported.frame = CGRectMake(24, 57, _plate.bounds.size.width - 118, 18);
-    _ping.frame = CGRectMake(_plate.bounds.size.width - 86, 28, 72, 24);
+    CGFloat iconSize = SenkoThemeIsIos16() ? 40.0f : 38.0f;
+    CGFloat iconY = floorf((_plate.bounds.size.height - iconSize) * 0.5f);
+    _serverIcon.frame = CGRectMake(20.0f, iconY, iconSize, iconSize);
+    _serverIcon.layer.cornerRadius = SenkoThemeIsIos16() ? 9.0f : 8.0f;
+    _serverIcon.layer.masksToBounds = YES;
+    _serverIcon.layer.borderColor = (SenkoThemeIsLight()
+        ? [UIColor colorWithWhite:0 alpha:0.16f]
+        : [UIColor colorWithWhite:1 alpha:0.20f]).CGColor;
+    CGFloat textX = 68.0f;
+    CGFloat textW = _plate.bounds.size.width - textX - 94.0f;
+    CGFloat detailW = _plate.bounds.size.width - textX - 12.0f;
+    if (textW < 42.0f) textW = 42.0f;
+    if (detailW < 42.0f) detailW = 42.0f;
+    _title.frame = CGRectMake(textX, 8, textW, 23);
+    _detail.frame = CGRectMake(textX, 38, detailW, 20);
+    _unsupported.frame = CGRectMake(textX, 57, detailW, 18);
+    _ping.frame = CGRectMake(_plate.bounds.size.width - 86, 8, 72, 24);
 }
 
 - (void)applyPicked:(BOOL)picked {
@@ -333,9 +423,10 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
         _plate.layer.borderWidth = 1.0f;
         _plate.layer.borderColor = edge.CGColor;
     }
-/* always rasterize after style; alpha glass has no live blur so bake is safe */
-    _plate.layer.shouldRasterize = YES;
-    _plate.layer.rasterizationScale = [UIScreen mainScreen].scale;
+/* only rasterize glass themes; classic cards scroll cheaper without offscreen bitmaps */
+    _plate.layer.shouldRasterize = ios16 || ios26;
+    if (_plate.layer.shouldRasterize)
+        _plate.layer.rasterizationScale = [UIScreen mainScreen].scale;
     SenkoEndSilentLayers();
 }
 
@@ -362,8 +453,14 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
     _accent.backgroundColor = server->supported
         ? kAccentBlue
         : [UIColor colorWithRed:0.92 green:0.16 blue:0.12 alpha:1.0];
+    BOOL hasFlag = SenkoCellHasFlag(server->remark);
+    _serverIcon.image = SenkoCellServerIcon(server->remark);
+    _serverIcon.contentMode = hasFlag
+        ? UIViewContentModeScaleAspectFill : UIViewContentModeScaleAspectFit;
+    _serverIcon.backgroundColor = hasFlag
+        ? [UIColor clearColor] : [UIColor colorWithWhite:1.0f alpha:0.94f];
     _title.text = [server->remark length]
-        ? server->remark : ServerEndpointLabel(server, hideLinks);
+        ? SenkoCellRemark(server->remark) : ServerEndpointLabel(server, hideLinks);
     _detail.text = [NSString stringWithFormat:@"%@      %@",
                     ServerProtocolLabel(server), ServerEndpointLabel(server, hideLinks)];
     _unsupported.hidden = server->supported;
@@ -402,6 +499,9 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
     [self applyPicked:picked];
     [self styleLabelsForPicked:picked];
     _accent.backgroundColor = kAccentBlue;
+    _serverIcon.image = [UIImage imageNamed:@"server-placeholder.png"];
+    _serverIcon.contentMode = UIViewContentModeScaleAspectFit;
+    _serverIcon.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.94f];
     _title.text = title;
     _detail.text = detail;
     _unsupported.hidden = YES;
@@ -417,6 +517,9 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
     _title.text = nil;
     _detail.text = nil;
     _ping.text = nil;
+    _serverIcon.image = [UIImage imageNamed:@"server-placeholder.png"];
+    _serverIcon.contentMode = UIViewContentModeScaleAspectFit;
+    _serverIcon.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.94f];
 }
 
 @end

@@ -501,9 +501,6 @@ static void *dns_forwarder_thread(void *arg) {
             continue;
         }
 
-        fprintf(stderr, "senkod: DNS proxy received UDP packet of size %zd\n", n);
-        fflush(stderr);
-
         int retries = 2;
         int success = 0;
         while (retries > 0 && !st->dns_stop) {

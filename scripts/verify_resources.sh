@@ -30,26 +30,30 @@ check() {
     fi
 }
 
-echo "==> build-time (must have cache offline if fail)"
-check build "https://letsencrypt.org/certs/isrgrootx1.pem" "tlsfix root bundle"
-check build "https://cacerts.digicert.com/DigiCertGlobalRootG2.crt.pem" "tlsfix root bundle"
+if [ "${SENKO_OFFLINE:-0}" = "1" ]; then
+    echo "==> network checks skipped (offline build)"
+else
+    echo "==> build-time (must have cache offline if fail)"
+    check build "https://letsencrypt.org/certs/isrgrootx1.pem" "tlsfix root bundle"
+    check build "https://cacerts.digicert.com/DigiCertGlobalRootG2.crt.pem" "tlsfix root bundle"
 
-echo "==> https suite must (should work in rf without vpn)"
-check must "https://example.com/" "baseline tls"
-check must "http://example.com/" "baseline http"
-check must "https://icanhazip.com/" "ip check"
-check must "http://ifconfig.me/ip" "ip check"
-check must "https://ya.ru/" "ru local"
-check must "https://api.ipify.org/" "ip json"
+    echo "==> https suite must (should work in rf without vpn)"
+    check must "https://example.com/" "baseline tls"
+    check must "http://example.com/" "baseline http"
+    check must "https://icanhazip.com/" "ip check"
+    check must "http://ifconfig.me/ip" "ip check"
+    check must "https://ya.ru/" "ru local"
+    check must "https://api.ipify.org/" "ip json"
 
-echo "==> https suite best"
-check best "https://www.google.com/generate_204" "captive portal probe"
+    echo "==> https suite best"
+    check best "https://www.google.com/generate_204" "captive portal probe"
 
-echo "==> rf blocked without vpn (fail expected, not a build error)"
-check blocked "https://x.com/" "roskomnadzor"
-check blocked "https://www.instagram.com/" "roskomnadzor"
-check blocked "https://www.youtube.com/" "roskomnadzor"
-check blocked "https://discord.com/" "roskomnadzor"
+    echo "==> rf blocked without vpn (fail expected, not a build error)"
+    check blocked "https://x.com/" "roskomnadzor"
+    check blocked "https://www.instagram.com/" "roskomnadzor"
+    check blocked "https://www.youtube.com/" "roskomnadzor"
+    check blocked "https://discord.com/" "roskomnadzor"
+fi
 
 echo "==> packaged offline assets"
 if [ -f "${ROOT}/senkotlsfix/cacert.pem" ]; then

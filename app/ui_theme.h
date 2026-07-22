@@ -56,7 +56,7 @@ BOOL SenkoThemeUsesFrost(void);
 BOOL SenkoThemeIsBoykisser(void);
 /* 1 for senko-miside (heart on, purple) */
 BOOL SenkoThemeIsMiside(void);
-/* 1 for senko-frutigeraero / senko-aero (sky gloss, white only) */
+/* 1 for senko-frutigeraero / senko-aero (sky gloss, light only) */
 BOOL SenkoThemeIsFrutigeraero(void);
 /* card corner; larger on ios16 */
 CGFloat SenkoThemeCardRadius(void);

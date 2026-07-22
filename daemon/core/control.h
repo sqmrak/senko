@@ -14,21 +14,24 @@ typedef enum {
     CTL_CMD_DISCONNECT,
     CTL_CMD_STATUS,
     CTL_CMD_PING,
-    CTL_CMD_ADD_SERVER, /* preserve the add-server wire verb */
-    CTL_CMD_ADD_SUB, /* preserve the add-subscription wire verb */
-    CTL_CMD_REFRESH, /* preserve the refresh wire verb */
-    CTL_CMD_DEL_SERVER, /* preserve the delete-server wire verb */
-    CTL_CMD_DEL_SUB, /* preserve the delete-subscription wire verb */
-    CTL_CMD_FETCH, /* preserve the fetch wire verb */
-    CTL_CMD_LIST, /* preserve the catalog wire verb */
+    CTL_CMD_ADD_SERVER, /* add a server */
+    CTL_CMD_ADD_SUB, /* add a subscription */
+    CTL_CMD_REFRESH, /* refresh a subscription */
+    CTL_CMD_DEL_SERVER, /* delete a server */
+    CTL_CMD_DEL_SUB, /* delete a subscription */
+    CTL_CMD_FETCH, /* fetch a url */
+    CTL_CMD_LIST, /* list the catalog */
     CTL_CMD_GET_SERVER,
-    CTL_CMD_AUTH /* local sock is world-reachable on jb without this */
+    CTL_CMD_AUTH,
+    CTL_CMD_MOVE_SECTION,
+    CTL_CMD_MOVE_MANUAL
 } ctl_cmd_kind_t;
 
 typedef struct {
     ctl_cmd_kind_t kind;
-    int            server_index; /* command target, or -1 when unused */
-/* keep urls and names separate because both may contain spaces */
+    int            server_index; /* command target */
+    int            target_index;
+/* keep the url and name separate */
     char           text[1024];
     char           name[64];
 } ctl_cmd_t;
@@ -43,8 +46,8 @@ typedef enum {
 typedef enum {
     CTL_OK         =  0,
     CTL_ERR_ARG    = -1,
-    CTL_ERR_PARSE  = -2, /* reject unknown or malformed commands */
-    CTL_ERR_BUF    = -3 /* reject output that cannot fit */
+    CTL_ERR_PARSE  = -2, /* reject bad commands */
+    CTL_ERR_BUF    = -3 /* cap output */
 } ctl_status_t;
 
 ctl_status_t ctl_parse_cmd(const char *line, size_t len, ctl_cmd_t *out);
@@ -63,7 +66,7 @@ ctl_status_t ctl_build_stat(uint64_t up, uint64_t down, char *buf, size_t cap, s
 ctl_status_t ctl_build_ok(const char *msg, char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_err(const char *msg, char *buf, size_t cap, size_t *n);
 
-/* keep catalog records space-tolerant so old ui clients can parse them */
+/* keep catalog records easy to split */
 ctl_status_t ctl_build_sub(int idx, const char *name, const char *url,
                            char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_srv(int idx, int selected, int group,
@@ -71,7 +74,13 @@ ctl_status_t ctl_build_srv(int idx, int selected, int group,
                            int supported, const char *host, int port, const char *remark,
                            char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_listend(int count, char *buf, size_t cap, size_t *n);
+ctl_status_t ctl_build_submeta(int idx, uint64_t expire,
+                               char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_link(int idx, const char *link, char *buf, size_t cap, size_t *n);
+ctl_status_t ctl_build_move_section(int section_id, int to_pos,
+                                    char *buf, size_t cap, size_t *n);
+ctl_status_t ctl_build_move_manual(int server_index, int to_pos,
+                                   char *buf, size_t cap, size_t *n);
 
 const char *ctl_state_name(ctl_state_t st);
 

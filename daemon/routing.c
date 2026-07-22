@@ -96,10 +96,12 @@ static void pf_direct_bypass_set(pf_w_t *w, const char *server_ips) {
 
 /* the trailing block-udp443 / block-inet6 / pass-out triplet per interface, shared by several modes */
 static void pf_block_triplet(pf_w_t *w, const char *ifn) {
-    pf_ap(w, "block return out quick on %s inet proto udp from any to ! <senko_bypass> port 443\n"
+    pf_ap(w, "pass in quick on %s inet from <senko_bypass> to any keep state\n"
+             "pass out quick on %s inet from any to <senko_bypass> keep state\n"
+             "block return out quick on %s inet proto udp from any to ! <senko_bypass> port 443\n"
              "block return out quick on %s inet6 all\n"
              "pass out on %s all keep state\n",
-          ifn, ifn, ifn);
+          ifn, ifn, ifn, ifn, ifn);
 }
 
 routing_status_t routing_pf_conf(const char *server_ips,

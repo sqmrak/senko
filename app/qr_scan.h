@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#include <dispatch/dispatch.h>
 
 @class QRScanVC;
 
@@ -11,7 +12,7 @@
 @private
     id _session; /* retain the camera capture session */
     id _previewLayer; /* retain the preview layer attached to the view */
-    id _queue; /* serialize frame decoding off the main thread */
+    dispatch_queue_t _queue; /* serialize frame decoding off the main thread */
     struct quirc *_qr;
     int _qrw, _qrh;
     BOOL _done;

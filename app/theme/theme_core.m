@@ -224,10 +224,10 @@ NSString *SenkoThemeStatusLine(void) {
     if (gCaps & SenkoThemeCapDarkOnly)
         return [NSString stringWithFormat:@"%@    Dark", name];
     if (gCaps & SenkoThemeCapLightOnly)
-        return [NSString stringWithFormat:@"%@    White", name];
+        return [NSString stringWithFormat:@"%@    Light", name];
     if (!SenkoThemeAllowsDark())
-        return [NSString stringWithFormat:@"%@    White", name];
-    return [NSString stringWithFormat:@"%@    %@", name, gLight ? @"White" : @"Dark"];
+        return [NSString stringWithFormat:@"%@    Light", name];
+    return [NSString stringWithFormat:@"%@    %@", name, gLight ? @"Light" : @"Dark"];
 }
 
 static void RefreshCaps(void) {

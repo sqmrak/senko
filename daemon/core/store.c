@@ -11,7 +11,6 @@ void store_init(store_t *st) {
     for (size_t i = 0; i < STORE_MAX_SERVERS; ++i) st->group[i] = STORE_GROUP_MANUAL;
 }
 
-/* keep selection when a subscription changes only its label or options */
 static int same_server(const vl_server_t *a, const vl_server_t *b) {
     return a->port == b->port
         && a->proto == b->proto
@@ -21,6 +20,12 @@ static int same_server(const vl_server_t *a, const vl_server_t *b) {
         && strcmp(a->pass, b->pass) == 0
         && strcmp(a->uuid, b->uuid) == 0
         && strcmp(a->host, b->host) == 0;
+}
+
+static int section_seen(const int *order, size_t n, int id) {
+    for (size_t i = 0; i < n; ++i)
+        if (order[i] == id) return 1;
+    return 0;
 }
 
 store_status_t store_add_manual(store_t *st, const char *link, size_t *out_index) {
@@ -52,7 +57,6 @@ store_status_t store_add_sub(store_t *st, const char *name, const char *url,
     size_t ul = strlen(url);
     if (nl >= 64 || ul >= 512) return STORE_ERR_TOO_LONG;
 
-/* reuse an existing url so the ui does not duplicate a subscription */
     for (size_t i = 0; i < STORE_MAX_SUBS; ++i) {
         if (!st->subs[i].used) continue;
         if (strcmp(st->subs[i].url, url) == 0) {
@@ -67,13 +71,19 @@ store_status_t store_add_sub(store_t *st, const char *name, const char *url,
         memcpy(s->name, name, nl); s->name[nl] = '\0';
         memcpy(s->url,  url,  ul); s->url[ul]  = '\0';
         s->used = 1;
+        if (st->section_n == 0) {
+            st->section_order[0] = STORE_GROUP_MANUAL;
+            st->section_n = 1;
+        }
+        if (st->section_n < STORE_MAX_SUBS + 1) {
+            st->section_order[st->section_n++] = (int)i;
+        }
         if (out_sub) *out_sub = i;
         return STORE_OK;
     }
     return STORE_ERR_FULL;
 }
 
-/* repair server groups after legacy subscription slots are repacked */
 void store_normalize(store_t *st) {
     if (!st) return;
 
@@ -81,6 +91,34 @@ void store_normalize(store_t *st) {
     int n_used = 0;
     for (size_t i = 0; i < STORE_MAX_SUBS; ++i) {
         if (st->subs[i].used) used[n_used++] = (int)i;
+    }
+
+    int old_order[STORE_MAX_SUBS + 1];
+    size_t old_n = st->section_n;
+    if (old_n > STORE_MAX_SUBS + 1) old_n = STORE_MAX_SUBS + 1;
+    memcpy(old_order, st->section_order, old_n * sizeof old_order[0]);
+    st->section_n = 0;
+    if (old_n == 0) {
+        st->section_order[st->section_n++] = STORE_GROUP_MANUAL;
+        for (int i = 0; i < n_used; ++i)
+            st->section_order[st->section_n++] = used[i];
+    } else {
+        for (size_t i = 0; i < old_n; ++i) {
+            int id = old_order[i];
+            if (id != STORE_GROUP_MANUAL &&
+                (id < 0 || id >= STORE_MAX_SUBS || !st->subs[id].used))
+                continue;
+            if (!section_seen(old_order, i, id) && st->section_n < STORE_MAX_SUBS + 1)
+                st->section_order[st->section_n++] = id;
+        }
+        for (int i = 0; i < n_used; ++i) {
+            if (!section_seen(st->section_order, st->section_n, used[i]) &&
+                st->section_n < STORE_MAX_SUBS + 1)
+                st->section_order[st->section_n++] = used[i];
+        }
+        if (!section_seen(st->section_order, st->section_n, STORE_GROUP_MANUAL) &&
+            st->section_n < STORE_MAX_SUBS + 1)
+            st->section_order[st->section_n++] = STORE_GROUP_MANUAL;
     }
 
     int orphan_mark[STORE_MAX_SUBS];
@@ -107,7 +145,6 @@ void store_normalize(store_t *st) {
         return;
     }
 
-/* demote unmapped groups so remaining servers stay reachable */
     for (size_t i = 0; i < st->n; ++i) {
         int g = st->group[i];
         if (g >= 0 && g < STORE_MAX_SUBS && !st->subs[g].used)
@@ -115,10 +152,46 @@ void store_normalize(store_t *st) {
     }
 }
 
+size_t store_section_count(const store_t *st) {
+    return st ? st->section_n : 0;
+}
+
+int store_section_at(const store_t *st, size_t pos) {
+    if (!st || pos >= st->section_n) return STORE_GROUP_MANUAL - 1;
+    return st->section_order[pos];
+}
+
+store_status_t store_move_section(store_t *st, int section_id, size_t to_pos) {
+    if (!st) return STORE_ERR_ARG;
+    store_normalize(st);
+    if (section_id != STORE_GROUP_MANUAL &&
+        (section_id < 0 || section_id >= STORE_MAX_SUBS || !st->subs[section_id].used))
+        return STORE_ERR_RANGE;
+
+    size_t from = st->section_n;
+    for (size_t i = 0; i < st->section_n; ++i) {
+        if (st->section_order[i] == section_id) { from = i; break; }
+    }
+    if (from == st->section_n) return STORE_ERR_RANGE;
+    if (to_pos >= st->section_n) to_pos = st->section_n - 1;
+    if (from == to_pos) return STORE_OK;
+
+    int id = st->section_order[from];
+    if (from < to_pos) {
+        memmove(&st->section_order[from], &st->section_order[from + 1],
+                (to_pos - from) * sizeof st->section_order[0]);
+    } else {
+        memmove(&st->section_order[to_pos + 1], &st->section_order[to_pos],
+                (from - to_pos) * sizeof st->section_order[0]);
+    }
+    st->section_order[to_pos] = id;
+    return STORE_OK;
+}
+
 static void drop_group(store_t *st, int grp) {
     size_t w = 0;
     for (size_t r = 0; r < st->n; ++r) {
-        if (st->group[r] == grp) continue; /* skip = remove */
+        if (st->group[r] == grp) continue; /* drop this row */
         if (w != r) {
             st->servers[w] = st->servers[r];
             st->group[w]   = st->group[r];
@@ -184,6 +257,55 @@ store_status_t store_remove(store_t *st, size_t index) {
     return STORE_OK;
 }
 
+store_status_t store_move_manual(store_t *st, size_t index, size_t to_pos) {
+    if (!st) return STORE_ERR_ARG;
+    if (index >= st->n || st->group[index] != STORE_GROUP_MANUAL)
+        return STORE_ERR_RANGE;
+
+    size_t manual_n = 0;
+    for (size_t i = 0; i < st->n; ++i)
+        if (st->group[i] == STORE_GROUP_MANUAL && i != index) manual_n++;
+    if (to_pos > manual_n) to_pos = manual_n;
+
+    vl_server_t moved = st->servers[index];
+    int moved_group = st->group[index];
+    vl_server_t selected;
+    int had_selected = st->selected >= 0 && (size_t)st->selected < st->n;
+    if (had_selected) selected = st->servers[st->selected];
+    vl_server_t next[STORE_MAX_SERVERS];
+    int next_group[STORE_MAX_SERVERS];
+    size_t out = 0, seen = 0;
+    int inserted = 0;
+    for (size_t i = 0; i < st->n; ++i) {
+        if (!inserted && seen == to_pos) {
+            next[out] = moved;
+            next_group[out++] = moved_group;
+            inserted = 1;
+        }
+        if (i == index) continue;
+        next[out] = st->servers[i];
+        next_group[out++] = st->group[i];
+        if (st->group[i] == STORE_GROUP_MANUAL) seen++;
+    }
+    if (!inserted) {
+        next[out] = moved;
+        next_group[out++] = moved_group;
+    }
+    memcpy(st->servers, next, out * sizeof next[0]);
+    memcpy(st->group, next_group, out * sizeof next_group[0]);
+    st->n = out;
+    st->selected = -1;
+    if (had_selected) {
+        for (size_t i = 0; i < st->n; ++i) {
+            if (same_server(&st->servers[i], &selected)) {
+                st->selected = (int)i;
+                break;
+            }
+        }
+    }
+    return STORE_OK;
+}
+
 store_status_t store_remove_sub(store_t *st, size_t sub_index) {
     if (!st) return STORE_ERR_ARG;
     if (sub_index >= STORE_MAX_SUBS || !st->subs[sub_index].used)
@@ -195,6 +317,13 @@ store_status_t store_remove_sub(store_t *st, size_t sub_index) {
 
     drop_group(st, (int)sub_index);
     memset(&st->subs[sub_index], 0, sizeof st->subs[sub_index]);
+    for (size_t i = 0; i < st->section_n; ++i) {
+        if (st->section_order[i] != (int)sub_index) continue;
+        memmove(&st->section_order[i], &st->section_order[i + 1],
+                (st->section_n - i - 1) * sizeof st->section_order[0]);
+        st->section_n--;
+        break;
+    }
 
     st->selected = -1;
     if (had_sel) {
@@ -206,6 +335,11 @@ store_status_t store_remove_sub(store_t *st, size_t sub_index) {
         }
     }
     return STORE_OK;
+}
+
+void store_set_sub_expire(store_t *st, size_t sub_index, uint64_t expire) {
+    if (!st || sub_index >= STORE_MAX_SUBS || !st->subs[sub_index].used) return;
+    st->subs[sub_index].expire = expire;
 }
 
 store_status_t store_select(store_t *st, int index) {
@@ -220,8 +354,6 @@ const vl_server_t *store_selected(const store_t *st) {
     if (!st || st->selected < 0 || (size_t)st->selected >= st->n) return NULL;
     return &st->servers[st->selected];
 }
-
-/* line format keeps ios 6 persistence dependency-free */
 
 static const char *security_name(vl_sec_t s) {
     switch (s) {
@@ -243,7 +375,6 @@ static const char *net_name(vl_net_t n) {
     }
 }
 
-/* encode delimiters so serialized links round-trip through the line store */
 static int pct_encode(const char *src, char *dst, size_t cap) {
     static const char hex[] = "0123456789ABCDEF";
     size_t o = 0;
@@ -340,14 +471,29 @@ store_status_t store_serialize(const store_t *st, char *buf, size_t cap, size_t 
     if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
     off += (size_t)n;
 
-/* persist the subscription index so server groups survive a restart */
     for (size_t i = 0; i < STORE_MAX_SUBS; ++i) {
         if (!st->subs[i].used) continue;
         n = snprintf(buf + off, cap - off, "SUB %zu %s %s\n",
                      i, st->subs[i].url, st->subs[i].name);
         if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
         off += (size_t)n;
+        n = snprintf(buf + off, cap - off, "SUBMETA %zu %llu\n", i,
+                     (unsigned long long)st->subs[i].expire);
+        if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
+        off += (size_t)n;
     }
+
+    n = snprintf(buf + off, cap - off, "ORDER");
+    if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
+    off += (size_t)n;
+    for (size_t i = 0; i < st->section_n; ++i) {
+        n = snprintf(buf + off, cap - off, " %d", st->section_order[i]);
+        if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
+        off += (size_t)n;
+    }
+    n = snprintf(buf + off, cap - off, "\n");
+    if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
+    off += (size_t)n;
 
     for (size_t i = 0; i < st->n; ++i) {
         char link[2048];
@@ -379,11 +525,28 @@ static int parse_int(const char *s, const char *end, int *out) {
     return 0;
 }
 
+static int parse_u64(const char *s, const char *end, uint64_t *out) {
+    char tmp[32];
+    size_t n = (size_t)(end - s);
+    if (!out || n == 0 || n >= sizeof tmp) return -1;
+    memcpy(tmp, s, n);
+    tmp[n] = '\0';
+    char *stop = NULL;
+    unsigned long long v = strtoull(tmp, &stop, 10);
+    if (stop != tmp + n) return -1;
+    *out = (uint64_t)v;
+    return 0;
+}
+
 store_status_t store_deserialize(store_t *st, const char *buf, size_t len) {
     if (!st || !buf) return STORE_ERR_ARG;
     store_init(st);
 
-    int want_sel = -1; /* applied at the end, after servers exist */
+    int want_sel = -1;
+    uint64_t want_expire[STORE_MAX_SUBS];
+    int expire_seen[STORE_MAX_SUBS];
+    memset(want_expire, 0, sizeof want_expire);
+    memset(expire_seen, 0, sizeof expire_seen);
     const char *p = buf;
     const char *end = buf + len;
 
@@ -394,7 +557,6 @@ store_status_t store_deserialize(store_t *st, const char *buf, size_t len) {
 
         if (llen >= 4 && memcmp(p, "SUB ", 4) == 0) {
             const char *rest = p + 4;
-/* accept indexed and legacy subscription records */
             int fixed_idx = -1;
             const char *sp1 = memchr(rest, ' ', (size_t)(le - rest));
             if (sp1) {
@@ -405,7 +567,6 @@ store_status_t store_deserialize(store_t *st, const char *buf, size_t len) {
                     const char *sp2 = memchr(after, ' ', (size_t)(le - after));
                     if (sp2 && after[0] &&
                         (after[0] == 'h' || after[0] == 'H')) {
-/* indexed subscription records preserve ownership */
                         fixed_idx = try_idx;
                         rest = after;
                         sp1 = sp2;
@@ -427,6 +588,32 @@ store_status_t store_deserialize(store_t *st, const char *buf, size_t len) {
                         store_add_sub(st, name, url, &sub);
                     }
                 }
+            }
+        } else if (llen >= 8 && memcmp(p, "SUBMETA ", 8) == 0) {
+            const char *rest = p + 8;
+            const char *sp = memchr(rest, ' ', (size_t)(le - rest));
+            if (sp) {
+                int idx = -1;
+                uint64_t expire = 0;
+                if (parse_int(rest, sp, &idx) == 0 &&
+                    parse_u64(sp + 1, le, &expire) == 0 &&
+                    idx >= 0 && idx < STORE_MAX_SUBS) {
+                    want_expire[idx] = expire;
+                    expire_seen[idx] = 1;
+                }
+            }
+        } else if (llen >= 6 && memcmp(p, "ORDER ", 6) == 0) {
+            const char *q = p + 6;
+            st->section_n = 0;
+            while (q < le && st->section_n < STORE_MAX_SUBS + 1) {
+                while (q < le && *q == ' ') ++q;
+                if (q >= le) break;
+                const char *sp = memchr(q, ' ', (size_t)(le - q));
+                if (!sp) sp = le;
+                int id = 0;
+                if (parse_int(q, sp, &id) == 0)
+                    st->section_order[st->section_n++] = id;
+                q = sp;
             }
         } else if (llen >= 4 && memcmp(p, "SRV ", 4) == 0) {
             const char *rest = p + 4;
@@ -454,6 +641,9 @@ store_status_t store_deserialize(store_t *st, const char *buf, size_t len) {
     }
 
     store_normalize(st);
+    for (size_t i = 0; i < STORE_MAX_SUBS; ++i)
+        if (expire_seen[i] && st->subs[i].used)
+            st->subs[i].expire = want_expire[i];
 
     if (want_sel >= 0 && (size_t)want_sel < st->n) st->selected = want_sel;
     else st->selected = -1;
