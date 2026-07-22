@@ -46,6 +46,11 @@ int main(void) {
                "?security=none&type=xhttp&path=%2Fxh&mode=packet-up#t", 1);
     check_link("vless://b831381d-6324-4d53-ad4f-8cda48b30811@1.2.3.4:443"
                "?security=tls&type=xhttp&path=%2Fxh&mode=stream-up&sni=ex.com#t", 1);
+    check_link("vless://b831381d-6324-4d53-ad4f-8cda48b30811@1.2.3.4:443"
+               "?security=reality&type=grpc&serviceName=Tun&pbk="
+               "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=&fp=chrome#t", 1);
+    check_link("vless://b831381d-6324-4d53-ad4f-8cda48b30811@1.2.3.4:443"
+               "?security=none&type=grpc&serviceName=Tun#t", 1);
     check_link("socks5://u:p@1.2.3.4:1080#s", 1);
     check_link("http://1.2.3.4:8080#h", 1);
 

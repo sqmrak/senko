@@ -33,6 +33,7 @@ typedef struct {
     int                   saw_settings;
     int                   peer_end;
     int                   security_tls; /* 1 if tls/reality (scheme https) */
+    int                   grpc; /* use the xray gRPC stream envelope */
 
     uint32_t peer_win, our_win;
     uint32_t up_peer_win, up_our_win; /* upload stream windows */
@@ -52,6 +53,8 @@ typedef struct {
     size_t  rx_len, rx_off;
     uint8_t app[XH_APP];
     size_t  app_len, app_off;
+    uint8_t grpc_rx[XH_APP];
+    size_t  grpc_rx_len;
 
 /* packet-up staging */
     uint8_t pkt[XH_PKT];
@@ -166,11 +169,12 @@ static int mode_for_open(const transport_tls_cfg_t *cfg, int is_reality_or_tls) 
 
 static int build_headers(uint8_t *out, size_t cap, size_t *n,
                          int is_post, const char *path, const char *host,
-                         int with_grpc, size_t content_len, int has_cl) {
+                         int with_grpc, size_t content_len, int has_cl,
+                         int is_https) {
     size_t off = 0;
     if (is_post) out[off++] = 0x83; /* post method */
     else         out[off++] = 0x82; /* get method */
-    out[off++] = 0x87; /* :scheme https */
+    out[off++] = is_https ? 0x87 : 0x86; /* :scheme https/http */
     if (hpack_idx_name(out, cap, &off, 4, path) != 0) return -1;
     if (hpack_idx_name(out, cap, &off, 1, host) != 0) return -1;
     if (with_grpc) {
@@ -223,6 +227,88 @@ static int app_push(xh_t *h, const uint8_t *p, size_t n) {
     if (h->app_len + n > sizeof h->app) return -1;
     memcpy(h->app + h->app_len, p, n);
     h->app_len += n;
+    return 0;
+}
+
+static int read_varint(const uint8_t *p, size_t n, size_t *used, uint32_t *value) {
+    uint32_t v = 0;
+    unsigned shift = 0;
+    size_t i;
+    for (i = 0; i < n && i < 5; ++i) {
+        uint8_t b = p[i];
+        v |= (uint32_t)(b & 0x7f) << shift;
+        if (!(b & 0x80)) {
+            *used = i + 1;
+            *value = v;
+            return 0;
+        }
+        shift += 7;
+    }
+    return -1;
+}
+
+/* Hunk is a tiny protobuf message with one bytes field: data = 1. */
+static int grpc_message_to_app(xh_t *h, const uint8_t *msg, size_t len) {
+    size_t pos = 0;
+    while (pos < len) {
+        size_t used;
+        uint32_t key, field_len;
+        unsigned wire;
+        if (read_varint(msg + pos, len - pos, &used, &key) != 0) return -1;
+        pos += used;
+        wire = key & 7u;
+        if ((key >> 3) == 1 && wire == 2) {
+            if (read_varint(msg + pos, len - pos, &used, &field_len) != 0)
+                return -1;
+            pos += used;
+            if (field_len > len - pos) return -1;
+            if (app_push(h, msg + pos, field_len) != 0) return -1;
+            pos += field_len;
+            continue;
+        }
+        switch (wire) {
+            case 0:
+                if (read_varint(msg + pos, len - pos, &used, &field_len) != 0)
+                    return -1;
+                pos += used;
+                break;
+            case 1:
+                if (len - pos < 8) return -1;
+                pos += 8;
+                break;
+            case 2:
+                if (read_varint(msg + pos, len - pos, &used, &field_len) != 0)
+                    return -1;
+                pos += used;
+                if (field_len > len - pos) return -1;
+                pos += field_len;
+                break;
+            case 5:
+                if (len - pos < 4) return -1;
+                pos += 4;
+                break;
+            default:
+                return -1;
+        }
+    }
+    return 0;
+}
+
+static int grpc_rx_push(xh_t *h, const uint8_t *data, size_t len) {
+    if (len > sizeof h->grpc_rx - h->grpc_rx_len) return -1;
+    memcpy(h->grpc_rx + h->grpc_rx_len, data, len);
+    h->grpc_rx_len += len;
+    while (h->grpc_rx_len >= 5) {
+        uint32_t msg_len = h2_u32(h->grpc_rx + 1);
+        size_t total = (size_t)msg_len + 5;
+        if (h->grpc_rx[0] != 0) return -1; /* compressed gRPC is unsupported */
+        if (total > sizeof h->grpc_rx) return -1;
+        if (h->grpc_rx_len < total) break;
+        if (grpc_message_to_app(h, h->grpc_rx + 5, msg_len) != 0) return -1;
+        if (h->grpc_rx_len > total)
+            memmove(h->grpc_rx, h->grpc_rx + total, h->grpc_rx_len - total);
+        h->grpc_rx_len -= total;
+    }
     return 0;
 }
 
@@ -291,7 +377,9 @@ static int process_frames(xh_t *h) {
                 dlen -= pad;
             }
             if (stream == h->dn_stream && dlen > 0) {
-                if (app_push(h, data, dlen) != 0) return TRANSPORT_ERR;
+                if (h->grpc) {
+                    if (grpc_rx_push(h, data, dlen) != 0) return TRANSPORT_ERR;
+                } else if (app_push(h, data, dlen) != 0) return TRANSPORT_ERR;
                 if (h->our_win > dlen) h->our_win -= (uint32_t)dlen;
                 else h->our_win = 0;
                 if (h->dn_our_win > dlen) h->dn_our_win -= (uint32_t)dlen;
@@ -306,7 +394,10 @@ static int process_frames(xh_t *h) {
                     h->dn_our_win += 65535;
                 }
             }
-            if ((flags & 0x01) && stream == h->dn_stream) h->peer_end = 1;
+            if ((flags & 0x01) && stream == h->dn_stream) {
+                if (h->grpc && h->grpc_rx_len != 0) return TRANSPORT_ERR;
+                h->peer_end = 1;
+            }
             continue;
         }
     }
@@ -341,6 +432,7 @@ static uint32_t alloc_sid(xh_t *h) {
 static int queue_boot(xh_t *h, const transport_tls_cfg_t *cfg, int is_sec) {
     h->mode = mode_for_open(cfg, is_sec);
     h->security_tls = is_sec;
+    h->grpc = cfg && cfg->xhttp_mode && strcmp(cfg->xhttp_mode, "grpc") == 0;
     h->next_sid = 1;
     h->seq = 0;
     h->peer_win = h->our_win = 65535;
@@ -380,8 +472,12 @@ static int queue_boot(xh_t *h, const transport_tls_cfg_t *cfg, int is_sec) {
     char path[400];
 
     if (h->mode == XH_MODE_ONE) {
-        path_with_padding(h->base_path, path, sizeof path);
-        if (build_headers(block, sizeof block, &blen, 1, path, h->host, 1, 0, 0) != 0)
+        if (h->grpc)
+            snprintf(path, sizeof path, "%s", h->base_path);
+        else
+            path_with_padding(h->base_path, path, sizeof path);
+        if (build_headers(block, sizeof block, &blen, 1, path, h->host, 1, 0, 0,
+                          h->security_tls) != 0)
             return -1;
         h->up_stream = h->dn_stream = alloc_sid(h); /* stream 1 both ways */
         if (frame_append(h, H2_HEADERS, 0x04, h->up_stream, block, blen) != 0)
@@ -391,7 +487,8 @@ static int queue_boot(xh_t *h, const transport_tls_cfg_t *cfg, int is_sec) {
         snprintf(path, sizeof path, "%s%s/", h->base_path, h->session);
         char path_pad[420];
         path_with_padding(path, path_pad, sizeof path_pad);
-        if (build_headers(block, sizeof block, &blen, 0, path_pad, h->host, 0, 0, 0) != 0)
+        if (build_headers(block, sizeof block, &blen, 0, path_pad, h->host, 0, 0, 0,
+                          h->security_tls) != 0)
             return -1;
         h->dn_stream = alloc_sid(h);
         if (frame_append(h, H2_HEADERS, 0x04 | 0x01, h->dn_stream, block, blen) != 0)
@@ -401,7 +498,8 @@ static int queue_boot(xh_t *h, const transport_tls_cfg_t *cfg, int is_sec) {
         blen = 0;
         snprintf(path, sizeof path, "%s%s/", h->base_path, h->session);
         path_with_padding(path, path_pad, sizeof path_pad);
-        if (build_headers(block, sizeof block, &blen, 1, path_pad, h->host, 1, 0, 0) != 0)
+        if (build_headers(block, sizeof block, &blen, 1, path_pad, h->host, 1, 0, 0,
+                          h->security_tls) != 0)
             return -1;
         h->up_stream = alloc_sid(h);
         if (frame_append(h, H2_HEADERS, 0x04, h->up_stream, block, blen) != 0)
@@ -410,7 +508,8 @@ static int queue_boot(xh_t *h, const transport_tls_cfg_t *cfg, int is_sec) {
         snprintf(path, sizeof path, "%s%s/", h->base_path, h->session);
         char path_pad[420];
         path_with_padding(path, path_pad, sizeof path_pad);
-        if (build_headers(block, sizeof block, &blen, 0, path_pad, h->host, 0, 0, 0) != 0)
+        if (build_headers(block, sizeof block, &blen, 0, path_pad, h->host, 0, 0, 0,
+                          h->security_tls) != 0)
             return -1;
         h->dn_stream = alloc_sid(h);
         h->up_stream = 0;
@@ -432,7 +531,8 @@ static int send_packet(xh_t *h, const uint8_t *buf, size_t len) {
 
     uint8_t block[512];
     size_t blen = 0;
-    if (build_headers(block, sizeof block, &blen, 1, path_pad, h->host, 0, len, 1) != 0)
+    if (build_headers(block, sizeof block, &blen, 1, path_pad, h->host, 0, len, 1,
+                      h->security_tls) != 0)
         return -1;
     uint32_t sid = alloc_sid(h);
 /* leave end stream for the data frame */
@@ -473,6 +573,38 @@ static void xh_close(void *handle) {
     free(h);
 }
 
+static size_t put_varint(uint8_t *dst, uint32_t value) {
+    size_t n = 0;
+    do {
+        uint8_t b = (uint8_t)(value & 0x7f);
+        value >>= 7;
+        if (value) b |= 0x80;
+        dst[n++] = b;
+    } while (value);
+    return n;
+}
+
+static int grpc_frame_append(xh_t *h, const uint8_t *data, size_t len,
+                             size_t *wire_len) {
+    uint8_t frame[16384 + 16];
+    size_t pos = 0;
+    size_t proto_len;
+
+    if (!len || len > 16368) return -1;
+    frame[pos++] = 0; /* uncompressed gRPC message */
+    proto_len = 1 + (len < 128 ? 1 : (len < 16384 ? 2 : 3)) + len;
+    h2_put_u32(frame + pos, (uint32_t)proto_len);
+    pos += 4;
+    frame[pos++] = 0x0a; /* Hunk.data */
+    pos += put_varint(frame + pos, (uint32_t)len);
+    memcpy(frame + pos, data, len);
+    pos += len;
+    if (frame_append(h, H2_DATA, 0, h->up_stream, frame, pos) != 0)
+        return -1;
+    if (wire_len) *wire_len = pos;
+    return 0;
+}
+
 static int xh_write(void *handle, const uint8_t *buf, size_t len) {
     xh_t *h = (xh_t *)handle;
     if (!h || h->state == XH_ST_FAIL) return TRANSPORT_ERR;
@@ -511,6 +643,31 @@ static int xh_write(void *handle, const uint8_t *buf, size_t len) {
         fr = flush_tx(h);
         if (fr < 0 && fr != TRANSPORT_WANT_WRITE) return fr;
         return (int)take;
+    }
+
+    if (h->grpc) {
+        size_t max = len;
+        size_t wire_len;
+        if (max > 16368) max = 16368;
+        if (h->peer_win < 8 || h->up_peer_win < 8) max = 0;
+        else {
+            if (max > h->peer_win - 8) max = h->peer_win - 8;
+            if (max > h->up_peer_win - 8) max = h->up_peer_win - 8;
+        }
+        if (max == 0) {
+            int pr = pump_rx(h);
+            if (pr < 0 && pr != TRANSPORT_WANT_READ) return pr;
+            fr = flush_tx(h);
+            if (fr < 0) return fr;
+            return TRANSPORT_WANT_WRITE;
+        }
+        if (grpc_frame_append(h, buf, max, &wire_len) != 0)
+            return TRANSPORT_WANT_WRITE;
+        h->peer_win -= (uint32_t)wire_len;
+        h->up_peer_win -= (uint32_t)wire_len;
+        fr = flush_tx(h);
+        if (fr < 0 && fr != TRANSPORT_WANT_WRITE) return fr;
+        return (int)max;
     }
 
 /* stream modes write data on the upload stream */

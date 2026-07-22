@@ -89,7 +89,8 @@ static const char k_array_cfg[] =
     "        \"streamSettings\": {"
     "          \"network\": \"grpc\","
     "          \"security\": \"tls\","
-    "          \"tlsSettings\": { \"serverName\": \"g.example\" }"
+    "          \"tlsSettings\": { \"serverName\": \"g.example\" },"
+    "          \"grpcSettings\": { \"serviceName\": \"edge\" }"
     "        }"
     "      }"
     "    ]"
@@ -164,7 +165,7 @@ int main(void) {
 
     ok("array parse ok",
        cfg_parse_subscription(k_array_cfg, strlen(k_array_cfg), srv, 16, &n) == CFG_OK);
-    ok("array yields 3 (grpc skipped)", n == 3);
+    ok("array keeps grpc", n == 4);
 
     ok("multi remark disambiguates host a",
        n >= 1 && strstr(srv[0].remark, "1.2.3.4") != NULL);
@@ -182,13 +183,19 @@ int main(void) {
        strcmp(srv[1].sid, "11") == 0 &&
        srv[1].port == 8443);
 
+    ok("grpc fields",
+       n >= 3 && srv[2].net == VL_NET_GRPC &&
+       strcmp(srv[2].path, "/edge/Tun") == 0 &&
+       strcmp(srv[2].mode, "grpc") == 0 &&
+       strcmp(srv[2].sni, "g.example") == 0);
+
     ok("xhttp fields",
-       n >= 3 && srv[2].net == VL_NET_XHTTP &&
-       strcmp(srv[2].path, "/api/") == 0 &&
-       strcmp(srv[2].mode, "packet-up") == 0 &&
-       strcmp(srv[2].ws_host, "host.example") == 0 &&
-       strcmp(srv[2].sni, "sni.example") == 0 &&
-       strcmp(srv[2].remark, "XHTTP node") == 0);
+       n >= 4 && srv[3].net == VL_NET_XHTTP &&
+       strcmp(srv[3].path, "/api/") == 0 &&
+       strcmp(srv[3].mode, "packet-up") == 0 &&
+       strcmp(srv[3].ws_host, "host.example") == 0 &&
+       strcmp(srv[3].sni, "sni.example") == 0 &&
+       strcmp(srv[3].remark, "XHTTP node") == 0);
 
     n = 0;
     ok("single object parse",
