@@ -273,11 +273,11 @@ df39e8e22764ed4534b9f0713e69c4a0  Applications/Senko.app/icon-terminal.png
 31e7a4543de636ea8994080ac3f6dcb3  Applications/Senko.app/miside-bg.jpg
 89ee5268be5d912a94ecd448cae8e7c1  Applications/Senko.app/miside-logo.png
 06dcb6cdc4f5da9cc911758528e59940  Applications/Senko.app/ouch.wav
-f13cdcdd87c08791086306b13ef508d2  Applications/Senko.app/senko
+88b0b0207f072a23fcf48f20c490881f  Applications/Senko.app/senko
 40fb49fdfc8a683205f84804895364f7  Applications/Senko.app/server-placeholder.png
 74c7a918fdb13149e14d7b524d0bbc36  Applications/Senko.app/sqmrak.jpg
 9fda8f3bc241d8b619e5cb752e4aa897  Library/LaunchDaemons/com.senko.senkod.plist
-e7765fcdfd2cd9242b449cde155ed146  usr/bin/senko-kick
+cf1f6eb2d5e80de8a7ff016846a7b84f  usr/bin/senko-kick
 6e471562d68c3d477827776951d5d160  usr/bin/senkoawgd
 7560395a968db0f873041356f756c83d  usr/bin/senkoctl
 06e4844d72968f0cac02066df6028fee  usr/bin/senkod
