@@ -300,18 +300,37 @@ static int spawn_senkod_direct(void) {
     };
 
     posix_spawn_file_actions_t fa;
-    posix_spawn_file_actions_init(&fa);
+    int action_rc = posix_spawn_file_actions_init(&fa);
+    if (action_rc != 0) {
+        char msg[128];
+        snprintf(msg, sizeof msg, "direct spawn setup failed (%d: %s)",
+                 action_rc, strerror(action_rc));
+        klog(msg);
+        return -1;
+    }
     /* keep daemon logs where the ui expects them */
-    posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, "/var/log/senkod.log",
-                                     O_WRONLY | O_CREAT | O_APPEND, 0644);
-    posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/var/log/senkod.log",
-                                     O_WRONLY | O_CREAT | O_APPEND, 0644);
+    action_rc = posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, "/var/log/senkod.log",
+                                                  O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (action_rc == 0)
+        action_rc = posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/var/log/senkod.log",
+                                                      O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (action_rc != 0) {
+        char msg[128];
+        snprintf(msg, sizeof msg, "direct spawn log setup failed (%d: %s)",
+                 action_rc, strerror(action_rc));
+        posix_spawn_file_actions_destroy(&fa);
+        klog(msg);
+        return -1;
+    }
 
     pid_t pid = 0;
     int rc = posix_spawn(&pid, BIN, &fa, NULL, argv, environ);
     posix_spawn_file_actions_destroy(&fa);
     if (rc != 0) {
-        klog("direct spawn failed");
+        char msg[128];
+        snprintf(msg, sizeof msg, "direct spawn failed (%d: %s)",
+                 rc, strerror(rc));
+        klog(msg);
         return -1;
     }
 
@@ -752,7 +771,7 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    if (wait_sock(30) == 0) {
+    if (wait_sock(60) == 0) {
         klog("already up via launchctl");
         return 0;
     }
@@ -780,7 +799,7 @@ int main(int argc, char **argv) {
         char *start[] = { lc, (char *)"start", (char *)LABEL, NULL };
         (void)run_argv(start);
 
-        if (wait_sock(80) == 0) {
+        if (wait_sock(180) == 0) {
             klog("up via launchctl");
             return 0;
         }
@@ -794,13 +813,13 @@ int main(int argc, char **argv) {
     }
 
     kill_senkod();
-    (void)wait_senkod_down(30);
-    (void)wait_sock_down(30);
+    (void)wait_senkod_down(60);
+    (void)wait_sock_down(60);
     unlink(SOCK);
     if (spawn_senkod_direct() != 0)
         return 4;
 
-    if (wait_sock(50) == 0) {
+    if (wait_sock(120) == 0) {
         klog("up via direct spawn");
         return 0;
     }

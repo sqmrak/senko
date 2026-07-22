@@ -252,20 +252,30 @@ static int senkoCtlAuth(int fd, NSString *sockPath) {
         if (access(path, X_OK) != 0) {
             detail = @"senko-kick missing, reinstall package";
         } else {
-            pid_t pid = 0;
-            char *argv[] = { (char *)path, NULL };
-            int rc = posix_spawn(&pid, path, NULL, NULL, argv, environ);
-            if (rc != 0) {
-                detail = @"cannot start senko-kick";
-            } else {
+            for (int attempt = 0; attempt < 3 && !ok; ++attempt) {
+                pid_t pid = 0;
+                char *argv[] = { (char *)path, NULL };
+                int rc = posix_spawn(&pid, path, NULL, NULL, argv, environ);
+                if (rc != 0) {
+                    detail = [NSString stringWithFormat:
+                              @"cannot start senko-kick (%d: %s)",
+                              rc, strerror(rc)];
+                    if (attempt < 2) usleep(250000);
+                    continue;
+                }
+
                 int st = 0;
-                while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
-                if (WIFEXITED(st) && WEXITSTATUS(st) == 0) {
+                pid_t waited;
+                do {
+                    waited = waitpid(pid, &st, 0);
+                } while (waited < 0 && errno == EINTR);
+                if (waited > 0 && WIFEXITED(st) && WEXITSTATUS(st) == 0) {
                     ok = YES;
                     detail = @"daemon started";
                 } else {
-                    int code = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+                    int code = waited > 0 && WIFEXITED(st) ? WEXITSTATUS(st) : -1;
                     detail = [NSString stringWithFormat:@"daemon start failed (%d)", code];
+                    break;
                 }
             }
         }
@@ -281,17 +291,11 @@ static int senkoCtlAuth(int fd, NSString *sockPath) {
             if (done) done(YES, nil);
             return;
         }
-/* kick once and poll */
+/* kick once and wait for launchd or the helper to finish */
         [self kickDaemon:^(BOOL kicked, NSString *detail) {
-            if (!kicked) {
-                NSString *msg = detail ? detail : @"daemon offline";
-                if (done)
-                    done(NO, [msg stringByAppendingString:@" (see /var/log/senko-kick.log)"]);
-                return;
-            }
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
                 BOOL up2 = NO;
-                for (int i = 0; i < 12 && !up2; ++i) {
+                for (int i = 0; i < 24 && !up2; ++i) {
                     NSString *r = [self blockingSend:@"STATUS" timeoutMs:800];
                     if (r && [r hasPrefix:@"STATE "]) up2 = YES;
                     else usleep(250000);
@@ -300,7 +304,9 @@ static int senkoCtlAuth(int fd, NSString *sockPath) {
                     if (up2) {
                         if (done) done(YES, detail ? detail : @"daemon started");
                     } else if (done) {
-                        done(NO, @"daemon still offline (see /var/log/senko-kick.log)");
+                        NSString *msg = detail ? detail : @"daemon still offline";
+                        done(NO, [msg stringByAppendingString:
+                                  @" (see /var/log/senko-kick.log)"]);
                     }
                 });
             });
