@@ -2,13 +2,13 @@
 # blocks come from libsystem
 
 # override the toolchain and sdk paths
-THEOS   ?= $(HOME)/theos
-TC      ?= $(firstword $(wildcard $(THEOS)/toolchain/linux/iphone/bin $(HOME)/theos/toolchain/linux/iphone/bin))
-SDK     ?= $(firstword $(wildcard $(SENKO_SDK_V7) $(HOME)/sdks-armv7 $(HOME)/sdks/iPhoneOS6.1.sdk $(HOME)/sdks))
+THEOS   ?= $(error set THEOS=/path/to/theos)
+TC      ?= $(if $(SENKO_TC),$(SENKO_TC),$(THEOS)/toolchain/linux/iphone/bin)
+SDK     ?= $(if $(SENKO_SDK_V7),$(SENKO_SDK_V7),$(error set SDK=/path/to/iphoneos.sdk))
 LDID    ?= $(TC)/ldid
 
 # set the target triple and arch for another slice
-#   make TRIPLE=arm64-apple-darwin SDK=$HOME/sdks/iPhoneOS10.3.sdk \
+#   make TRIPLE=arm64-apple-darwin SDK=/path/to/iphoneos-arm64.sdk \
 #        ARCH="-arch arm64 -miphoneos-version-min=7.0"
 TRIPLE  ?= arm-apple-darwin11
 CC      := $(TC)/clang -target $(TRIPLE) -B $(TC)

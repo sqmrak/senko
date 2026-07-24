@@ -1,10 +1,10 @@
 # cross-compile senkod against static openssl for jailbroken ios devices
 # static linkage keeps the runtime dependency limited to libsystem
 
-THEOS   ?= $(HOME)/theos
-TC      ?= $(THEOS)/toolchain/linux/iphone/bin
-SDK     ?= $(firstword $(wildcard $(SENKO_SDK_V7) $(HOME)/sdks-armv7 $(HOME)/sdks/iPhoneOS6.1.sdk))
-OSSL    ?= $(firstword $(wildcard $(SENKO_OSSL_V7) $(HOME)/src/openssl-build/install-arm-o1))
+THEOS   ?= $(error set THEOS=/path/to/theos)
+TC      ?= $(if $(SENKO_TC),$(SENKO_TC),$(THEOS)/toolchain/linux/iphone/bin)
+SDK     ?= $(if $(SENKO_SDK_V7),$(SENKO_SDK_V7),$(error set SDK=/path/to/iphoneos.sdk))
+OSSL    ?= $(if $(SENKO_OSSL_V7),$(SENKO_OSSL_V7),$(error set OSSL=/path/to/openssl-prefix))
 LDID    ?= $(TC)/ldid
 
 # target and library variables stay overrideable for each device slice

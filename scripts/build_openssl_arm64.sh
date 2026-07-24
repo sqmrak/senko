@@ -2,13 +2,13 @@
 # static openssl 3.x for ios arm64 (senkod tls stack)
 set -euo pipefail
 
-THEOS="${THEOS:-${HOME}/theos}"
-PREFIX="${SENKO_OSSL_V64:-${HOME}/src/openssl-build/install-arm64-o1}"
-SRC="${SENKO_OPENSSL_SRC:-${HOME}/src/openssl}"
-BLD="${SENKO_OPENSSL_BLD64:-${HOME}/src/openssl-build/arm64-o1}"
+THEOS="${THEOS:?set THEOS to theos root}"
+PREFIX="${SENKO_OSSL_V64:?set SENKO_OSSL_V64 to the arm64 openssl prefix}"
+SRC="${SENKO_OPENSSL_SRC:?set SENKO_OPENSSL_SRC to the openssl source directory}"
+BLD="${SENKO_OPENSSL_BLD64:-${PREFIX}/build-arm64}"
 TC="${SENKO_TC:-${THEOS}/toolchain/linux/iphone/bin}"
-ARM64_CLANG="${SENKO_ARM64_CLANG:-${HOME}/src/arm64-clang}"
-SDK="${SENKO_SDK_V64:-${HOME}/sdks/iPhoneOS11.4.sdk}"
+ARM64_CLANG="${SENKO_ARM64_CLANG:-${BLD}/arm64-clang}"
+SDK="${SENKO_SDK_V64:?set SENKO_SDK_V64 to the arm64 sdk}"
 
 if [[ -f "${PREFIX}/lib/libssl.a" && -f "${PREFIX}/lib/libcrypto.a" ]]; then
   echo "openssl arm64 already at ${PREFIX}"
@@ -27,7 +27,7 @@ EOF
 chmod +x "${ARM64_CLANG}"
 
 # openssl ios64-cross looks up CROSS_TOP/SDKs/CROSS_SDK
-CROSS_TOP="${HOME}/src/openssl-build/cross-top-arm64"
+CROSS_TOP="${SENKO_OPENSSL_CROSS_TOP:-${BLD}/cross-top-arm64}"
 mkdir -p "${CROSS_TOP}/SDKs"
 ln -sfn "${SDK}" "${CROSS_TOP}/SDKs/iPhoneOS.sdk"
 export CROSS_TOP

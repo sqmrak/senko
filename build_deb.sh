@@ -3,18 +3,18 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-# override with THEOS / SENKO_* env vars; defaults are portable under $HOME
-THEOS="${THEOS:-${HOME}/theos}"
+# require tool paths from the build environment
+THEOS="${THEOS:?set THEOS to theos root}"
 TC="${SENKO_TC:-${THEOS}/toolchain/linux/iphone/bin}"
 LIPO="${TC}/lipo"
 OUT="${ROOT}/senko-v1.0.2-stable.deb"
 # thin armv7 sdk: fat dylib remap is flaky on linux aarch64 hosts
-SDK_V7="${SENKO_SDK_V7:-${HOME}/sdks-armv7}"
-SDK_V64="${SENKO_SDK_V64:-${HOME}/sdks/iPhoneOS11.4.sdk}"
-OSSL_V7="${SENKO_OSSL_V7:-${HOME}/src/openssl-build/install-arm-o1}"
-OSSL_V64="${SENKO_OSSL_V64:-${HOME}/src/openssl-build/install-arm64-o1}"
+SDK_V7="${SENKO_SDK_V7:?set SENKO_SDK_V7 to the armv7 sdk}"
+SDK_V64="${SENKO_SDK_V64:?set SENKO_SDK_V64 to the arm64 sdk}"
+OSSL_V7="${SENKO_OSSL_V7:?set SENKO_OSSL_V7 to the armv7 openssl prefix}"
+OSSL_V64="${SENKO_OSSL_V64:?set SENKO_OSSL_V64 to the arm64 openssl prefix}"
 # static mbedtls for the tlsfix hook (no device-side dylib)
-MBED="${SENKO_MBED:-${HOME}/.cache/senko/mbedtls-ios-3.6.4}"
+MBED="${SENKO_MBED:?set SENKO_MBED to the mbedtls output directory}"
 STAGE="${ROOT}/packaging"
 SLICE="${ROOT}/.build-slices"
 
@@ -55,8 +55,10 @@ rm -rf "${SLICE}"
 mkdir -p "${SLICE}/armv7" "${SLICE}/arm64"
 
 echo "==> daemon armv7"
-make -C "${ROOT}/daemon" -f Makefile.ios clean
+make -C "${ROOT}/daemon" -f Makefile.ios clean \
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" SDK="${SDK_V7}" OSSL="${OSSL_V7}"
 make -C "${ROOT}/daemon" -f Makefile.ios \
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
   TRIPLE=arm-apple-darwin11 SDK="${SDK_V7}" \
   ARCH="-arch armv7 -miphoneos-version-min=5.0" OSSL="${OSSL_V7}" \
   IOS_BINDIR=build/ios-armv7 all
@@ -66,8 +68,10 @@ cp "${ROOT}/daemon/build/ios-armv7/senko-kick" "${SLICE}/armv7/senko-kick"
 cp "${ROOT}/daemon/build/ios-armv7/senkoawgd" "${SLICE}/armv7/senkoawgd"
 
 echo "==> daemon arm64"
-make -C "${ROOT}/daemon" -f Makefile.ios clean
+make -C "${ROOT}/daemon" -f Makefile.ios clean \
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" SDK="${SDK_V64}" OSSL="${OSSL_V64}"
 make -C "${ROOT}/daemon" -f Makefile.ios \
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
   TRIPLE=arm64-apple-darwin SDK="${SDK_V64}" \
   ARCH="-arch arm64 -miphoneos-version-min=7.0" OSSL="${OSSL_V64}" \
   IOS_BINDIR=build/ios-arm64 all
@@ -83,8 +87,10 @@ make_fat "${SLICE}/senkoawgd" "${SLICE}/armv7/senkoawgd" "${SLICE}/arm64/senkoaw
 "${TC}/ldid" -S "${SLICE}/senkod" "${SLICE}/senkoctl" "${SLICE}/senko-kick" "${SLICE}/senkoawgd"
 
 echo "==> app armv7"
-make -C "${ROOT}/app" clean
+make -C "${ROOT}/app" clean \
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" SDK="${SDK_V7}"
 make -C "${ROOT}/app" \
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
   TRIPLE=arm-apple-darwin11 SDK="${SDK_V7}" \
   ARCH="-arch armv7 -miphoneos-version-min=5.0" \
   OBJDIR=build/obj-armv7 BIN=build/senko-armv7
@@ -92,6 +98,7 @@ cp "${ROOT}/app/build/senko-armv7" "${SLICE}/senko-armv7"
 
 echo "==> app arm64"
 make -C "${ROOT}/app" \
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
   TRIPLE=arm64-apple-darwin SDK="${SDK_V64}" \
   ARCH="-arch arm64 -miphoneos-version-min=7.0" \
   OBJDIR=build/obj-arm64 BIN=build/senko-arm64
@@ -101,8 +108,10 @@ make_fat "${SLICE}/senko" "${SLICE}/senko-armv7" "${SLICE}/senko-arm64"
 "${TC}/ldid" -S"${ROOT}/app/entitlements.plist" "${SLICE}/senko"
 
 echo "==> senkotlsfix armv7"
-make -C "${ROOT}/senkotlsfix" -f Makefile.ios clean
+make -C "${ROOT}/senkotlsfix" -f Makefile.ios clean \
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" SDK="${SDK_V7}" MBED="${MBED}"
 make -C "${ROOT}/senkotlsfix" -f Makefile.ios \
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
   TRIPLE=arm-apple-darwin11 SDK="${SDK_V7}" \
   ARCH="-arch armv7 -miphoneos-version-min=5.0" \
   MBED="${MBED}" MBEDLIBS="${MBED}/lib/libmbedtls-armv7.a ${MBED}/lib/libmbedx509-armv7.a ${MBED}/lib/libmbedcrypto-armv7.a" \
@@ -111,6 +120,7 @@ cp "${ROOT}/senkotlsfix/senkotlsfix-armv7.dylib" "${SLICE}/"
 
 echo "==> senkotlsfix arm64"
 make -C "${ROOT}/senkotlsfix" -f Makefile.ios \
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
   TRIPLE=arm64-apple-darwin SDK="${SDK_V64}" \
   ARCH="-arch arm64 -miphoneos-version-min=7.0" \
   MBED="${MBED}" MBEDLIBS="${MBED}/lib/libmbedtls-arm64.a ${MBED}/lib/libmbedx509-arm64.a ${MBED}/lib/libmbedcrypto-arm64.a" \

@@ -1,11 +1,11 @@
 # keep the dylib self-contained because mobilesubstrate is optional at runtime
 
-THEOS   ?= $(HOME)/theos
-TC      ?= $(THEOS)/toolchain/linux/iphone/bin
-SDK     ?= $(firstword $(wildcard $(SENKO_SDK_V7) $(HOME)/sdks-armv7 $(HOME)/sdks/iPhoneOS6.1.sdk))
+THEOS   ?= $(error set THEOS=/path/to/theos)
+TC      ?= $(if $(SENKO_TC),$(SENKO_TC),$(THEOS)/toolchain/linux/iphone/bin)
+SDK     ?= $(if $(SENKO_SDK_V7),$(SENKO_SDK_V7),$(error set SDK=/path/to/iphoneos.sdk))
 LDID    ?= $(TC)/ldid
 # static archives from scripts/build_mbedtls.sh
-MBED    ?= $(firstword $(wildcard $(SENKO_MBED) $(HOME)/.cache/senko/mbedtls-ios-3.6.4 $(HOME)/src/mbedtls-ios))
+MBED    ?= $(if $(SENKO_MBED),$(SENKO_MBED),$(error set MBED=/path/to/mbedtls-output))
 
 TRIPLE  ?= arm-apple-darwin11
 CC      := $(TC)/clang -target $(TRIPLE) -B $(TC)

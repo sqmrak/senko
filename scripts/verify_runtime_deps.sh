@@ -8,7 +8,8 @@ if [ -z "${DEB}" ] || [ ! -f "${DEB}" ]; then
   exit 2
 fi
 
-TC="${HOME}/theos/toolchain/linux/iphone/bin"
+THEOS="${THEOS:?set THEOS to theos root}"
+TC="${SENKO_TC:-${THEOS}/toolchain/linux/iphone/bin}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 

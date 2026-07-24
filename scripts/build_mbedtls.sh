@@ -2,14 +2,14 @@
 # build static tls archives because the hook has no device-side dependency
 set -euo pipefail
 
-THEOS="${THEOS:-${HOME}/theos}"
+THEOS="${THEOS:?set THEOS to theos root}"
 TC="${SENKO_TC:-${THEOS}/toolchain/linux/iphone/bin}"
 VERSION="${MBEDTLS_VERSION:-3.6.4}"
 TAG="mbedtls-${VERSION}"
-OUT="${1:-${SENKO_MBED:-${HOME}/.cache/senko/mbedtls-ios-${VERSION}}}"
-SRC="${SENKO_MBED_SRC:-${HOME}/.cache/senko/mbedtls-${VERSION}}"
-SDK_V7="${SENKO_SDK_V7:-${HOME}/sdks-armv7}"
-SDK_V64="${SENKO_SDK_V64:-${HOME}/sdks/iPhoneOS11.4.sdk}"
+OUT="${1:-${SENKO_MBED:?set SENKO_MBED to the mbedtls output directory}}"
+SRC="${SENKO_MBED_SRC:?set SENKO_MBED_SRC to the mbedtls source directory}"
+SDK_V7="${SENKO_SDK_V7:?set SENKO_SDK_V7 to the armv7 sdk}"
+SDK_V64="${SENKO_SDK_V64:?set SENKO_SDK_V64 to the arm64 sdk}"
 
 if [ ! -d "${SRC}/.git" ]; then
   mkdir -p "$(dirname "${SRC}")"
