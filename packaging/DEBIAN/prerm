@@ -28,10 +28,14 @@ preserve_awg_for_upgrade() {
   /usr/bin/senko-kick --awg-stop >/dev/null 2>&1 || true
 }
 
-preserve_awg_for_upgrade "$1"
+if [ "${SENKO_UPDATE:-0}" != "1" ]; then
+  preserve_awg_for_upgrade "$1"
+fi
 
 printf '0\n' > "$VPNICON_STATE" 2>/dev/null || true
-launchctl unload "$PLIST" >/dev/null 2>&1 || true
+if [ "${SENKO_UPDATE:-0}" != "1" ]; then
+  launchctl unload "$PLIST" >/dev/null 2>&1 || true
+fi
 
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
   # leave the user config in place on plain remove; purge takes it.

@@ -37,15 +37,20 @@ extern char **environ;
 #define UPDATE_MAX_BYTES (64 * 1024 * 1024)
 #define UPDATE_AWG_MARKER "/var/run/senkoawgd.upgrade"
 #define KICK_LOCK "/var/tmp/senko-kick.lock"
+#define KICK_LOCK_WAIT_MS 5000
+#define COMMAND_TIMEOUT_MS 30000
+#define DPKG_TIMEOUT_MS 180000
 
 static int acquire_kick_lock(void) {
     int fd = open(KICK_LOCK, O_WRONLY | O_CREAT, 0600);
     if (fd < 0) return -1;
-    if (flock(fd, LOCK_EX) != 0) {
-        close(fd);
-        return -1;
+    for (int waited = 0; waited < KICK_LOCK_WAIT_MS; waited += 100) {
+        if (flock(fd, LOCK_EX | LOCK_NB) == 0) return fd;
+        if (errno != EWOULDBLOCK && errno != EAGAIN) break;
+        usleep(100000);
     }
-    return fd;
+    close(fd);
+    return -1;
 }
 
 static void klog(const char *msg) {
@@ -57,12 +62,45 @@ static void klog(const char *msg) {
     fprintf(stderr, "senko-kick: %s\n", msg);
 }
 
+static long elapsed_ms(const struct timeval *start, const struct timeval *end) {
+    return (end->tv_sec - start->tv_sec) * 1000L +
+           (end->tv_usec - start->tv_usec) / 1000L;
+}
+
+/* never leave dpkg, launchctl, or a helper waiting forever */
+static int wait_child_timeout(pid_t pid, int timeout_ms, int *status) {
+    struct timeval start, now;
+    gettimeofday(&start, NULL);
+    for (;;) {
+        pid_t got = waitpid(pid, status, WNOHANG);
+        if (got == pid) return 0;
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        gettimeofday(&now, NULL);
+        if (elapsed_ms(&start, &now) >= timeout_ms) break;
+        usleep(100000);
+    }
+
+    (void)kill(pid, SIGTERM);
+    for (int i = 0; i < 10; ++i) {
+        pid_t got = waitpid(pid, status, WNOHANG);
+        if (got == pid) return 124;
+        if (got < 0 && errno != EINTR) break;
+        usleep(100000);
+    }
+    (void)kill(pid, SIGKILL);
+    while (waitpid(pid, status, 0) < 0 && errno == EINTR) {}
+    return 124;
+}
+
 static int run_argv(char *const argv[]) {
     pid_t pid = 0;
     int rc = posix_spawn(&pid, argv[0], NULL, NULL, argv, environ);
     if (rc != 0) return -1;
     int st = 0;
-    while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+    if (wait_child_timeout(pid, COMMAND_TIMEOUT_MS, &st) != 0) return 124;
     if (!WIFEXITED(st)) return -1;
     return WEXITSTATUS(st);
 }
@@ -130,7 +168,7 @@ static int run_capture_text(char *const argv[], char *out, size_t cap) {
     return WEXITSTATUS(status);
 }
 
-static int run_logged(char *const argv[]) {
+static int run_logged_timeout(char *const argv[], int timeout_ms) {
     posix_spawn_file_actions_t fa;
     if (posix_spawn_file_actions_init(&fa) != 0) return -1;
     int action_rc = posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, UPDATE_LOG,
@@ -145,7 +183,7 @@ static int run_logged(char *const argv[]) {
     posix_spawn_file_actions_destroy(&fa);
     if (spawn_rc != 0) return -1;
     int status = 0;
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    if (wait_child_timeout(pid, timeout_ms, &status) != 0) return 124;
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
@@ -247,8 +285,8 @@ static int sock_alive(void) {
         return 0;
     }
     struct timeval tv;
-    tv.tv_sec = 1;
-    tv.tv_usec = 0;
+    tv.tv_sec = 0;
+    tv.tv_usec = 250000;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
     const char *req = "STATUS\n";
@@ -573,8 +611,8 @@ static void restore_awg_upgrade_state(void) {
     if (!ok) return;
     path[strcspn(path, "\r\n")] = '\0';
     if (!awg_path_ok(path) || access(path, R_OK) != 0) return;
-    char *argv[] = { (char *)"/usr/bin/senko-kick", (char *)"--awg", path, NULL };
-    (void)run_argv(argv);
+    /* stay in this process: spawning another kick would wait on our lock */
+    (void)awg_start(path);
 }
 
 static void stop_senkod_for_update(void) {
@@ -597,10 +635,10 @@ static void stop_senkod_for_update(void) {
     unlink(SOCK);
 }
 
+static int ensure_senkod(void);
+
 static int restart_senkod_after_update(void) {
-    char *argv[] = { (char *)"/usr/bin/senko-kick", NULL };
-    if (run_argv(argv) != 0) return -1;
-    return wait_sock(40);
+    return ensure_senkod();
 }
 
 static void update_stage(const char *name) {
@@ -613,6 +651,8 @@ static int update_package(const char *path) {
     setvbuf(stdout, NULL, _IONBF, 0);
     /* keep SpringBoard alive until dpkg exits */
     setenv("SENKO_SKIP_RESPRING", "1", 1);
+    /* postinst must not call kick while this update holds KICK_LOCK */
+    setenv("SENKO_UPDATE", "1", 1);
 
     if (!update_path_ok(path)) {
         fputs("UPDATE ERR invalid package path\n", stdout);
@@ -695,12 +735,16 @@ static int update_package(const char *path) {
 
     update_stage("installing");
     char *install_argv[] = { dpkg, (char *)"--install", (char *)pkg_path, NULL };
-    int rc = run_logged(install_argv);
+    int rc = run_logged_timeout(install_argv, DPKG_TIMEOUT_MS);
     unlink(staged);
     update_stage("starting daemon");
     int daemon_rc = restart_senkod_after_update();
     if (access(UPDATE_AWG_MARKER, F_OK) == 0)
         restore_awg_upgrade_state();
+    if (rc == 124) {
+        printf("UPDATE ERR dpkg timeout after %d seconds\n", DPKG_TIMEOUT_MS / 1000);
+        return 1;
+    }
     if (rc != 0) {
         printf("UPDATE ERR dpkg exit %d\n", rc);
         return 1;
@@ -712,10 +756,6 @@ static int update_package(const char *path) {
     update_stage("done");
     printf("UPDATE OK %s\n", version);
     return 0;
-}
-
-static long elapsed_ms(const struct timeval *start, const struct timeval *end) {
-    return (end->tv_sec - start->tv_sec) * 1000L + (end->tv_usec - start->tv_usec) / 1000L;
 }
 
 static int awg_probe(const char *config) {
@@ -737,7 +777,76 @@ static int awg_validate(const char *config) {
     return run_argv(argv);
 }
 
+/* repair launchd, then fall back to a direct start */
+static int ensure_senkod(void) {
+    if (sock_alive()) {
+        klog("already up");
+        return 0;
+    }
+
+    /* let a boot-time launchd start finish before taking over */
+    if (wait_sock(60) == 0) {
+        klog("already up via launchctl");
+        return 0;
+    }
+
+    if (access(BIN, X_OK) != 0) {
+        klog("/usr/bin/senkod missing");
+        return 2;
+    }
+
+    char lc[64];
+    static const char *lcs[] = {
+        "/bin/launchctl", "/usr/bin/launchctl",
+        "/sbin/launchctl", "/usr/sbin/launchctl", NULL
+    };
+    int have_lc = (find_bin(lcs, lc, sizeof lc) == 0);
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        if (have_lc && access(PLIST, R_OK) == 0) {
+            if (!launch_job_loaded(lc)) {
+                char *load[] = { lc, (char *)"load", (char *)PLIST, NULL };
+                if (run_argv(load) != 0) {
+                    char *loadw[] = { lc, (char *)"load", (char *)"-w",
+                                      (char *)PLIST, NULL };
+                    (void)run_argv(loadw);
+                }
+            }
+            char *start[] = { lc, (char *)"start", (char *)LABEL, NULL };
+            (void)run_argv(start);
+
+            if (wait_sock(180) == 0) {
+                klog("up via launchctl");
+                return 0;
+            }
+            if (launch_job_stop(lc) != 0) {
+                klog("launchd job still loaded; retrying repair");
+                (void)run_argv((char *[]) { lc, (char *)"remove", (char *)LABEL, NULL });
+                if (launch_job_loaded(lc)) return 5;
+            }
+            klog("launchd handoff complete, trying direct spawn");
+        } else {
+            klog("no launchctl/plist, direct spawn");
+        }
+
+        kill_senkod();
+        (void)wait_senkod_down(60);
+        (void)wait_sock_down(60);
+        unlink(SOCK);
+        if (spawn_senkod_direct() == 0 && wait_sock(120) == 0) {
+            klog("up via direct spawn");
+            return 0;
+        }
+
+        klog(attempt == 0 ? "direct start failed, retrying" :
+             "senkod did not open sock");
+    }
+
+    return 5;
+}
+
 int main(int argc, char **argv) {
+    signal(SIGPIPE, SIG_IGN);
     if (geteuid() != 0) {
         if (setuid(0) != 0) {
             klog("need root (setuid bit / reinstall deb as root)");
@@ -765,65 +874,5 @@ int main(int argc, char **argv) {
         return awg_validate(argv[2]) == 0 ? 0 : 1;
     if (argc == 3 && strcmp(argv[1], "--awg-probe") == 0) return awg_probe(argv[2]) == 0 ? 0 : 1;
     if (argc == 3 && strcmp(argv[1], "--update") == 0) return update_package(argv[2]);
-
-    if (sock_alive()) {
-        klog("already up");
-        return 0;
-    }
-
-    if (wait_sock(60) == 0) {
-        klog("already up via launchctl");
-        return 0;
-    }
-
-    if (access(BIN, X_OK) != 0) {
-        klog("/usr/bin/senkod missing");
-        return 2;
-    }
-
-    char lc[64];
-    static const char *lcs[] = {
-        "/bin/launchctl", "/usr/bin/launchctl",
-        "/sbin/launchctl", "/usr/sbin/launchctl", NULL
-    };
-    int have_lc = (find_bin(lcs, lc, sizeof lc) == 0);
-
-    if (have_lc && access(PLIST, R_OK) == 0) {
-        if (!launch_job_loaded(lc)) {
-            char *load[] = { lc, (char *)"load", (char *)PLIST, NULL };
-            if (run_argv(load) != 0) {
-                char *loadw[] = { lc, (char *)"load", (char *)"-w", (char *)PLIST, NULL };
-                (void)run_argv(loadw);
-            }
-        }
-        char *start[] = { lc, (char *)"start", (char *)LABEL, NULL };
-        (void)run_argv(start);
-
-        if (wait_sock(180) == 0) {
-            klog("up via launchctl");
-            return 0;
-        }
-        if (launch_job_stop(lc) != 0) {
-            klog("launchd job still loaded; refusing direct spawn");
-            return 5;
-        }
-        klog("launchd handoff complete, trying direct spawn");
-    } else {
-        klog("no launchctl/plist, direct spawn");
-    }
-
-    kill_senkod();
-    (void)wait_senkod_down(60);
-    (void)wait_sock_down(60);
-    unlink(SOCK);
-    if (spawn_senkod_direct() != 0)
-        return 4;
-
-    if (wait_sock(120) == 0) {
-        klog("up via direct spawn");
-        return 0;
-    }
-
-    klog("senkod did not open sock");
-    return 5;
+    return ensure_senkod();
 }

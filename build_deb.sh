@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 THEOS="${THEOS:-${HOME}/theos}"
 TC="${SENKO_TC:-${THEOS}/toolchain/linux/iphone/bin}"
 LIPO="${TC}/lipo"
-OUT="${ROOT}/senko-v1.0.1-stable.deb"
+OUT="${ROOT}/senko-v1.0.2-stable.deb"
 # thin armv7 sdk: fat dylib remap is flaky on linux aarch64 hosts
 SDK_V7="${SENKO_SDK_V7:-${HOME}/sdks-armv7}"
 SDK_V64="${SENKO_SDK_V64:-${HOME}/sdks/iPhoneOS11.4.sdk}"

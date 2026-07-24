@@ -98,7 +98,7 @@ manual packaging (after binaries are already fat under `packaging/`):
 echo "2.0" > debian-binary
 (cd packaging/DEBIAN && tar -czf ../../control.tar.gz control md5sums postinst postrm prerm)
 (cd packaging && tar -czf ../data.tar.gz --exclude='./DEBIAN' .)
-ar -r senko-v1.0.1-stable.deb debian-binary control.tar.gz data.tar.gz
+ar -r senko-v1.0.2-stable.deb debian-binary control.tar.gz data.tar.gz
 rm -f debian-binary control.tar.gz data.tar.gz
 ```
 

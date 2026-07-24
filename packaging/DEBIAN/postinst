@@ -155,33 +155,36 @@ fi
 chown root:wheel "$CFG" >/dev/null 2>&1 || true
 chmod 600 "$CFG" >/dev/null 2>&1 || true
 
-# give senkod time to remove routing before the forced stop
-launchctl unload "$PLIST" >/dev/null 2>&1 || true
-launchctl remove com.senko.senkod >/dev/null 2>&1 || true
-killall -TERM senkod >/dev/null 2>&1 || true
-sleep 1
-killall -TERM senkod >/dev/null 2>&1 || true
-sleep 1
-killall -9 senkod >/dev/null 2>&1 || true
-rm -f /var/tmp/senkod.sock /var/tmp/senkod.token
+# the update helper already stopped the daemon and owns kick.lock
+if [ "${SENKO_UPDATE:-0}" != "1" ]; then
+  # give senkod time to remove routing before the forced stop
+  launchctl unload "$PLIST" >/dev/null 2>&1 || true
+  launchctl remove com.senko.senkod >/dev/null 2>&1 || true
+  killall -TERM senkod >/dev/null 2>&1 || true
+  sleep 1
+  killall -TERM senkod >/dev/null 2>&1 || true
+  sleep 1
+  killall -9 senkod >/dev/null 2>&1 || true
+  rm -f /var/tmp/senkod.sock /var/tmp/senkod.token
 
-# load the job for this boot and keep it enabled
-launchctl load -w "$PLIST" >/dev/null 2>&1 || launchctl load "$PLIST" >/dev/null 2>&1 || true
-launchctl start com.senko.senkod >/dev/null 2>&1 || true
+  # load the job for this boot and keep it enabled
+  launchctl load -w "$PLIST" >/dev/null 2>&1 || launchctl load "$PLIST" >/dev/null 2>&1 || true
+  launchctl start com.senko.senkod >/dev/null 2>&1 || true
 
-# fall back to the setuid launcher if launchd stays silent
-if [ -x /usr/bin/senko-kick ]; then
-  /usr/bin/senko-kick >/dev/null 2>&1 || true
-fi
+  # fall back to the setuid launcher if launchd stays silent
+  if [ -x /usr/bin/senko-kick ]; then
+    /usr/bin/senko-kick >/dev/null 2>&1 || true
+  fi
 
-if [ -s "$UPDATE_AWG_MARKER" ] && [ -x /usr/bin/senko-kick ]; then
-  upgrade_config="$(sed -n '1p' "$UPDATE_AWG_MARKER" 2>/dev/null || true)"
-  case "$upgrade_config" in
-    /var/mobile/Library/Preferences/Senko/*.conf)
-      [ -r "$upgrade_config" ] && /usr/bin/senko-kick --awg "$upgrade_config" >/dev/null 2>&1 || true
-      ;;
-  esac
-  rm -f "$UPDATE_AWG_MARKER" >/dev/null 2>&1 || true
+  if [ -s "$UPDATE_AWG_MARKER" ] && [ -x /usr/bin/senko-kick ]; then
+    upgrade_config="$(sed -n '1p' "$UPDATE_AWG_MARKER" 2>/dev/null || true)"
+    case "$upgrade_config" in
+      /var/mobile/Library/Preferences/Senko/*.conf)
+        [ -r "$upgrade_config" ] && /usr/bin/senko-kick --awg "$upgrade_config" >/dev/null 2>&1 || true
+        ;;
+    esac
+    rm -f "$UPDATE_AWG_MARKER" >/dev/null 2>&1 || true
+  fi
 fi
 
 echo "Senko installed successfully. control socket: /var/tmp/senkod.sock"
