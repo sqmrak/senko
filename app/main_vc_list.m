@@ -803,20 +803,9 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
     if (scrW > scrH) { CGFloat t = scrH; scrH = scrW; scrW = t; } /* use the short side */
     BOOL compact = (!pad && scrH <= 568.0f);
     CGFloat side = compact ? 8.0f : 10.0f;
-    /* old ios can leave table bounds in portrait for one layout pass */
-    CGRect rawTableBounds = tv.bounds;
-    CGFloat w = CGRectGetWidth(tv.frame);
-    if (w < 1.0f) w = CGRectGetWidth(rawTableBounds);
-    UIInterfaceOrientation io = UIApplication.sharedApplication.statusBarOrientation;
-    BOOL orientationKnown = io == UIInterfaceOrientationPortrait ||
-        io == UIInterfaceOrientationPortraitUpsideDown ||
-        UIInterfaceOrientationIsLandscape(io);
-    if (orientationKnown) {
-        BOOL wantsLandscape = UIInterfaceOrientationIsLandscape(io);
-        BOOL boundsLandscape = rawTableBounds.size.width > rawTableBounds.size.height + 0.5f;
-        if (wantsLandscape != boundsLandscape)
-            w = CGRectGetWidth(SenkoViewBounds(tv));
-    }
+    /* use the current table width for the header plate */
+    CGFloat w = CGRectGetWidth(tv.bounds);
+    if (w < 1.0f) w = CGRectGetWidth(tv.frame);
     if (w < 160.0f) w = 160.0f;
     CGFloat plateW = w - side * 2.0f;
     CGFloat hh = pad ? 60.0f : 52.0f;
