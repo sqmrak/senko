@@ -26,8 +26,12 @@ static void SenkoSettingsStyleTable(UITableView *tv) {
     tv.separatorColor = SenkoThemeIsLight()
         ? [UIColor colorWithWhite:0 alpha:0.14f]
         : [UIColor colorWithWhite:1 alpha:0.16f];
-    if ([tv respondsToSelector:@selector(setSeparatorInset:)])
-        tv.separatorInset = UIEdgeInsetsMake(0, 16.0f, 0, 0);
+    if ([tv respondsToSelector:@selector(setSeparatorInset:)]) {
+        void (*setSeparatorInset)(id, SEL, UIEdgeInsets) =
+            (void (*)(id, SEL, UIEdgeInsets))objc_msgSend;
+        setSeparatorInset(tv, @selector(setSeparatorInset:),
+                          UIEdgeInsetsMake(0, 16.0f, 0, 0));
+    }
     if ([tv respondsToSelector:@selector(setBackgroundView:)])
         tv.backgroundView = nil;
 }
