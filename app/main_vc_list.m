@@ -197,7 +197,8 @@ static UIImage *SenkoSectionSnapshot(UIView *view) {
 
 BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
     if (!a || !b) return NO;
-    return a->port == b->port &&
+    return a->group == b->group &&
+           a->port == b->port &&
            [a->proto isEqualToString:b->proto] &&
            [a->net isEqualToString:b->net] &&
            [a->security isEqualToString:b->security] &&
@@ -231,6 +232,7 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
             [_sectionOrder addObject:[NSNumber numberWithInt:sub->index]];
     }
     _checkGeneration++;
+    [_pingingSubs removeAllObjects];
     [_serverStatus removeAllObjects];
     [self rebuildSections];
     [self reconcileSelectionAfterListKeeping:oldSelected];
@@ -900,7 +902,6 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
     BOOL showMore = (subIdx >= 0) || manualHasAwg;
     BOOL subPingBusy = subIdx >= 0 &&
         [_pingingSubs containsObject:[NSNumber numberWithInt:subIdx]];
-    BOOL showPing = showActions && !subPingBusy;
     if (showActions) {
         CGFloat cursor = CGRectGetWidth(plate.bounds) - actionRight - actionW;
         if (showMore) {
@@ -971,7 +972,9 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
         ping.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
         ping.contentMode = UIViewContentModeCenter;
         ping.imageView.contentMode = UIViewContentModeScaleAspectFit;
-        ping.hidden = !showPing;
+        ping.hidden = NO;
+        ping.enabled = !subPingBusy;
+        ping.alpha = subPingBusy ? 0.45f : 1.0f;
         [ping setImage:GaugeIcon(iconPx, iconTint)
               forState:UIControlStateNormal];
         if (manualHasAwg) {
@@ -1314,8 +1317,12 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
             [subIndexes containsObject:[NSNumber numberWithInt:subIdx]]) {
             UIView *header = [_table headerViewForSection:section];
             UIButton *ping = (UIButton *)[header viewWithTag:(3000 + subIdx)];
-            ping.hidden = ![_pingingSubs containsObject:
-                            [NSNumber numberWithInt:subIdx]];
+            if (![ping isKindOfClass:[UIButton class]]) continue;
+            BOOL busy = [_pingingSubs containsObject:
+                         [NSNumber numberWithInt:subIdx]];
+            ping.hidden = NO;
+            ping.enabled = !busy;
+            ping.alpha = busy ? 0.45f : 1.0f;
         }
     }
 }
@@ -1361,6 +1368,8 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
 }
 
 - (void)pingServersInSub:(int)subIdx {
+    NSNumber *subKey = [NSNumber numberWithInt:subIdx];
+    if ([_pingingSubs containsObject:subKey]) return;
     NSMutableArray *idxs = [NSMutableArray array];
     for (SenkoServer *sv in _servers) {
         if (sv->group == subIdx)
@@ -1370,7 +1379,7 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
         SetStatusDefault(_statusLabel, @"no servers in group");
         return;
     }
-    [_pingingSubs addObject:[NSNumber numberWithInt:subIdx]];
+    [_pingingSubs addObject:subKey];
     [self updateSubscriptionPingButtons:[NSSet setWithObject:
                                          [NSNumber numberWithInt:subIdx]]];
     _checkGeneration++;
@@ -1410,6 +1419,10 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
 }
 
 - (void)startStatusChecks {
+    NSSet *busySubs = [_pingingSubs copy];
+    [_pingingSubs removeAllObjects];
+    [self updateSubscriptionPingButtons:busySubs];
+    [busySubs release];
     _checkGeneration++;
 }
 
