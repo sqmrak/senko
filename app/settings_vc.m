@@ -19,6 +19,76 @@
 #import "meow.h"
 #import "app_common.h"
 
+static void SenkoSettingsStyleTable(UITableView *tv) {
+    if (!tv) return;
+    tv.backgroundColor = kBG;
+    tv.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
+    tv.separatorColor = SenkoThemeIsLight()
+        ? [UIColor colorWithWhite:0 alpha:0.14f]
+        : [UIColor colorWithWhite:1 alpha:0.16f];
+    if ([tv respondsToSelector:@selector(setSeparatorInset:)])
+        tv.separatorInset = UIEdgeInsetsMake(0, 16.0f, 0, 0);
+    if ([tv respondsToSelector:@selector(setBackgroundView:)])
+        tv.backgroundView = nil;
+}
+
+@interface SenkoSettingsCellBackground : UIView {
+    UIRectCorner _roundedCorners;
+}
+@property(nonatomic, assign) UIRectCorner roundedCorners;
+@end
+
+@implementation SenkoSettingsCellBackground
+
+- (UIRectCorner)roundedCorners {
+    return _roundedCorners;
+}
+
+- (void)setRoundedCorners:(UIRectCorner)corners {
+    if (_roundedCorners == corners) return;
+    _roundedCorners = corners;
+    [self setNeedsLayout];
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    if (!_roundedCorners) {
+        self.layer.mask = nil;
+        return;
+    }
+    CAShapeLayer *mask = [CAShapeLayer layer];
+    mask.frame = self.bounds;
+    mask.path = [UIBezierPath bezierPathWithRoundedRect:self.bounds
+                                       byRoundingCorners:_roundedCorners
+                                             cornerRadii:CGSizeMake(10.0f, 10.0f)].CGPath;
+    self.layer.mask = mask;
+}
+
+@end
+
+static void SenkoSettingsApplyCellBackground(UITableView *tv,
+                                              UITableViewCell *cell,
+                                              NSIndexPath *ip) {
+    SenkoSettingsCellBackground *bg = nil;
+    if ([cell.backgroundView isKindOfClass:[SenkoSettingsCellBackground class]]) {
+        bg = (SenkoSettingsCellBackground *)cell.backgroundView;
+    } else {
+        bg = [[[SenkoSettingsCellBackground alloc] initWithFrame:CGRectZero] autorelease];
+        cell.backgroundView = bg;
+    }
+    UIRectCorner corners = 0;
+    if (ip.row == 0)
+        corners |= UIRectCornerTopLeft | UIRectCornerTopRight;
+    if (ip.row == [tv numberOfRowsInSection:ip.section] - 1)
+        corners |= UIRectCornerBottomLeft | UIRectCornerBottomRight;
+    bg.roundedCorners = corners;
+    bg.backgroundColor = kCellHi;
+    bg.opaque = !SenkoThemeIsIos26();
+    cell.backgroundColor = [UIColor clearColor];
+    cell.opaque = !SenkoThemeIsIos26();
+    cell.contentView.backgroundColor = [UIColor clearColor];
+}
+
 
 @implementation SettingsVC {
 
@@ -58,13 +128,7 @@
                                         style:UITableViewStyleGrouped] autorelease];
     _tv.dataSource = self;
     _tv.delegate = self;
-    _tv.backgroundColor = kBG;
-    _tv.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
-    _tv.separatorColor = SenkoThemeIsLight()
-        ? [UIColor colorWithWhite:0 alpha:0.14f]
-        : [UIColor colorWithWhite:1 alpha:0.16f];
-    if ([_tv respondsToSelector:@selector(setBackgroundView:)])
-        _tv.backgroundView = nil;
+    SenkoSettingsStyleTable(_tv);
     [self.view addSubview:_tv];
     if (self.navigationController)
         StyleNavBarClassic(self.navigationController);
@@ -77,11 +141,7 @@
 - (void)themeDidChange:(NSNotification *)n {
     (void)n;
     SenkoApplyScreenChrome(self.view);
-    _tv.backgroundColor = kBG;
-    _tv.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
-    _tv.separatorColor = SenkoThemeIsLight()
-        ? [UIColor colorWithWhite:0 alpha:0.14f]
-        : [UIColor colorWithWhite:1 alpha:0.16f];
+    SenkoSettingsStyleTable(_tv);
     if (self.navigationController)
         StyleNavBarClassic(self.navigationController);
     [_tv reloadData];
@@ -167,8 +227,10 @@
     (void)tv; (void)s;
     if (![view respondsToSelector:@selector(textLabel)]) return;
     UILabel *label = [(UITableViewHeaderFooterView *)view textLabel];
-    label.font = [UIFont boldSystemFontOfSize:13.0f];
-    SenkoStyleAccentLabel(label);
+    label.font = [UIFont boldSystemFontOfSize:12.0f];
+    SenkoStyleMutedLabel(label);
+    label.shadowColor = nil;
+    label.shadowOffset = CGSizeZero;
 }
 
 - (void)tableView:(UITableView *)tv willDisplayFooterView:(UIView *)view
@@ -176,40 +238,15 @@
     (void)tv; (void)s;
     if (![view respondsToSelector:@selector(textLabel)]) return;
     UILabel *label = [(UITableViewHeaderFooterView *)view textLabel];
-    label.font = [UIFont systemFontOfSize:11.0f];
+    label.font = [UIFont systemFontOfSize:12.0f];
     SenkoStyleMutedLabel(label);
+    label.shadowColor = nil;
+    label.shadowOffset = CGSizeZero;
 }
 
 - (void)tableView:(UITableView *)tv willDisplayCell:(UITableViewCell *)cell
  forRowAtIndexPath:(NSIndexPath *)ip {
-    (void)tv; (void)ip;
-    UIView *bg = cell.backgroundView;
-    if (!bg) {
-        bg = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
-        cell.backgroundView = bg;
-    }
-    bg.backgroundColor = kCellHi;
-    bg.layer.cornerRadius = 10.0f;
-    bg.layer.masksToBounds = YES;
-    bg.opaque = !SenkoThemeIsIos26();
-    UIView *line = [bg viewWithTag:9122];
-    if (!line) {
-        line = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
-        line.tag = 9122;
-        line.autoresizingMask = UIViewAutoresizingFlexibleWidth |
-                                 UIViewAutoresizingFlexibleTopMargin;
-        [bg addSubview:line];
-    }
-    NSInteger rowCount = [tv numberOfRowsInSection:ip.section];
-    line.hidden = (ip.row >= rowCount - 1);
-    line.frame = CGRectMake(12.0f, MAX(0.0f, bg.bounds.size.height - 1.0f),
-                            MAX(0.0f, bg.bounds.size.width - 24.0f), 1.0f);
-    line.backgroundColor = SenkoThemeIsLight()
-        ? [UIColor colorWithWhite:0 alpha:0.16f]
-        : [UIColor colorWithWhite:1 alpha:0.22f];
-    cell.backgroundColor = [UIColor clearColor];
-    cell.opaque = !SenkoThemeIsIos26();
-    cell.contentView.backgroundColor = [UIColor clearColor];
+    SenkoSettingsApplyCellBackground(tv, cell, ip);
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
@@ -222,21 +259,15 @@
     cell.accessoryType = UITableViewCellAccessoryNone;
     cell.accessoryView = nil;
     cell.detailTextLabel.text = nil;
-    SenkoStyleInkLabel(cell.textLabel);
-    SenkoStyleAccentLabel(cell.detailTextLabel);
-    cell.textLabel.font = [UIFont boldSystemFontOfSize:15];
-    cell.detailTextLabel.font = [UIFont systemFontOfSize:14];
-    UIView *bg = cell.backgroundView;
-    if (!bg) {
-        bg = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
-        cell.backgroundView = bg;
-    }
-    bg.backgroundColor = kCellHi;
-    bg.layer.cornerRadius = 10.0f;
-    bg.layer.masksToBounds = YES;
-    bg.opaque = !SenkoThemeIsIos26();
-    cell.backgroundColor = [UIColor clearColor];
-    cell.contentView.backgroundColor = [UIColor clearColor];
+    cell.textLabel.textColor = kInk;
+    cell.textLabel.shadowColor = nil;
+    cell.textLabel.shadowOffset = CGSizeZero;
+    cell.detailTextLabel.textColor = kInkMuted;
+    cell.detailTextLabel.shadowColor = nil;
+    cell.detailTextLabel.shadowOffset = CGSizeZero;
+    cell.textLabel.font = [UIFont systemFontOfSize:16.0f];
+    cell.detailTextLabel.font = [UIFont systemFontOfSize:13.0f];
+    SenkoSettingsApplyCellBackground(tv, cell, ip);
     cell.textLabel.backgroundColor = [UIColor clearColor];
     cell.detailTextLabel.backgroundColor = [UIColor clearColor];
 
@@ -263,8 +294,6 @@
             UISwitch *sw = [[[UISwitch alloc] initWithFrame:CGRectZero] autorelease];
             sw.on = [[NSUserDefaults standardUserDefaults] boolForKey:SENKO_HIDE_LINKS_KEY];
             [sw addTarget:self action:@selector(hideLinksChanged:) forControlEvents:UIControlEventValueChanged];
-            if ([sw respondsToSelector:@selector(setOnTintColor:)])
-                sw.onTintColor = kAccentBlue;
             cell.accessoryView = sw;
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
         } else if (ip.row == 1) {
