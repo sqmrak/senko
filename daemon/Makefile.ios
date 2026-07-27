@@ -6,6 +6,7 @@ TC      ?= $(if $(SENKO_TC),$(SENKO_TC),$(THEOS)/toolchain/linux/iphone/bin)
 SDK     ?= $(if $(SENKO_SDK_V7),$(SENKO_SDK_V7),$(error set SDK=/path/to/iphoneos.sdk))
 OSSL    ?= $(if $(SENKO_OSSL_V7),$(SENKO_OSSL_V7),$(error set OSSL=/path/to/openssl-prefix))
 LDID    ?= $(TC)/ldid
+CRT     ?=
 
 # target and library variables stay overrideable for each device slice
 TRIPLE  ?= arm-apple-darwin11
@@ -16,7 +17,8 @@ CFLAGS  := -std=c99 -Wall -Wextra -O2 -DSENKO_RELEASE $(ARCH) -isysroot $(SDK) \
            -Icore -Icore/third_party -I. -I$(OSSL)/include
 # link archives directly because device openssl is not a supported dependency
 LIBS    := $(OSSL)/lib/libssl.a $(OSSL)/lib/libcrypto.a -lz
-LDFLAGS := $(ARCH) -isysroot $(SDK)
+LDFLAGS := $(ARCH) -isysroot $(SDK) \
+           $(if $(CRT),-nostartfiles $(CRT),)
 
 CORE_SRC = core/vless.c core/b64.c core/config.c core/happ.c core/third_party/cJSON.c core/net_safe.c core/socks5.c core/senko_trace.c core/senko_replay.c core/senko_upload.c \
            core/vless_conn.c core/session.c core/store.c core/control.c \

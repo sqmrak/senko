@@ -75,6 +75,7 @@ set the toolchain and dependency paths before building:
 export THEOS=/path/to/theos
 export SENKO_SDK_V7=/path/to/iphoneos-armv7.sdk
 export SENKO_SDK_V64=/path/to/iphoneos-arm64.sdk
+export SENKO_CRT_V7=/path/to/armv7/crt1.3.1.o
 export SENKO_OSSL_V7=/path/to/openssl-armv7
 export SENKO_OSSL_V64=/path/to/openssl-arm64
 export SENKO_MBED=/path/to/mbedtls-output

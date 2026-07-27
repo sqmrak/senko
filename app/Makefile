@@ -6,6 +6,7 @@ THEOS   ?= $(error set THEOS=/path/to/theos)
 TC      ?= $(if $(SENKO_TC),$(SENKO_TC),$(THEOS)/toolchain/linux/iphone/bin)
 SDK     ?= $(if $(SENKO_SDK_V7),$(SENKO_SDK_V7),$(error set SDK=/path/to/iphoneos.sdk))
 LDID    ?= $(TC)/ldid
+CRT     ?=
 
 # set the target triple and arch for another slice
 #   make TRIPLE=arm64-apple-darwin SDK=/path/to/iphoneos-arm64.sdk \
@@ -23,7 +24,8 @@ LDFLAGS := $(ARCH) -isysroot $(SDK) \
            -framework CoreGraphics -framework QuartzCore \
            -framework AudioToolbox \
            -weak_framework AVFoundation \
-           -weak_framework CoreMedia -weak_framework CoreVideo
+           -weak_framework CoreMedia -weak_framework CoreVideo \
+           $(if $(CRT),-nostartfiles $(CRT),)
 
 QUIRC   := third_party/quirc
 FLAG_SRC := $(wildcard icons/flags/*.png)

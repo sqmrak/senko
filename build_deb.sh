@@ -61,6 +61,7 @@ make -C "${ROOT}/daemon" -f Makefile.ios \
   THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
   TRIPLE=arm-apple-darwin11 SDK="${SDK_V7}" \
   ARCH="-arch armv7 -miphoneos-version-min=5.0" OSSL="${OSSL_V7}" \
+  CRT="${CRT_V7}" \
   IOS_BINDIR=build/ios-armv7 all
 cp "${ROOT}/daemon/build/ios-armv7/senkod" "${SLICE}/armv7/senkod"
 cp "${ROOT}/daemon/build/ios-armv7/senkoctl" "${SLICE}/armv7/senkoctl"
@@ -93,6 +94,7 @@ make -C "${ROOT}/app" \
   THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
   TRIPLE=arm-apple-darwin11 SDK="${SDK_V7}" \
   ARCH="-arch armv7 -miphoneos-version-min=5.0" \
+  CRT="${CRT_V7}" \
   OBJDIR=build/obj-armv7 BIN=build/senko-armv7
 cp "${ROOT}/app/build/senko-armv7" "${SLICE}/senko-armv7"
 
