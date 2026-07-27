@@ -7,10 +7,11 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 THEOS="${THEOS:?set THEOS to theos root}"
 TC="${SENKO_TC:-${THEOS}/toolchain/linux/iphone/bin}"
 LIPO="${TC}/lipo"
-OUT="${ROOT}/senko-v1.0.2-stable.deb"
+OUT="${ROOT}/senko-v1.0.3-stable.deb"
 # thin armv7 sdk: fat dylib remap is flaky on linux aarch64 hosts
 SDK_V7="${SENKO_SDK_V7:?set SENKO_SDK_V7 to the armv7 sdk}"
 SDK_V64="${SENKO_SDK_V64:?set SENKO_SDK_V64 to the arm64 sdk}"
+CRT_V7="${SENKO_CRT_V7:?set SENKO_CRT_V7 to the armv7 startup object}"
 OSSL_V7="${SENKO_OSSL_V7:?set SENKO_OSSL_V7 to the armv7 openssl prefix}"
 OSSL_V64="${SENKO_OSSL_V64:?set SENKO_OSSL_V64 to the arm64 openssl prefix}"
 # static mbedtls for the tlsfix hook (no device-side dylib)
