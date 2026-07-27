@@ -477,7 +477,7 @@ static SenkoSub *parseSUB(NSString *line) {
 }
 
 - (void)connectIndex:(int)idx reply:(void (^)(NSString *))done {
-/* leave room for four failovers */
+/* wait for the selected server handshake */
     [self sendCommand:[NSString stringWithFormat:@"CONNECT %d", idx]
             timeoutMs:45000
                 reply:done];

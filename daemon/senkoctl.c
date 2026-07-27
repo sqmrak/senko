@@ -152,7 +152,7 @@ static ssize_t read_line(int fd, char *buf, size_t cap) {
     return -1;
 }
 
-/* bound control reads so dead daemons and failover cannot hang the cli */
+/* bound control reads so a dead daemon cannot hang the cli */
 static ssize_t talk_ex(const char *sock, const char *line, size_t line_len,
                        char *buf, size_t cap, int timeout_sec,
                        int (*done)(const char *, size_t)) {
@@ -333,7 +333,7 @@ int main(int argc, char **argv) {
     char buf[65536];
     int is_tunnel = (strcmp(cmd, "connect") == 0 || strcmp(cmd, "disconnect") == 0);
     int is_ping = (strcmp(cmd, "ping") == 0);
-/* leave timeout headroom for failover verification and two ping samples */
+/* leave timeout headroom for verification and two ping samples */
     int timeout_sec = is_tunnel ? 60 : (is_ping ? 8 : 5);
     int (*done)(const char *, size_t) =
         is_tunnel ? tunnel_reply_complete : reply_complete;
