@@ -285,19 +285,20 @@ int main(void) {
     write(cli, "CONNECT 0\n", 10);
     exchange(&s, cli, buf, sizeof buf);
     ok("start fail surfaces error", strstr(buf, "STATE error\n") != NULL);
-    ok("failed failover keeps requested selection", s.engine.store.selected == 0);
+    ok("failed connect keeps requested selection", s.engine.store.selected == 0);
 
     rec.fail_next = 0;
+    rec.last_index = -1;
     g_verify_fail = 1;
     write(cli, "CONNECT 0\n", 10);
     exchange(&s, cli, buf, sizeof buf);
-    ok("fallback connect succeeds", strstr(buf, "STATE connected\n") != NULL);
-    ok("fallback keeps requested selection", s.engine.store.selected == 0);
-    ok("fallback applies next server", rec.last_index == 1);
+    ok("strict connect reports failure", strstr(buf, "STATE error\n") != NULL);
+    ok("strict connect keeps requested selection", s.engine.store.selected == 0);
+    ok("strict connect does not switch server", rec.last_index == 0);
 
     write(cli, "DISCONNECT\n", 11);
     exchange(&s, cli, buf, sizeof buf);
-    ok("fallback test disconnects", strcmp(buf, "STATE idle\n") == 0);
+    ok("strict test disconnects", strcmp(buf, "STATE idle\n") == 0);
 
     /* use a fixed refresh body */
     memset(&g_fetch, 0, sizeof g_fetch);

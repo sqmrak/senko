@@ -339,9 +339,6 @@ static void fetch_reply_body(ctl_client_t *c,
 
 static int server_supported(const vl_server_t *sv);
 
-/* cap failover tries */
-#define CONNECT_FAILOVER_MAX 4
-
 typedef struct {
     char layer[24];
     char reason[120];
@@ -405,14 +402,14 @@ static int client_still_open(const ctl_client_t *c) {
     return 1;
 }
 
-/* try servers until one passes both probes */
+/* connect only to the selected server */
 static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_idx) {
     if (!s || !s->apply) return -1;
     store_t *st = &s->engine.store;
     if (!st->n) return -1;
 
     size_t base = (start_idx >= 0 && (size_t)start_idx < st->n) ? (size_t)start_idx : 0;
-    size_t tries = st->n < CONNECT_FAILOVER_MAX ? st->n : CONNECT_FAILOVER_MAX;
+    size_t tries = 1;
     int orig_sel = st->selected;
     int requested_sel = (int)base;
     connect_failure_t last_fail;
@@ -484,13 +481,9 @@ static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_
             return -1;
         }
 
-/* keep the requested selection during failover */
         st->selected = requested_sel;
         if (s->persist && st->selected != orig_sel)
             s->persist(s->apply_ctx, st);
-        if ((int)i != requested_sel)
-            fprintf(stderr, "senkod: connected via fallback server %zu (requested %d)\n",
-                    i, requested_sel);
         if (c) {
             if (on > 0) client_write(c, out, on);
             char ev[64]; size_t en = 0;
@@ -513,7 +506,6 @@ static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_
         s->apply(s->apply_ctx, &stop);
         s->engine.state = CTL_STATE_IDLE;
     }
-/* keep the requested row selected */
     st->selected = requested_sel;
     if (s->persist) s->persist(s->apply_ctx, st);
     if (c && client_still_open(c)) {
