@@ -49,7 +49,7 @@
     name.backgroundColor = [UIColor clearColor];
     name.font = [UIFont boldSystemFontOfSize:15];
     SenkoStyleInkLabel(name);
-    name.text = [NSString stringWithFormat:@"Senko %@\ngithub.com/sqmrak", SENKO_VERSION];
+    name.text = [NSString stringWithFormat:@"Senko %@\ngithub.com/sqmrak\nhttps://t.me/sqmrakdev", SENKO_VERSION];
     [_card addSubview:name];
 
     _info = [[UIView alloc] initWithFrame:CGRectZero];
@@ -70,15 +70,27 @@
     _bodyLbl.text = SenkoAboutAppReport();
     [_info addSubview:_bodyLbl];
 
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(languageDidChange:)
+                                                 name:SenkoLanguageDidChangeNotification
+                                               object:nil];
+
     [self layoutAbout];
 }
 
 - (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     [_scroll release];
     [_card release];
     [_info release];
     [_bodyLbl release];
     [super dealloc];
+}
+
+- (void)languageDidChange:(NSNotification *)n {
+    (void)n;
+    _bodyLbl.text = SenkoAboutAppReport();
+    [self layoutAbout];
 }
 
 - (void)layoutAbout {

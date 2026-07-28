@@ -1,4 +1,5 @@
 #import "server_cell.h"
+#import "app_common.h"
 #import "ui_theme.h"
 
 #import <QuartzCore/QuartzCore.h>
@@ -76,7 +77,7 @@ static NSString *ServerProtocolLabel(SenkoServer *server) {
 }
 
 static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
-    if (hideLinks) return @"hidden :3";
+    if (hideLinks) return SenkoLocalizedText(@"hidden :3");
     return [NSString stringWithFormat:@"%@:%d",
             server->host ? server->host : @"", server->port];
 }

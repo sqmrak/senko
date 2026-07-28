@@ -140,6 +140,10 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
                                              selector:@selector(themeDidChange:)
                                                  name:SenkoThemeDidChangeNotification
                                                object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(languageDidChange:)
+                                                 name:SenkoLanguageDidChangeNotification
+                                               object:nil];
 }
 
 - (void)themeDidChange:(NSNotification *)n {
@@ -148,6 +152,11 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
     SenkoSettingsStyleTable(_tv);
     if (self.navigationController)
         StyleNavBarClassic(self.navigationController);
+    [_tv reloadData];
+}
+
+- (void)languageDidChange:(NSNotification *)n {
+    (void)n;
     [_tv reloadData];
 }
 
@@ -199,13 +208,13 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
 
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
     if (s == 0) return 4;
-    return 5; /* hide, themes, logs, update, about */
+    return 6;
 }
 
 - (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s {
     (void)tv;
     if (s == 0) return @"DAEMON";
-    if (s == 1) return @"UTILITIES";
+    if (s == 1) return @"GENERAL";
     return nil;
 }
 
@@ -287,13 +296,13 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
             cell.detailTextLabel.text = SENKO_VERSION;
         } else {
             cell.textLabel.text = @"Edit selected server";
-            cell.detailTextLabel.text = @"manual profiles only";
+            cell.detailTextLabel.text = @"manual";
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             cell.selectionStyle = UITableViewCellSelectionStyleBlue;
         }
     } else {
         if (ip.row == 0) {
-            cell.textLabel.text = @"Hide server links";
+            cell.textLabel.text = @"Hide links";
             cell.detailTextLabel.text = nil;
             UISwitch *sw = [[[UISwitch alloc] initWithFrame:CGRectZero] autorelease];
             sw.on = [[NSUserDefaults standardUserDefaults] boolForKey:SENKO_HIDE_LINKS_KEY];
@@ -315,6 +324,15 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
             cell.detailTextLabel.text = @"install a .deb";
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+        } else if (ip.row == 4) {
+            cell.textLabel.text = SenkoLocalizedText(@"Russian/English");
+            cell.detailTextLabel.text = nil;
+            UISwitch *sw = [[[UISwitch alloc] initWithFrame:CGRectZero] autorelease];
+            sw.on = SenkoLanguageIsRussian();
+            [sw addTarget:self action:@selector(languageSwitchChanged:)
+          forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView = sw;
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
         } else {
             cell.textLabel.text = @"About";
             cell.detailTextLabel.text = nil;
@@ -323,6 +341,10 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
         }
     }
     return cell;
+}
+
+- (void)languageSwitchChanged:(UISwitch *)sw {
+    SenkoSetLanguage(sw.on);
 }
 
 - (void)hideLinksChanged:(UISwitch *)sw {
@@ -437,7 +459,7 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
             [self.navigationController pushViewController:vc animated:YES];
         } else if (ip.row == 3) {
             [self openUpdateBrowser];
-        } else if (ip.row == 4) {
+        } else if (ip.row == 5) {
             AboutVC *vc = [[[AboutVC alloc] init] autorelease];
             [self.navigationController pushViewController:vc animated:YES];
         }

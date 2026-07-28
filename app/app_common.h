@@ -12,6 +12,7 @@
 #define SENKO_AWG_PROFILE_KEY @"SenkoAWGProfilePath"
 #define SENKO_AWG_PROFILE_PATH @"/var/mobile/Library/Preferences/Senko/amneziawg.conf"
 #define SENKO_SELECTED_BACKEND_KEY @"SenkoSelectedBackend"
+#define SENKO_LANGUAGE_KEY @"SenkoLanguage"
 
 typedef NS_ENUM(NSInteger, SenkoBackendKind) {
     SenkoBackendServer = 0,
@@ -20,6 +21,13 @@ typedef NS_ENUM(NSInteger, SenkoBackendKind) {
 };
 
 NSString *SenkoAboutAppReport(void);
+extern NSString * const SenkoLanguageDidChangeNotification;
+BOOL SenkoLanguageIsRussian(void);
+void SenkoSetLanguage(BOOL russian);
+NSString *SenkoLanguageName(void);
+NSString *SenkoLocalizedText(NSString *text);
+void SenkoLocalizationInstall(void);
+void SenkoRelocalizeAllWindows(void);
 
 @class EditServerVC;
 @class FileImportVC;

@@ -99,7 +99,7 @@
     NSString *awg = [NSString stringWithContentsOfFile:@"/var/log/senkoawgd.log"
                                                 encoding:NSUTF8StringEncoding error:nil];
     if (![vless length] && ![awg length]) {
-        _textView.text = @"No daemon logs available";
+        _textView.text = SenkoLocalizedText(@"No daemon logs available");
     } else {
         NSString *content = [NSString stringWithFormat:@"[senkod]\n%@\n[senkoawgd]\n%@",
                              vless ? vless : @"(no log)", awg ? awg : @"(no log)"];
@@ -115,4 +115,3 @@
 }
 
 @end
-

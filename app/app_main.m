@@ -46,6 +46,26 @@ static BOOL ExternalTlsfixInstalled(void) {
 
 NSString *SenkoAboutAppReport(void) {
     int tlsfix = ExternalTlsfixInstalled();
+    if (SenkoLanguageIsRussian()) {
+        return [NSString stringWithFormat:
+                @"Полноценный VLESS- и AmneziaWG-клиент для джейлбрейкнутых iOS 5-10.\n"
+                 "Для маршрутизации всего устройства нужен root.\n\n"
+                 "Протоколы\n"
+                 "- VLESS + TCP (none / TLS / Reality+Vision)\n"
+                 "- VLESS + WebSocket / XHTTP\n"
+                 "- AmneziaWG\n"
+                 "- SOCKS5, HTTP(S) CONNECT\n\n"
+                 "Пути\n"
+                 "Управление: %@\n"
+                 "Конфигурация: /var/root/Library/Preferences/senko.cfg\n"
+                 "Логи: /var/log/senkod.log, /var/log/senkoawgd.log\n\n"
+                 "TLS-хук: %@\n\n"
+                 "Тестеры: ogeprint, rafal_official, nifty, wolfer, lineysom, lime, fr0n1k, inraxx, qualcomm",
+                SENKO_SOCK,
+                tlsfix
+                    ? @"внешний tlsfix найден, хуки senkotlsfix отключены"
+                    : @"senkotlsfix для TLS1.3 Safari при установленном MobileSubstrate"];
+    }
     return [NSString stringWithFormat:
             @"Full-device VLESS and AmneziaWG client for jailbroken iOS 5-10.\n"
              "Needs root for full-device routing.\n\n"
@@ -86,6 +106,7 @@ int main(int argc, char **argv) {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     if (!ExternalTlsfixInstalled())
         (void)dlopen("/usr/lib/senkotlsfix.dylib", RTLD_NOW | RTLD_GLOBAL);
+    SenkoLocalizationInstall();
     InitPalette();
     SenkoMeowInstallHooks();
     int rc = UIApplicationMain(argc, argv, nil, @"AppDelegate");

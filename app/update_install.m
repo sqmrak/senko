@@ -1,6 +1,7 @@
 #import "update_install.h"
 #import "control_client.h"
 #import "ui_theme.h"
+#import "app_common.h"
 
 #import <QuartzCore/QuartzCore.h>
 
@@ -32,6 +33,7 @@
 
 - (void)appendLog:(NSString *)line {
     if (![line length]) return;
+    line = SenkoLocalizedText(line);
     NSString *cur = _log.text ? _log.text : @"";
     _log.text = [cur stringByAppendingFormat:@"%@\n", line];
     if ([_log.text length] > 2) {

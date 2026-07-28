@@ -46,6 +46,7 @@ THEME_SRC := \
 # ui chrome/style + screens (main_vc / ui_chrome split into modules)
 APP_SRC := \
 	app_main.m \
+	localization.m \
 	main_vc.m \
 	main_vc_decor.m \
 	main_vc_list.m \

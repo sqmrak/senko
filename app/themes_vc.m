@@ -1,6 +1,7 @@
 #import "themes_vc.h"
 #import "ui_theme.h"
 #import "meow.h"
+#import "app_common.h"
 #include <objc/message.h>
 
 /* theme list inside one group (ios / custom /...) */
@@ -88,8 +89,14 @@ static BOOL SenkoHostIsIos6or7(void) {
 }
 
 - (CGFloat)tableView:(UITableView *)tv heightForRowAtIndexPath:(NSIndexPath *)ip {
-    (void)tv; (void)ip;
-    return 52.0f;
+    NSString *tid = [_ids objectAtIndex:ip.row];
+    NSString *blurb = SenkoLocalizedText(SenkoThemeBlurb(tid));
+    CGFloat width = tv.bounds.size.width - 76.0f;
+    if (width < 160.0f) width = 160.0f;
+    CGSize size = [blurb sizeWithFont:[UIFont systemFontOfSize:12.0f]
+                    constrainedToSize:CGSizeMake(width, 120.0f)
+                        lineBreakMode:NSLineBreakByWordWrapping];
+    return MAX(52.0f, 22.0f + size.height + 18.0f);
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
@@ -106,6 +113,8 @@ static BOOL SenkoHostIsIos6or7(void) {
     cell.backgroundColor = kCellHi;
     cell.textLabel.backgroundColor = [UIColor clearColor];
     cell.detailTextLabel.backgroundColor = [UIColor clearColor];
+    cell.detailTextLabel.numberOfLines = 0;
+    cell.detailTextLabel.lineBreakMode = NSLineBreakByWordWrapping;
     BOOL on = [tid isEqualToString:SenkoThemeCurrentId()];
     cell.accessoryType = on ? UITableViewCellAccessoryCheckmark
                             : UITableViewCellAccessoryNone;
@@ -370,7 +379,8 @@ static BOOL SenkoHostIsIos6or7(void) {
         if (![seg isKindOfClass:[UISegmentedControl class]]) {
             [[cell.contentView viewWithTag:9201] removeFromSuperview];
             seg = [[[UISegmentedControl alloc] initWithItems:
-                    [NSArray arrayWithObjects:@"Dark", @"Light", nil]] autorelease];
+                    [NSArray arrayWithObjects:SenkoLocalizedText(@"Dark"),
+                     SenkoLocalizedText(@"Light"), nil]] autorelease];
             seg.tag = 9201;
             seg.autoresizingMask = UIViewAutoresizingFlexibleWidth |
                                    UIViewAutoresizingFlexibleTopMargin |
