@@ -133,6 +133,25 @@ ctl_status_t ctl_engine_handle(ctl_engine_t *e, const ctl_cmd_t *cmd,
             return ctl_build_ok(msg, out, cap, out_len);
         }
 
+        case CTL_CMD_SET_SUB_HEADER: {
+            int si = cmd->server_index;
+            if (si < 0 || si >= STORE_MAX_SUBS || !e->store.subs[si].used)
+                return ctl_build_err("no such subscription", out, cap, out_len);
+            char decoded[sizeof e->store.subs[si].header];
+            if (strcmp(cmd->text, "-") == 0) {
+                decoded[0] = '\0';
+            } else if (url_percent_decode(cmd->text, strlen(cmd->text),
+                                          decoded, sizeof decoded) < 0) {
+                return ctl_build_err("invalid request header", out, cap, out_len);
+            }
+            store_status_t r = store_set_sub_header(&e->store, (size_t)si, decoded);
+            if (r == STORE_ERR_TOO_LONG)
+                return ctl_build_err("request header too long", out, cap, out_len);
+            if (r != STORE_OK)
+                return ctl_build_err("invalid request header", out, cap, out_len);
+            return ctl_build_ok("subscription header saved", out, cap, out_len);
+        }
+
         case CTL_CMD_DEL_SUB: {
             int si = cmd->server_index;
             if (si < 0 || si >= STORE_MAX_SUBS || !e->store.subs[si].used)

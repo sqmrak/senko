@@ -34,6 +34,7 @@ typedef struct {
     void            *pump_ctx;
     const transport_vt_t *tcp;
     const transport_vt_t *tls;
+    const char *request_header; /* only for the subscription HTTP request */
     int max_redirects; /* zero uses five hops */
 } subfetch_cfg_t;
 

@@ -142,7 +142,8 @@ static subfetch_status_t fetch_once(const subfetch_cfg_t *cfg, const url_t *u,
     subfetch_status_t result = SUBFETCH_ERR_HTTP;
     do {
         char req[2048]; size_t reqlen = 0;
-        if (url_build_get_cookie(u, cookie_jar, req, sizeof req, &reqlen) != URL_OK) {
+        if (url_build_get_cookie_header(u, cookie_jar, cfg->request_header,
+                                        req, sizeof req, &reqlen) != URL_OK) {
             result = SUBFETCH_ERR_URL; break;
         }
         size_t off = 0;

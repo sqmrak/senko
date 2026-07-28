@@ -342,6 +342,33 @@ void store_set_sub_expire(store_t *st, size_t sub_index, uint64_t expire) {
     st->subs[sub_index].expire = expire;
 }
 
+static int valid_sub_header(const char *header) {
+    if (!header || !header[0]) return 1;
+    const char *colon = strchr(header, ':');
+    if (!colon || colon == header) return 0;
+    for (const char *p = header; p < colon; ++p) {
+        unsigned char c = (unsigned char)*p;
+        if (c <= 0x20 || c >= 0x7f) return 0;
+    }
+    for (const char *p = colon + 1; *p; ++p) {
+        unsigned char c = (unsigned char)*p;
+        if (c < 0x20 || c == 0x7f) return 0;
+    }
+    return 1;
+}
+
+store_status_t store_set_sub_header(store_t *st, size_t sub_index,
+                                    const char *header) {
+    if (!st || !header) return STORE_ERR_ARG;
+    if (sub_index >= STORE_MAX_SUBS || !st->subs[sub_index].used)
+        return STORE_ERR_RANGE;
+    size_t n = strlen(header);
+    if (n >= sizeof st->subs[sub_index].header) return STORE_ERR_TOO_LONG;
+    if (!valid_sub_header(header)) return STORE_ERR_PARSE;
+    memcpy(st->subs[sub_index].header, header, n + 1);
+    return STORE_OK;
+}
+
 store_status_t store_select(store_t *st, int index) {
     if (!st) return STORE_ERR_ARG;
     if (index == -1) { st->selected = -1; return STORE_OK; }
@@ -481,6 +508,12 @@ store_status_t store_serialize(const store_t *st, char *buf, size_t cap, size_t 
                      (unsigned long long)st->subs[i].expire);
         if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
         off += (size_t)n;
+        char header[1536];
+        if (pct_encode(st->subs[i].header, header, sizeof header) < 0)
+            return STORE_ERR_FULL;
+        n = snprintf(buf + off, cap - off, "SUBHDR %zu %s\n", i, header);
+        if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
+        off += (size_t)n;
     }
 
     n = snprintf(buf + off, cap - off, "ORDER");
@@ -600,6 +633,25 @@ store_status_t store_deserialize(store_t *st, const char *buf, size_t len) {
                     idx >= 0 && idx < STORE_MAX_SUBS) {
                     want_expire[idx] = expire;
                     expire_seen[idx] = 1;
+                }
+            }
+        } else if (llen >= 7 && memcmp(p, "SUBHDR ", 7) == 0) {
+            const char *rest = p + 7;
+            const char *sp = memchr(rest, ' ', (size_t)(le - rest));
+            if (sp) {
+                int idx = -1;
+                if (parse_int(rest, sp, &idx) == 0 &&
+                    idx >= 0 && idx < STORE_MAX_SUBS && st->subs[idx].used) {
+                    char decoded[sizeof st->subs[idx].header];
+                    size_t enc_len = (size_t)(le - sp - 1);
+                    if (enc_len == 1 && sp[1] == '-') {
+                        decoded[0] = '\0';
+                    } else if (url_percent_decode(sp + 1, enc_len,
+                                                   decoded, sizeof decoded) < 0) {
+                        decoded[0] = '\0';
+                    }
+                    if (valid_sub_header(decoded))
+                        memcpy(st->subs[idx].header, decoded, strlen(decoded) + 1);
                 }
             }
         } else if (llen >= 6 && memcmp(p, "ORDER ", 6) == 0) {

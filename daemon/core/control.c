@@ -71,6 +71,19 @@ ctl_status_t ctl_parse_cmd(const char *line, size_t len, ctl_cmd_t *out) {
         out->server_index = idx; /* store the subscription index */
         return CTL_OK;
     }
+    if (verb_is(line, len, "SETSUBHDR", &rest, &rl)) {
+        const char *sp = memchr(rest, ' ', rl);
+        int idx = -1;
+        if (!sp || parse_int_span(rest, (size_t)(sp - rest), &idx) != 0 || idx < 0)
+            return CTL_ERR_PARSE;
+        size_t hl = rl - (size_t)(sp - rest) - 1;
+        if (hl >= sizeof out->text) return CTL_ERR_PARSE;
+        memcpy(out->text, sp + 1, hl);
+        out->text[hl] = '\0';
+        out->server_index = idx;
+        out->kind = CTL_CMD_SET_SUB_HEADER;
+        return CTL_OK;
+    }
     if (verb_is(line, len, "ADDSRV", &rest, &rl)) {
         if (rl == 0 || rl >= sizeof out->text) return CTL_ERR_PARSE;
         memcpy(out->text, rest, rl);
@@ -284,6 +297,35 @@ ctl_status_t ctl_build_submeta(int idx, uint64_t expire,
     if (!buf) return CTL_ERR_ARG;
     return finish(snprintf(buf, cap, "SUBMETA %d %llu\n", idx,
                            (unsigned long long)expire), cap, n);
+}
+
+static int ctl_pct_encode(const char *src, char *dst, size_t cap) {
+    static const char hex[] = "0123456789ABCDEF";
+    size_t off = 0;
+    if (!src || !dst || cap == 0) return -1;
+    for (const unsigned char *p = (const unsigned char *)src; *p; ++p) {
+        unsigned char c = *p;
+        if (c <= 0x20 || c >= 0x7f || c == '%' || c == '#' || c == '+') {
+            if (off + 3 >= cap) return -1;
+            dst[off++] = '%';
+            dst[off++] = hex[c >> 4];
+            dst[off++] = hex[c & 0xf];
+        } else {
+            if (off + 1 >= cap) return -1;
+            dst[off++] = (char)c;
+        }
+    }
+    dst[off] = '\0';
+    return 0;
+}
+
+ctl_status_t ctl_build_subhdr(int idx, const char *header,
+                              char *buf, size_t cap, size_t *n) {
+    if (!buf || !header) return CTL_ERR_ARG;
+    char encoded[1536];
+    if (!header[0]) return finish(snprintf(buf, cap, "SUBHDR %d -\n", idx), cap, n);
+    if (ctl_pct_encode(header, encoded, sizeof encoded) != 0) return CTL_ERR_BUF;
+    return finish(snprintf(buf, cap, "SUBHDR %d %s\n", idx, encoded), cap, n);
 }
 
 ctl_status_t ctl_build_link(int idx, const char *link, char *buf, size_t cap, size_t *n) {

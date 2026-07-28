@@ -1,6 +1,7 @@
 #include "url.h"
 #include "net_safe.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -64,60 +65,90 @@ url_status_t url_parse(const char *url, url_t *out) {
     return URL_OK;
 }
 
-url_status_t url_build_get_cookie(const url_t *u, const char *cookie,
-                                  char *buf, size_t cap, size_t *out_len) {
+static int header_valid(const char *header) {
+    if (!header || !header[0]) return 1;
+    const char *colon = strchr(header, ':');
+    if (!colon || colon == header) return 0;
+    for (const char *p = header; p < colon; ++p) {
+        unsigned char c = (unsigned char)*p;
+        if (c <= 0x20 || c >= 0x7f) return 0;
+    }
+    for (const char *p = colon + 1; *p; ++p) {
+        unsigned char c = (unsigned char)*p;
+        if (c < 0x20 || c == 0x7f) return 0;
+    }
+    return 1;
+}
+
+static int header_name_is(const char *header, const char *name) {
+    if (!header || !header[0] || !name) return 0;
+    const char *colon = strchr(header, ':');
+    size_t n = strlen(name);
+    if (!colon || (size_t)(colon - header) != n) return 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (tolower((unsigned char)header[i]) != tolower((unsigned char)name[i]))
+            return 0;
+    }
+    return 1;
+}
+
+url_status_t url_build_get_cookie_header(const url_t *u, const char *cookie,
+                                         const char *request_header,
+                                         char *buf, size_t cap, size_t *out_len) {
     if (!u || !buf) return URL_ERR_ARG;
+    if (!header_valid(request_header)) return URL_ERR_UNSAFE;
 
     int default_port = u->is_https ? 443 : 80;
-    int n;
     const char *ck = (cookie && cookie[0]) ? cookie : NULL;
-    if (u->port == default_port) {
-        if (ck)
-            n = snprintf(buf, cap,
-                "GET %s HTTP/1.0\r\n"
-                "Host: %s\r\n"
-                "User-Agent: senko/1\r\n"
-                "Accept: */*\r\n"
-                "Cookie: %s\r\n"
-                "Connection: close\r\n"
-                "\r\n",
-                u->path, u->host, ck);
-        else
-            n = snprintf(buf, cap,
-                "GET %s HTTP/1.0\r\n"
-                "Host: %s\r\n"
-                "User-Agent: senko/1\r\n"
-                "Accept: */*\r\n"
-                "Connection: close\r\n"
-                "\r\n",
-                u->path, u->host);
-    } else {
-        if (ck)
-            n = snprintf(buf, cap,
-                "GET %s HTTP/1.0\r\n"
-                "Host: %s:%u\r\n"
-                "User-Agent: senko/1\r\n"
-                "Accept: */*\r\n"
-                "Cookie: %s\r\n"
-                "Connection: close\r\n"
-                "\r\n",
-                u->path, u->host, u->port, ck);
-        else
-            n = snprintf(buf, cap,
-                "GET %s HTTP/1.0\r\n"
-                "Host: %s:%u\r\n"
-                "User-Agent: senko/1\r\n"
-                "Accept: */*\r\n"
-                "Connection: close\r\n"
-                "\r\n",
-                u->path, u->host, u->port);
+    const char *hdr = (request_header && request_header[0]) ? request_header : NULL;
+    int custom_ua = header_name_is(hdr, "User-Agent");
+    int custom_accept = header_name_is(hdr, "Accept");
+    int custom_cookie = header_name_is(hdr, "Cookie");
+    size_t off = 0;
+    int n = snprintf(buf + off, cap - off, "GET %s HTTP/1.0\r\nHost: %s",
+                     u->path, u->host);
+    if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
+    off += (size_t)n;
+    if (u->port != default_port) {
+        n = snprintf(buf + off, cap - off, ":%u", u->port);
+        if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
+        off += (size_t)n;
     }
-    if (n < 0) return URL_ERR_ARG;
-    if ((size_t)n >= cap) return URL_ERR_TOOLONG;
-    if (out_len) *out_len = (size_t)n;
+    n = snprintf(buf + off, cap - off, "\r\n");
+    if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
+    off += (size_t)n;
+    if (!custom_ua) {
+        n = snprintf(buf + off, cap - off, "User-Agent: senko/1\r\n");
+        if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
+        off += (size_t)n;
+    }
+    if (!custom_accept) {
+        n = snprintf(buf + off, cap - off, "Accept: */*\r\n");
+        if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
+        off += (size_t)n;
+    }
+    if (hdr) {
+        n = snprintf(buf + off, cap - off, "%s\r\n", hdr);
+        if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
+        off += (size_t)n;
+    }
+    if (ck && !custom_cookie) {
+        n = snprintf(buf + off, cap - off, "Cookie: %s\r\n", ck);
+        if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
+        off += (size_t)n;
+    }
+    n = snprintf(buf + off, cap - off, "Connection: close\r\n\r\n");
+    if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
+    off += (size_t)n;
+    if (out_len) *out_len = off;
     return URL_OK;
 }
 
+url_status_t url_build_get_cookie(const url_t *u, const char *cookie,
+                                  char *buf, size_t cap, size_t *out_len) {
+    return url_build_get_cookie_header(u, cookie, NULL, buf, cap, out_len);
+}
+
 url_status_t url_build_get(const url_t *u, char *buf, size_t cap, size_t *out_len) {
-    return url_build_get_cookie(u, NULL, buf, cap, out_len);
+    return url_build_get_cookie_header(u, NULL, NULL, buf, cap, out_len);
 }

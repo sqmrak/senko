@@ -24,7 +24,8 @@ typedef enum {
     CTL_CMD_GET_SERVER,
     CTL_CMD_AUTH,
     CTL_CMD_MOVE_SECTION,
-    CTL_CMD_MOVE_MANUAL
+    CTL_CMD_MOVE_MANUAL,
+    CTL_CMD_SET_SUB_HEADER
 } ctl_cmd_kind_t;
 
 typedef struct {
@@ -32,7 +33,7 @@ typedef struct {
     int            server_index; /* command target */
     int            target_index;
 /* keep the url and name separate */
-    char           text[1024];
+    char           text[2048];
     char           name[64];
 } ctl_cmd_t;
 
@@ -75,6 +76,8 @@ ctl_status_t ctl_build_srv(int idx, int selected, int group,
                            char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_listend(int count, char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_submeta(int idx, uint64_t expire,
+                               char *buf, size_t cap, size_t *n);
+ctl_status_t ctl_build_subhdr(int idx, const char *header,
                                char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_link(int idx, const char *link, char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_move_section(int section_id, int to_pos,

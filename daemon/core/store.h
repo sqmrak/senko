@@ -17,6 +17,7 @@ extern "C" {
 typedef struct {
     char name[64];
     char url[512];
+    char header[512]; /* optional HTTP header for subscription fetches */
     uint64_t expire;
     int  used;
 } store_sub_t;
@@ -70,6 +71,10 @@ store_status_t store_move_manual(store_t *st, size_t index, size_t to_pos);
 store_status_t store_remove_sub(store_t *st, size_t sub_index);
 
 void store_set_sub_expire(store_t *st, size_t sub_index, uint64_t expire);
+
+/* set a single optional HTTP request header for subscription refreshes */
+store_status_t store_set_sub_header(store_t *st, size_t sub_index,
+                                    const char *header);
 
 store_status_t store_select(store_t *st, int index);
 

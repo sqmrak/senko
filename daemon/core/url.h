@@ -31,6 +31,9 @@ url_status_t url_parse(const char *url, url_t *out);
 url_status_t url_build_get(const url_t *u, char *buf, size_t cap, size_t *out_len);
 url_status_t url_build_get_cookie(const url_t *u, const char *cookie,
                                   char *buf, size_t cap, size_t *out_len);
+url_status_t url_build_get_cookie_header(const url_t *u, const char *cookie,
+                                         const char *request_header,
+                                         char *buf, size_t cap, size_t *out_len);
 
 #ifdef __cplusplus
 }
