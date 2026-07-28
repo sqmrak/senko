@@ -111,8 +111,10 @@
     NSString *port = [_port.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     NSString *uuid = [_uuid.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (![address length] || ![port length] || ![uuid length]) return;
-    NSString *security = [_security titleForSegmentAtIndex:_security.selectedSegmentIndex];
-    NSString *transport = [_transport titleForSegmentAtIndex:_transport.selectedSegmentIndex];
+    NSArray *securityValues = [NSArray arrayWithObjects:@"none", @"tls", @"reality", nil];
+    NSArray *transportValues = [NSArray arrayWithObjects:@"tcp", @"ws", @"xhttp", nil];
+    NSString *security = [securityValues objectAtIndex:_security.selectedSegmentIndex];
+    NSString *transport = [transportValues objectAtIndex:_transport.selectedSegmentIndex];
     NSMutableString *uri = [NSMutableString stringWithFormat:@"vless://%@@%@:%@?security=%@&type=%@",
                             uuid, address, port, [security lowercaseString], [transport lowercaseString]];
     NSArray *keys = [NSArray arrayWithObjects:@"flow", @"sni", @"fp", @"path", nil];
@@ -241,7 +243,7 @@
         ([type isEqualToString:@"xhttp"] ? 2 : 0);
 
     _security = [[UISegmentedControl alloc] initWithItems:
-                 [NSArray arrayWithObjects:@"NONE", @"TLS", @"REALITY", nil]];
+                 [NSArray arrayWithObjects:@"НЕТ", @"TLS", @"REALITY", nil]];
     SenkoStyleGlassSegmented(_security);
     NSString *sec = [self queryValue:@"security" query:query];
     _security.selectedSegmentIndex = [sec isEqualToString:@"tls"] ? 1 :
