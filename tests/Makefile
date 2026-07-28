@@ -22,7 +22,7 @@ HOST_TESTS = test_ctl_server test_session_direct test_config_compat \
              test_pf_natlook test_reality_crypto test_tls13_kdf \
              test_tls13_keysched test_tls13_record test_vision \
              test_transport_pick test_awg_config test_awg_handshake test_awg_tunnel test_awg_route \
-             test_xray_json
+             test_xray_json test_url_headers
 
 all: test
 
@@ -46,6 +46,10 @@ test: $(HOST_TESTS)
 	./test_awg_tunnel
 	./test_awg_route
 	./test_xray_json
+	./test_url_headers
+
+test_url_headers: test_url_headers.c $(CORE)/url.c $(CORE)/net_safe.c $(CORE)/url.h
+	$(CC) $(CFLAGS) test_url_headers.c $(CORE)/url.c $(CORE)/net_safe.c -o $@
 
 test_awg_config: test_awg_config.c $(CORE)/awg_config.c $(CORE)/awg_config.h $(CORE)/b64.c $(CORE)/b64.h
 	$(CC) $(CFLAGS) test_awg_config.c $(CORE)/awg_config.c $(CORE)/b64.c -o $@

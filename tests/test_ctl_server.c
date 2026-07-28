@@ -44,6 +44,7 @@ static int mock_apply(void *ctx, const ctl_action_t *a) {
 typedef struct {
     int  calls;
     char last_url[512];
+    char last_header[512];
     const char *blob;
     int  fail_next;
     uint64_t expire;
@@ -52,12 +53,15 @@ typedef struct {
 static fetch_rec_t g_fetch;
 
 static int mock_fetch(void *ctx, const char *url,
+                      const char *request_header,
                       unsigned char *buf, size_t cap, size_t *len,
                       ctl_fetch_meta_t *meta) {
     (void)ctx;
     if (meta) meta->expire = g_fetch.expire;
     g_fetch.calls++;
     snprintf(g_fetch.last_url, sizeof g_fetch.last_url, "%s", url);
+    snprintf(g_fetch.last_header, sizeof g_fetch.last_header, "%s",
+             request_header ? request_header : "");
     if (g_fetch.fail_next) { g_fetch.fail_next = 0; return -1; }
     if (!g_fetch.blob) return -1;
     size_t bl = strlen(g_fetch.blob);
@@ -317,6 +321,7 @@ int main(void) {
     ok("refresh ok reply", strncmp(buf, "OK ", 3) == 0);
     ok("fetch was called", g_fetch.calls == 1);
     ok("fetch got the sub url", strcmp(g_fetch.last_url, "https://sub.example.com/feed") == 0);
+    ok("refresh has no header by default", g_fetch.last_header[0] == '\0');
     ok("refresh added 2 servers", s.engine.store.n == n_before + 2);
     ok("refresh stores subscription expiry",
        s.engine.store.subs[sub].expire == 1893456000ULL);
@@ -330,6 +335,17 @@ int main(void) {
     exchange(&s, cli, buf, sizeof buf);
     ok("refresh bad idx err", strncmp(buf, "ERR ", 4) == 0);
     ok("refresh bad idx no fetch", g_fetch.calls == fcalls);
+
+    {
+        const char *cmd = "SETSUBHDR 0 Authorization%3A%20Bearer%20abc%2Btest\n";
+        write(cli, cmd, strlen(cmd));
+    }
+    exchange(&s, cli, buf, sizeof buf);
+    ok("subscription header saved", strncmp(buf, "OK ", 3) == 0);
+    write(cli, "REFRESH 0\n", 10);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("refresh with header", strncmp(buf, "OK ", 3) == 0 &&
+       strcmp(g_fetch.last_header, "Authorization: Bearer abc+test") == 0);
 
     size_t n_now = s.engine.store.n;
     g_fetch.fail_next = 1;
@@ -372,6 +388,7 @@ int main(void) {
     write(cli, "LIST\n", 5);
     exchange(&s, cli, buf, sizeof buf);
     ok("list has subscription metadata", strstr(buf, "SUBMETA 0 1893456000\n") != NULL);
+    ok("list has subscription header", strstr(buf, "SUBHDR 0 Authorization:%20Bearer%20abc%2Btest\n") != NULL);
     ok("list has section order", strstr(buf, "SECTION 1 -1 0\n") != NULL);
 
     /* test fetch streaming */
