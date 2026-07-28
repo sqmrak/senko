@@ -63,6 +63,7 @@ static int reply_complete(const char *buf, size_t len) {
                 (llen >= 4 && memcmp(ln, "SRV ", 4) == 0) ||
                 (llen >= 4 && memcmp(ln, "SUB ", 4) == 0) ||
                 (llen >= 8 && memcmp(ln, "SUBMETA ", 8) == 0) ||
+                (llen >= 7 && memcmp(ln, "SUBHDR ", 7) == 0) ||
                 (llen >= 8 && memcmp(ln, "SECTION ", 8) == 0) ||
                 (llen >= 6 && memcmp(ln, "FDATA ", 6) == 0);
             if (!stream) return 1; /* stop on terminal records */
@@ -419,6 +420,23 @@ static SenkoSub *parseSUB(NSString *line) {
                 }
                 continue;
             }
+            if ([ln hasPrefix:@"SUBHDR "]) {
+                NSArray *t = [ln componentsSeparatedByString:@" "];
+                if ([t count] >= 3) {
+                    int idx = [[t objectAtIndex:1] intValue];
+                    NSString *encoded = [[t subarrayWithRange:NSMakeRange(2, [t count] - 2)]
+                                           componentsJoinedByString:@" "];
+                    NSString *header = [encoded isEqualToString:@"-"]
+                        ? @""
+                        : [encoded stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+                    for (SenkoSub *s in subs) {
+                        if (s->index != idx) continue;
+                        s->header = [(header ? header : @"") copy];
+                        break;
+                    }
+                }
+                continue;
+            }
             if ([ln hasPrefix:@"SECTION "]) {
                 NSArray *t = [ln componentsSeparatedByString:@" "];
                 for (NSUInteger i = 1; i < [t count]; ++i)
@@ -515,6 +533,19 @@ static SenkoSub *parseSUB(NSString *line) {
 - (void)refreshSubIndex:(int)idx reply:(void (^)(NSString *))done {
     [self sendCommand:[NSString stringWithFormat:@"REFRESH %d", idx]
             timeoutMs:20000
+                reply:done];
+}
+
+- (void)setSubscriptionHeader:(int)idx header:(NSString *)header
+                         reply:(void (^)(NSString *))done {
+    NSString *value = [header ? header : @""
+                       stringByReplacingOccurrencesOfString:@"\r" withString:@" "];
+    value = [value stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+    NSString *encoded = [value stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+    if (!encoded) { if (done) done(nil); return; }
+    encoded = [encoded stringByReplacingOccurrencesOfString:@"+" withString:@"%2B"];
+    if (![encoded length]) encoded = @"-";
+    [self sendCommand:[NSString stringWithFormat:@"SETSUBHDR %d %@", idx, encoded]
                 reply:done];
 }
 

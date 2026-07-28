@@ -105,7 +105,7 @@
 - (SenkoSub *)subscriptionByIndex:(int)subIdx;
 - (void)editSubscriptionIndex:(int)subIdx;
 - (void)pinSubscriptionIndex:(int)subIdx;
-- (void)editSubscriptionVC:(EditSubscriptionVC *)vc saveSubWithIndex:(int)idx name:(NSString *)name url:(NSString *)url;
+- (void)editSubscriptionVC:(EditSubscriptionVC *)vc saveSubWithIndex:(int)idx name:(NSString *)name url:(NSString *)url header:(NSString *)header;
 - (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)idx;
 - (BOOL)isNativeAWGText:(NSString *)s;
 - (void)importAWGText:(NSString *)text;

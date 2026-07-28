@@ -105,6 +105,8 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"Subscription", @"Подписка");
     SenkoAddTranslation(@"Subscription profile", @"Профиль подписки");
     SenkoAddTranslation(@"Subscription URL", @"URL подписки");
+    SenkoAddTranslation(@"Header: value", @"Заголовок: значение");
+    SenkoAddTranslation(@"Request header", @"Заголовок запроса");
     SenkoAddTranslation(@"System Logs", @"Системные логи");
     SenkoAddTranslation(@"Themes", @"Темы");
     SenkoAddTranslation(@"Type link", @"Ввести ссылку");
@@ -159,6 +161,7 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"subscription pinned", @"подписка закреплена");
     SenkoAddTranslation(@"subscription removed", @"подписка удалена");
     SenkoAddTranslation(@"subscription saved", @"подписка сохранена");
+    SenkoAddTranslation(@"daemon offline: cannot save header", @"демон недоступен: нельзя сохранить заголовок");
     SenkoAddTranslation(@"subscription updated", @"подписка обновлена");
     SenkoAddTranslation(@"subscription url has spaces", @"в URL подписки есть пробелы");
     SenkoAddTranslation(@"subscriptions refreshed", @"подписки обновлены");

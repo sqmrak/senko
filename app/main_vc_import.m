@@ -84,7 +84,8 @@
 - (void)editSubscriptionVC:(EditSubscriptionVC *)vc
           saveSubWithIndex:(int)idx
                       name:(NSString *)name
-                       url:(NSString *)url {
+                      url:(NSString *)url
+                   header:(NSString *)header {
     if ([self isServerSelectionLocked]) {
         SetStatusDefault(_statusLabel, @"disconnect to edit");
         return;
@@ -119,13 +120,21 @@
             }
             int newIdx = [self trailingIntOf:addReply];
             if (newIdx >= 0) {
-                [_ctl refreshSubIndex:newIdx reply:^(NSString *refreshReply) {
-                    (void)refreshReply;
-                    [[NSUserDefaults standardUserDefaults] setObject:url forKey:SENKO_PINNED_SUB_URL_KEY];
-                    [[NSUserDefaults standardUserDefaults] synchronize];
-                    [vc dismissViewControllerAnimated:YES completion:nil];
-                    SetStatusRefresh(_statusLabel, @"subscription saved");
-                    [self refresh];
+                [_ctl setSubscriptionHeader:newIdx header:header reply:^(NSString *headerReply) {
+                    if (!headerReply || [headerReply hasPrefix:@"ERR"]) {
+                        [self setLastErr:headerReply ? [headerReply stringByTrimmingCharactersInSet:ws]
+                                                   : @"daemon offline: cannot save header"];
+                        [self applyState];
+                        return;
+                    }
+                    [_ctl refreshSubIndex:newIdx reply:^(NSString *refreshReply) {
+                        (void)refreshReply;
+                        [[NSUserDefaults standardUserDefaults] setObject:url forKey:SENKO_PINNED_SUB_URL_KEY];
+                        [[NSUserDefaults standardUserDefaults] synchronize];
+                        [vc dismissViewControllerAnimated:YES completion:nil];
+                        SetStatusRefresh(_statusLabel, @"subscription saved");
+                        [self refresh];
+                    }];
                 }];
             } else {
                 [vc dismissViewControllerAnimated:YES completion:nil];

@@ -21,6 +21,7 @@
     int      index;
     NSString *name;
     NSString *url;
+    NSString *header;
     unsigned long long expire;
 }
 @end
@@ -55,6 +56,8 @@
 - (void)deleteServerIndex:(int)idx reply:(void (^)(NSString *reply))done;
 - (void)deleteSubIndex:(int)idx reply:(void (^)(NSString *reply))done;
 - (void)refreshSubIndex:(int)idx reply:(void (^)(NSString *reply))done;
+- (void)setSubscriptionHeader:(int)idx header:(NSString *)header
+                         reply:(void (^)(NSString *reply))done;
 - (void)moveSection:(int)sectionId toPosition:(int)position
               reply:(void (^)(NSString *reply))done;
 - (void)moveManualServerIndex:(int)idx toPosition:(int)position

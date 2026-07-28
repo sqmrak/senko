@@ -28,6 +28,7 @@
     int _subIdx;
     NSString *_name;
     NSString *_url;
+    NSString *_header;
     UIScrollView *_scroll;
     UIView *_plate;
     UITextField *_nameField;
@@ -36,6 +37,8 @@
     UILabel *_sectionLbl;
     UIView *_nameLine;
     UIView *_urlLine;
+    UITextField *_headerField;
+    UIView *_headerLine;
 
 }
 
@@ -45,6 +48,7 @@
         _subIdx = sub ? sub->index : -1;
         _name = [(sub && sub->name) ? sub->name : @"" copy];
         _url = [(sub && sub->url) ? sub->url : @"" copy];
+        _header = [(sub && sub->header) ? sub->header : @"" copy];
     }
     return self;
 }
@@ -52,6 +56,7 @@
 - (void)dealloc {
     [_name release];
     [_url release];
+    [_header release];
     [_scroll release];
     [_plate release];
     [_nameField release];
@@ -60,6 +65,8 @@
     [_sectionLbl release];
     [_nameLine release];
     [_urlLine release];
+    [_headerField release];
+    [_headerLine release];
     [super dealloc];
 }
 
@@ -70,13 +77,16 @@
 - (void)savePressed {
     [_nameField resignFirstResponder];
     [_urlField resignFirstResponder];
+    [_headerField resignFirstResponder];
     NSString *name = [[_nameField text] stringByTrimmingCharactersInSet:
                       [NSCharacterSet whitespaceAndNewlineCharacterSet]];
     NSString *url = [[_urlField text] stringByTrimmingCharactersInSet:
                      [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *header = [[_headerField text] stringByTrimmingCharactersInSet:
+                        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (![name length] || ![url length]) return;
     if (_delegate)
-        [_delegate editSubscriptionVC:self saveSubWithIndex:_subIdx name:name url:url];
+        [_delegate editSubscriptionVC:self saveSubWithIndex:_subIdx name:name url:url header:header];
 }
 
 - (UILabel *)labelWithFrame:(CGRect)frame text:(NSString *)text color:(UIColor *)color size:(CGFloat)size bold:(BOOL)bold {
@@ -121,7 +131,7 @@
     CGFloat fieldW = w - 36.0f;
     const CGFloat btnH = 50.0f;
     _saveBtn.transform = CGAffineTransformIdentity;
-    _saveBtn.frame = CGRectMake(18, 418, fieldW, btnH);
+    _saveBtn.frame = CGRectMake(18, 488, fieldW, btnH);
 /* capsule; not styleglossy on wrong size */
     StyleGlossyCapsule(_saveBtn, kAccentBlue, kAccentBlueLo);
     StyleGlossyCapsuleLayout(_saveBtn);
@@ -140,7 +150,7 @@
     CGFloat contentW = b.size.width;
     if (contentW > 620.0f) contentW = 620.0f;
     CGFloat x = floorf((b.size.width - contentW) * 0.5f);
-    const CGFloat plateH = 500.0f;
+    const CGFloat plateH = 570.0f;
     _plate.frame = CGRectMake(x, 0, contentW, plateH);
     _scroll.contentSize = CGSizeMake(b.size.width, plateH + 24.0f);
 
@@ -150,6 +160,8 @@
     _nameLine.frame = CGRectMake(0, 314, contentW, 1);
     _urlField.frame = CGRectMake(18, 332, fieldW, 42);
     _urlLine.frame = CGRectMake(0, 386, contentW, 1);
+    _headerField.frame = CGRectMake(18, 402, fieldW, 64);
+    _headerLine.frame = CGRectMake(0, 472, contentW, 1);
     [self layoutSaveGlossy];
 }
 
@@ -178,7 +190,7 @@
     _scroll.alwaysBounceVertical = YES;
     [self.view addSubview:_scroll];
 
-    _plate = [[UIView alloc] initWithFrame:CGRectMake(0, 0, contentW, 500)];
+    _plate = [[UIView alloc] initWithFrame:CGRectMake(0, 0, contentW, 570)];
     _plate.backgroundColor = [UIColor clearColor];
     _plate.autoresizingMask = UIViewAutoresizingNone;
     [_scroll addSubview:_plate];
@@ -188,7 +200,7 @@
     [self addSwitchRowTo:_plate y:128 w:contentW title:@"Send HWID in Cookie"];
 
     _sectionLbl = [[self labelWithFrame:CGRectMake(18, 210, contentW - 36, 28)
-                                   text:@"Title and URL"
+                                   text:SenkoLocalizedText(@"Title and URL")
                                   color:kAccentBlue
                                    size:18
                                    bold:YES] retain];
@@ -215,7 +227,7 @@
     _urlField.backgroundColor = [UIColor clearColor];
     _urlField.textColor = kInk;
     _urlField.font = [UIFont systemFontOfSize:15];
-    _urlField.placeholder = @"Subscription URL";
+    _urlField.placeholder = SenkoLocalizedText(@"Subscription URL");
     _urlField.text = _url;
     _urlField.delegate = self;
     _urlField.clearButtonMode = UITextFieldViewModeWhileEditing;
@@ -230,6 +242,25 @@
         ? [UIColor colorWithWhite:0 alpha:0.14]
         : [UIColor colorWithWhite:1 alpha:0.28];
     [_plate addSubview:_urlLine];
+
+    _headerField = [[UITextField alloc] initWithFrame:CGRectMake(18, 402, contentW - 36, 64)];
+    _headerField.backgroundColor = [UIColor clearColor];
+    _headerField.textColor = kInk;
+    _headerField.font = [UIFont systemFontOfSize:15];
+    _headerField.placeholder = SenkoLocalizedText(@"Header: value");
+    _headerField.text = _header;
+    _headerField.delegate = self;
+    _headerField.clearButtonMode = UITextFieldViewModeWhileEditing;
+    _headerField.autocorrectionType = UITextAutocorrectionTypeNo;
+    _headerField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    _headerField.returnKeyType = UIReturnKeyDone;
+    [_plate addSubview:_headerField];
+
+    _headerLine = [[UIView alloc] initWithFrame:CGRectMake(0, 472, contentW, 1)];
+    _headerLine.backgroundColor = SenkoThemeIsLight()
+        ? [UIColor colorWithWhite:0 alpha:0.14]
+        : [UIColor colorWithWhite:1 alpha:0.28];
+    [_plate addSubview:_headerLine];
 
     _saveBtn = [[UIButton buttonWithType:UIButtonTypeCustom] retain];
     _saveBtn.autoresizingMask = UIViewAutoresizingNone;
@@ -247,6 +278,8 @@
 - (BOOL)textFieldShouldReturn:(UITextField *)tf {
     if (tf == _nameField) {
         [_urlField becomeFirstResponder];
+    } else if (tf == _urlField) {
+        [_headerField becomeFirstResponder];
     } else {
         [tf resignFirstResponder];
     }
@@ -254,4 +287,3 @@
 }
 
 @end
-
