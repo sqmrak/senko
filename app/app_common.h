@@ -51,7 +51,8 @@ void SenkoRelocalizeAllWindows(void);
 - (void)editSubscriptionVC:(EditSubscriptionVC *)vc
           saveSubWithIndex:(int)idx
                       name:(NSString *)name
-                       url:(NSString *)url;
+                       url:(NSString *)url
+                    header:(NSString *)header;
 @end
 
 @protocol EditAWGDelegate
