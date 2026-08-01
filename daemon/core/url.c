@@ -118,7 +118,8 @@ url_status_t url_build_get_cookie_header(const url_t *u, const char *cookie,
     if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
     off += (size_t)n;
     if (!custom_ua) {
-        n = snprintf(buf + off, cap - off, "User-Agent: senko/1\r\n");
+        /* providers use the client id to select a compatible feed format */
+        n = snprintf(buf + off, cap - off, "User-Agent: Happ/3.13.0\r\n");
         if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
         off += (size_t)n;
     }

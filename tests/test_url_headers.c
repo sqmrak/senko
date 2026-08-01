@@ -34,8 +34,9 @@ int main(void) {
                     "reject header injection");
     failed += check(url_build_get_cookie_header(&u, NULL, NULL,
                                                 req, sizeof req, &n) == URL_OK &&
-                   strstr(req, "Authorization:") == NULL,
-                   "no custom header by default");
+                   strstr(req, "Authorization:") == NULL &&
+                   strstr(req, "User-Agent: Happ/3.13.0\r\n") != NULL,
+                   "happ-compatible default user agent");
 
     if (failed) return 1;
     puts("all url header checks passed");
