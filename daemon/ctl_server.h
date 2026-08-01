@@ -24,6 +24,7 @@ typedef struct {
 } ctl_fetch_meta_t;
 
 typedef int (*ctl_fetch_fn)(void *ctx, const char *url,
+                            const char *request_header,
                             unsigned char *buf, size_t cap, size_t *len,
                             ctl_fetch_meta_t *meta);
 

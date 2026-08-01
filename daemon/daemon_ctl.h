@@ -48,6 +48,7 @@ void daemon_ctl_persist(void *ctx, const store_t *store);
 
 /* fetch subscription data with a deadline */
 int daemon_ctl_fetch(void *ctx, const char *url,
+                     const char *request_header,
                      unsigned char *buf, size_t cap, size_t *len,
                      ctl_fetch_meta_t *meta);
 

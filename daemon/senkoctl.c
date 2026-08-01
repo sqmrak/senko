@@ -25,6 +25,7 @@ static int reply_complete(const char *buf, size_t len) {
                 (llen >= 4 && memcmp(ln, "SRV ", 4) == 0) ||
                 (llen >= 4 && memcmp(ln, "SUB ", 4) == 0) ||
                 (llen >= 8 && memcmp(ln, "SUBMETA ", 8) == 0) ||
+                (llen >= 7 && memcmp(ln, "SUBHDR ", 7) == 0) ||
                 (llen >= 8 && memcmp(ln, "SECTION ", 8) == 0) ||
                 (llen >= 6 && memcmp(ln, "FDATA ", 6) == 0);
             if (!stream) return 1;

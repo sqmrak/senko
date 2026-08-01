@@ -460,6 +460,7 @@ static int subfetch_dial(void *ctx, const char *host, uint16_t port) {
 }
 
 int daemon_ctl_fetch(void *ctx, const char *url,
+                     const char *request_header,
                      unsigned char *buf, size_t cap, size_t *len,
                      ctl_fetch_meta_t *meta) {
     subfetch_cfg_t cfg;
@@ -470,6 +471,7 @@ int daemon_ctl_fetch(void *ctx, const char *url,
     cfg.pump_ctx = ctx;
     cfg.tcp = &transport_tcp;
     cfg.tls = &transport_tls; /* use tls for https */
+    cfg.request_header = request_header;
     cfg.max_redirects = 5;
 
     subfetch_info_t info;

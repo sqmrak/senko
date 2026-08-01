@@ -296,6 +296,7 @@ static const char *server_net_name(const vl_server_t *sv) {
 #define FETCH_BODY_MAX (512 * 1024)
 
 static int fetch_body_alloc(ctl_server_t *s, const char *url,
+                            const char *request_header,
                             unsigned char **body_out, size_t *len_out,
                             ctl_fetch_meta_t *meta) {
     if (!s || !s->fetch || !url || !body_out || !len_out) return -1;
@@ -304,7 +305,7 @@ static int fetch_body_alloc(ctl_server_t *s, const char *url,
     unsigned char *body = (unsigned char *)malloc(FETCH_BODY_MAX);
     if (!body) return -1;
     size_t len = 0;
-    if (s->fetch(s->apply_ctx, url, body, FETCH_BODY_MAX, &len, meta) != 0 ||
+    if (s->fetch(s->apply_ctx, url, request_header, body, FETCH_BODY_MAX, &len, meta) != 0 ||
         len > FETCH_BODY_MAX) {
         free(body);
         return -1;
@@ -622,7 +623,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         }
         unsigned char *blob = NULL;
         size_t blen = 0;
-        if (fetch_body_alloc(s, cmd.text, &blob, &blen, NULL) != 0) {
+        if (fetch_body_alloc(s, cmd.text, NULL, &blob, &blen, NULL) != 0) {
             if (ctl_build_err("fetch failed", reply, sizeof reply, &rn) == CTL_OK)
                 client_write(c, reply, rn);
             return;
@@ -636,7 +637,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
 /* repair old groups */
         store_normalize(&s->engine.store);
         const store_t *st = &s->engine.store;
-        char ln[640]; size_t lnn = 0;
+        char ln[2048]; size_t lnn = 0;
 /* send subscriptions before servers */
         for (size_t i = 0; i < store_section_count(st); ++i) {
             int section = store_section_at(st, i);
@@ -647,6 +648,9 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
                 client_write(c, ln, lnn);
             if (ctl_build_submeta(section, st->subs[section].expire,
                                   ln, sizeof ln, &lnn) == CTL_OK)
+                client_write(c, ln, lnn);
+            if (ctl_build_subhdr(section, st->subs[section].header,
+                                 ln, sizeof ln, &lnn) == CTL_OK)
                 client_write(c, ln, lnn);
         }
         if (store_section_count(st) > 0) {
@@ -715,6 +719,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         ok_line = strstr(out, "\nOK ");
     if (s->persist && ok_line &&
         (cmd.kind == CTL_CMD_ADD_SERVER || cmd.kind == CTL_CMD_ADD_SUB ||
+         cmd.kind == CTL_CMD_SET_SUB_HEADER ||
          cmd.kind == CTL_CMD_DEL_SERVER || cmd.kind == CTL_CMD_DEL_SUB) &&
         (ok_line == out || ok_line[0] == '\n')) {
         s->persist(s->apply_ctx, &s->engine.store);
@@ -743,7 +748,9 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         size_t blen = 0;
         ctl_fetch_meta_t meta;
         memset(&meta, 0, sizeof meta);
-        if (fetch_body_alloc(s, s->engine.store.subs[si].url, &blob, &blen, &meta) != 0) {
+        if (fetch_body_alloc(s, s->engine.store.subs[si].url,
+                             s->engine.store.subs[si].header,
+                             &blob, &blen, &meta) != 0) {
             if (ctl_build_err("fetch failed", reply, sizeof reply, &rn) == CTL_OK)
                 client_write(c, reply, rn);
             return;
