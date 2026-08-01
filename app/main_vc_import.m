@@ -10,11 +10,15 @@
         _actionSheet = nil;
     }
     UIActionSheet *sheet = [[[UIActionSheet alloc]
-        initWithTitle:@"Add"
+        initWithTitle:SenkoLocalizedText(@"Add")
              delegate:self
-        cancelButtonTitle:@"Cancel"
+        cancelButtonTitle:SenkoLocalizedText(@"Cancel")
         destructiveButtonTitle:nil
-        otherButtonTitles:@"Paste link", @"Scan QR", @"Subscription", @"Type link", @"Import file", nil] autorelease];
+        otherButtonTitles:SenkoLocalizedText(@"Paste link"),
+                          SenkoLocalizedText(@"Scan QR"),
+                          SenkoLocalizedText(@"Subscription"),
+                          SenkoLocalizedText(@"Type link"),
+                          SenkoLocalizedText(@"Import file"), nil] autorelease];
     _actionSheet = [sheet retain];
     [sheet showInView:self.view];
 }
@@ -147,22 +151,22 @@
 
 - (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)idx {
     if (idx == sheet.cancelButtonIndex) return;
-    NSString *t = [sheet buttonTitleAtIndex:idx];
+    NSInteger first = sheet.firstOtherButtonIndex;
     if (sheet.tag == 41) {
-        if ([t isEqualToString:@"Refresh now"]) {
+        if (idx == first) {
             [self awgRefreshTapped:nil];
-        } else if ([t isEqualToString:@"Check ping"]) {
+        } else if (idx == first + 1) {
             [self awgPingTapped:nil];
-        } else if ([t isEqualToString:@"Edit details"]) {
+        } else if (idx == first + 2) {
             [self editAWGProfile];
-        } else if ([t isEqualToString:@"Remove"]) {
+        } else if (idx == sheet.destructiveButtonIndex) {
             [self removeSavedAWGProfile];
         }
         return;
     }
     if (sheet.tag == 40) {
         int sub = _menuSubIdx;
-        if ([t isEqualToString:@"Refresh now"]) {
+        if (idx == first) {
             SetStatusRefresh(_statusLabel, @"refreshing subscription...");
             [_ctl refreshSubIndex:sub reply:^(NSString *reply) {
                 if (reply && [reply hasPrefix:@"ERR"])
@@ -172,11 +176,11 @@
                 SetStatusRefresh(_statusLabel, @"subscription updated");
                 [self refresh];
             }];
-        } else if ([t isEqualToString:@"Check ping"]) {
+        } else if (idx == first + 1) {
             [self pingServersInSub:sub];
-        } else if ([t isEqualToString:@"Edit details"]) {
+        } else if (idx == first + 2) {
             [self editSubscriptionIndex:sub];
-        } else if ([t isEqualToString:@"Remove"]) {
+        } else if (idx == sheet.destructiveButtonIndex) {
             if ([self isServerSelectionLocked]) {
                 SetStatusDefault(_statusLabel, @"disconnect to remove");
                 return;
@@ -189,17 +193,17 @@
         }
         return;
     }
-    if ([t isEqualToString:@"Paste link"]) {
+    if (idx == first) {
         NSString *s = [[UIPasteboard generalPasteboard] string];
         if ([s length]) [self importText:s];
         else SetStatusDefault(_statusLabel, @"clipboard empty");
-    } else if ([t isEqualToString:@"Scan QR"]) {
+    } else if (idx == first + 1) {
         [self openScanner];
-    } else if ([t isEqualToString:@"Subscription"]) {
+    } else if (idx == first + 2) {
         [self promptSubscription];
-    } else if ([t isEqualToString:@"Type link"]) {
+    } else if (idx == first + 3) {
         [self promptManualLink];
-    } else if ([t isEqualToString:@"Import file"]) {
+    } else if (idx == first + 4) {
         [self promptImportFile];
     }
 }

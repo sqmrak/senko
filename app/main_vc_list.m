@@ -1198,11 +1198,13 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
     }
     _menuSubIdx = subIdx;
     UIActionSheet *as = [[UIActionSheet alloc]
-                         initWithTitle:@"Subscription"
+                         initWithTitle:SenkoLocalizedText(@"Subscription")
                          delegate:self
-                         cancelButtonTitle:@"Cancel"
-                         destructiveButtonTitle:@"Remove"
-                         otherButtonTitles:@"Refresh now", @"Check ping", @"Edit details", nil];
+                         cancelButtonTitle:SenkoLocalizedText(@"Cancel")
+                         destructiveButtonTitle:SenkoLocalizedText(@"Remove")
+                         otherButtonTitles:SenkoLocalizedText(@"Refresh now"),
+                                           SenkoLocalizedText(@"Check ping"),
+                                           SenkoLocalizedText(@"Edit details"), nil];
     as.tag = 40;
     _actionSheet = as;
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad &&

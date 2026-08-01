@@ -387,11 +387,13 @@ static void senkoClearVpnIcon(void) {
         _actionSheet = nil;
     }
     UIActionSheet *as = [[UIActionSheet alloc]
-                         initWithTitle:@"AmneziaWG"
+                         initWithTitle:SenkoLocalizedText(@"AmneziaWG")
                          delegate:self
-                         cancelButtonTitle:@"Cancel"
-                         destructiveButtonTitle:@"Remove"
-                         otherButtonTitles:@"Refresh now", @"Check ping", @"Edit details", nil];
+                         cancelButtonTitle:SenkoLocalizedText(@"Cancel")
+                         destructiveButtonTitle:SenkoLocalizedText(@"Remove")
+                         otherButtonTitles:SenkoLocalizedText(@"Refresh now"),
+                                           SenkoLocalizedText(@"Check ping"),
+                                           SenkoLocalizedText(@"Edit details"), nil];
     as.tag = 41;
     _actionSheet = as;
     [as showInView:self.view];
