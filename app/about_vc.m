@@ -10,6 +10,7 @@
     UIView *_card;
     UIView *_info;
     UILabel *_bodyLbl;
+    UIButton *_sponsorButton;
     CAGradientLayer *_cardGrad;
     CAGradientLayer *_infoGrad;
 
@@ -70,6 +71,14 @@
     _bodyLbl.text = SenkoAboutAppReport();
     [_info addSubview:_bodyLbl];
 
+    _sponsorButton = [[UIButton buttonWithType:UIButtonTypeCustom] retain];
+    _sponsorButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+    _sponsorButton.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+    [_sponsorButton addTarget:self action:@selector(sponsorPressed)
+             forControlEvents:UIControlEventTouchUpInside];
+    [_info addSubview:_sponsorButton];
+    [self updateSponsorButton];
+
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(languageDidChange:)
                                                  name:SenkoLanguageDidChangeNotification
@@ -84,13 +93,28 @@
     [_card release];
     [_info release];
     [_bodyLbl release];
+    [_sponsorButton release];
     [super dealloc];
 }
 
 - (void)languageDidChange:(NSNotification *)n {
     (void)n;
     _bodyLbl.text = SenkoAboutAppReport();
+    [self updateSponsorButton];
     [self layoutAbout];
+}
+
+- (void)updateSponsorButton {
+    NSString *title = SenkoLanguageIsRussian()
+        ? @"Спонсоры: 2xvpn.shop"
+        : @"Sponsors: 2xvpn.shop";
+    [_sponsorButton setTitle:title forState:UIControlStateNormal];
+    [_sponsorButton setTitleColor:kAccentBlue forState:UIControlStateNormal];
+}
+
+- (void)sponsorPressed {
+    NSURL *url = [NSURL URLWithString:@"https://2xvpn.shop/dashboard/buy?promo=SENKO"];
+    if (url) [[UIApplication sharedApplication] openURL:url];
 }
 
 - (void)layoutAbout {
@@ -137,11 +161,16 @@
     if (bodySz.height < 40.0f) bodySz.height = 40.0f;
     if (bodySz.height > 2000.0f) bodySz.height = 2000.0f;
 
-    CGFloat infoH = bodySz.height + 28.0f;
+    CGFloat sponsorH = 30.0f;
+    CGFloat infoH = bodySz.height + sponsorH + 32.0f;
     CGFloat infoY = CGRectGetMaxY(_card.frame) + 12.0f;
     _info.frame = CGRectMake(contentX + side, infoY, cardW, infoH);
     _infoGrad.frame = CGRectMake(0, 0, cardW, infoH);
     _bodyLbl.frame = CGRectMake(textPad, 12, textW, bodySz.height + 2);
+    _sponsorButton.frame = CGRectMake(textPad,
+                                      14.0f + bodySz.height,
+                                      textW,
+                                      sponsorH);
 
     BOOL light = SenkoThemeIsLight();
     if (SenkoThemeIsIos26()) {
