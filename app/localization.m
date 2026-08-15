@@ -88,6 +88,7 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"Remove", @"Удалить");
     SenkoAddTranslation(@"Restarting senkod", @"Перезапуск senkod");
     SenkoAddTranslation(@"Routing", @"Маршрутизация");
+    SenkoAddTranslation(@"routing: ios 5 full-device routing is disabled for safety", @"маршрутизация: режим всего устройства на ios 5 отключён для безопасности");
     SenkoAddTranslation(@"Running dpkg --install", @"Выполнение dpkg --install");
     SenkoAddTranslation(@"Russian", @"Русский");
     SenkoAddTranslation(@"Russian/English", @"Русский/Английский");
@@ -106,6 +107,7 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"Subscription profile", @"Профиль подписки");
     SenkoAddTranslation(@"Subscription URL", @"URL подписки");
     SenkoAddTranslation(@"Header: value", @"Заголовок: значение");
+    SenkoAddTranslation(@"HWID requires a Cookie request header", @"HWID требует заголовок Cookie");
     SenkoAddTranslation(@"Request header", @"Заголовок запроса");
     SenkoAddTranslation(@"System Logs", @"Системные логи");
     SenkoAddTranslation(@"Themes", @"Темы");

@@ -26,6 +26,7 @@
     [_collapsedSubs release];
     [_state release];
     [_lastErr release];
+    [_lastAlertErr release];
     [_serverStatus release];
     [_pingingSubs release];
     [_pendingUpdatePath release];

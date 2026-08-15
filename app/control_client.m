@@ -26,6 +26,7 @@ extern char **environ;
 - (void)dealloc {
     [name release];
     [url release];
+    [header release];
     [super dealloc];
 }
 @end

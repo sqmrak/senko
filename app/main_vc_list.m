@@ -563,8 +563,22 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
 }
 
 - (void)setLastErr:(NSString *)msg {
+    NSString *shown = msg ? SenkoLocalizedText(msg) : nil;
     [_lastErr release];
-    _lastErr = msg ? [msg copy] : nil;
+    _lastErr = shown ? [shown copy] : nil;
+    if (!shown || ![shown length]) {
+        [_lastAlertErr release];
+        _lastAlertErr = nil;
+        return;
+    }
+    if (_lastAlertErr && [_lastAlertErr isEqualToString:shown]) return;
+    [_lastAlertErr release];
+    _lastAlertErr = [shown copy];
+    UIAlertView *alert = [[[UIAlertView alloc]
+        initWithTitle:SenkoLocalizedText(@"Error")
+              message:shown delegate:nil cancelButtonTitle:SenkoLocalizedText(@"OK")
+        otherButtonTitles:nil] autorelease];
+    [alert show];
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv {

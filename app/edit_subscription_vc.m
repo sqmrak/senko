@@ -19,6 +19,67 @@
 #import "meow.h"
 #import "app_common.h"
 
+static NSString *SenkoSubscriptionHWID(void) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSString *value = [defaults stringForKey:@"SenkoSubscriptionHWID"];
+    if ([value length]) return value;
+
+    CFUUIDRef uuid = CFUUIDCreate(NULL);
+    NSString *created = [(NSString *)CFUUIDCreateString(NULL, uuid) autorelease];
+    CFRelease(uuid);
+    [defaults setObject:created forKey:@"SenkoSubscriptionHWID"];
+    [defaults synchronize];
+    return created;
+}
+
+static BOOL SenkoCookieHeader(NSString *header) {
+    NSRange colon = [header rangeOfString:@":"];
+    if (colon.location == NSNotFound) return [header length] == 0;
+    NSString *name = [[header substringToIndex:colon.location]
+                       stringByTrimmingCharactersInSet:
+                       [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return [name caseInsensitiveCompare:@"Cookie"] == NSOrderedSame;
+}
+
+static BOOL SenkoCookieTokenHWID(NSString *token) {
+    NSRange equal = [token rangeOfString:@"="];
+    NSString *name = equal.location == NSNotFound ? token :
+        [token substringToIndex:equal.location];
+    name = [name stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return [name caseInsensitiveCompare:@"HWID"] == NSOrderedSame;
+}
+
+static NSString *SenkoHeaderWithHWID(NSString *header, BOOL enabled, BOOL *compatible) {
+    if (compatible) *compatible = YES;
+    if (!enabled && !SenkoCookieHeader(header)) return header ? header : @"";
+    if (enabled && !SenkoCookieHeader(header)) {
+        if (compatible) *compatible = NO;
+        return header ? header : @"";
+    }
+
+    NSString *prefix = @"Cookie: ";
+    NSString *value = @"";
+    if ([header length]) {
+        NSRange colon = [header rangeOfString:@":"];
+        value = [[header substringFromIndex:colon.location + 1]
+                 stringByTrimmingCharactersInSet:
+                 [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    }
+
+    NSMutableArray *tokens = [NSMutableArray array];
+    for (NSString *raw in [value componentsSeparatedByString:@";"]) {
+        NSString *token = [raw stringByTrimmingCharactersInSet:
+                           [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (![token length] || SenkoCookieTokenHWID(token)) continue;
+        [tokens addObject:token];
+    }
+    if (enabled)
+        [tokens addObject:[NSString stringWithFormat:@"HWID=%@", SenkoSubscriptionHWID()]];
+    if (![tokens count]) return @"";
+    return [prefix stringByAppendingString:[tokens componentsJoinedByString:@"; "]];
+}
+
 @interface EditSubscriptionVC () <UITextFieldDelegate>
 @end
 
@@ -33,7 +94,7 @@
     UIView *_plate;
     UITextField *_nameField;
     UITextField *_urlField;
-    UIButton *_saveBtn;
+    UISwitch *_hwidSwitch;
     UILabel *_sectionLbl;
     UIView *_nameLine;
     UIView *_urlLine;
@@ -61,7 +122,7 @@
     [_plate release];
     [_nameField release];
     [_urlField release];
-    [_saveBtn release];
+    [_hwidSwitch release];
     [_sectionLbl release];
     [_nameLine release];
     [_urlLine release];
@@ -84,7 +145,26 @@
                      [NSCharacterSet whitespaceAndNewlineCharacterSet]];
     NSString *header = [[_headerField text] stringByTrimmingCharactersInSet:
                         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (![name length] || ![url length]) return;
+    if (![name length] || ![url length]) {
+        UIAlertView *alert = [[[UIAlertView alloc]
+            initWithTitle:SenkoLocalizedText(@"Error")
+                  message:SenkoLocalizedText(@"name and url required")
+                 delegate:nil cancelButtonTitle:SenkoLocalizedText(@"OK")
+            otherButtonTitles:nil] autorelease];
+        [alert show];
+        return;
+    }
+    BOOL compatible = YES;
+    header = SenkoHeaderWithHWID(header, _hwidSwitch.on, &compatible);
+    if (!compatible) {
+        UIAlertView *alert = [[[UIAlertView alloc]
+            initWithTitle:SenkoLocalizedText(@"Error")
+                  message:SenkoLocalizedText(@"HWID requires a Cookie request header")
+                 delegate:nil cancelButtonTitle:SenkoLocalizedText(@"OK")
+            otherButtonTitles:nil] autorelease];
+        [alert show];
+        return;
+    }
     if (_delegate)
         [_delegate editSubscriptionVC:self saveSubWithIndex:_subIdx name:name url:url header:header];
 }
@@ -100,45 +180,30 @@
     return l;
 }
 
-/* fixed layout; no tag math */
-- (void)addSwitchRowTo:(UIView *)parent y:(CGFloat)y w:(CGFloat)w title:(NSString *)title {
+/* keep the only switch connected to the stored request header */
+- (void)addHwidSwitchTo:(UIView *)parent y:(CGFloat)y w:(CGFloat)w {
     UILabel *label = [self labelWithFrame:CGRectMake(18, y + 18, w - 112, 28)
-                                     text:title color:kInk size:18 bold:YES];
+                                     text:SenkoLocalizedText(@"Send HWID in Cookie")
+                                    color:kInk size:18 bold:YES];
     label.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     [parent addSubview:label];
 
-    UISwitch *sw = [[[UISwitch alloc] initWithFrame:CGRectZero] autorelease];
-    CGRect f = sw.frame;
+    _hwidSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
+    CGRect f = _hwidSwitch.frame;
     f.origin.x = w - f.size.width - 20;
     f.origin.y = y + 14;
-    sw.frame = f;
-    sw.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-    sw.on = NO;
-    [parent addSubview:sw];
+    _hwidSwitch.frame = f;
+    _hwidSwitch.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+    _hwidSwitch.on = SenkoCookieTokenHWID(_header) ||
+                     [[_header lowercaseString] rangeOfString:@"hwid="].location != NSNotFound;
+    [_hwidSwitch addTarget:self action:@selector(hwidChanged:)
+          forControlEvents:UIControlEventValueChanged];
+    [parent addSubview:_hwidSwitch];
 
     UIView *line = [[[UIView alloc] initWithFrame:CGRectMake(0, y + 63, w, 1)] autorelease];
     line.backgroundColor = SenkoThemeIsLight()
         ? [UIColor colorWithWhite:0 alpha:0.12]
         : [UIColor colorWithWhite:1 alpha:0.18];
-    line.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [parent addSubview:line];
-}
-
-- (void)layoutSaveGlossy {
-    if (!_saveBtn) return;
-    CGFloat w = _plate.bounds.size.width;
-    if (w < 1.0f) return;
-    CGFloat fieldW = w - 36.0f;
-    const CGFloat btnH = 50.0f;
-    _saveBtn.transform = CGAffineTransformIdentity;
-    _saveBtn.frame = CGRectMake(18, 488, fieldW, btnH);
-/* capsule; not styleglossy on wrong size */
-    StyleGlossyCapsule(_saveBtn, kAccentBlue, kAccentBlueLo);
-    StyleGlossyCapsuleLayout(_saveBtn);
-    [_saveBtn setTitle:@"Save" forState:UIControlStateNormal];
-    SenkoStyleChromeTitle(_saveBtn);
-    _saveBtn.titleLabel.font = [UIFont boldSystemFontOfSize:18];
-    [_saveBtn bringSubviewToFront:_saveBtn.titleLabel];
 }
 
 - (void)layoutEditForm {
@@ -150,19 +215,18 @@
     CGFloat contentW = b.size.width;
     if (contentW > 620.0f) contentW = 620.0f;
     CGFloat x = floorf((b.size.width - contentW) * 0.5f);
-    const CGFloat plateH = 570.0f;
+    const CGFloat plateH = 410.0f;
     _plate.frame = CGRectMake(x, 0, contentW, plateH);
     _scroll.contentSize = CGSizeMake(b.size.width, plateH + 24.0f);
 
     CGFloat fieldW = contentW - 36.0f;
-    _sectionLbl.frame = CGRectMake(18, 210, fieldW, 28);
-    _nameField.frame = CGRectMake(18, 260, fieldW, 42);
-    _nameLine.frame = CGRectMake(0, 314, contentW, 1);
-    _urlField.frame = CGRectMake(18, 332, fieldW, 42);
-    _urlLine.frame = CGRectMake(0, 386, contentW, 1);
-    _headerField.frame = CGRectMake(18, 402, fieldW, 64);
-    _headerLine.frame = CGRectMake(0, 472, contentW, 1);
-    [self layoutSaveGlossy];
+    _sectionLbl.frame = CGRectMake(18, 80, fieldW, 28);
+    _nameField.frame = CGRectMake(18, 125, fieldW, 42);
+    _nameLine.frame = CGRectMake(0, 179, contentW, 1);
+    _urlField.frame = CGRectMake(18, 197, fieldW, 42);
+    _urlLine.frame = CGRectMake(0, 251, contentW, 1);
+    _headerField.frame = CGRectMake(18, 267, fieldW, 48);
+    _headerLine.frame = CGRectMake(0, 337, contentW, 1);
 }
 
 - (void)viewDidLoad {
@@ -190,23 +254,21 @@
     _scroll.alwaysBounceVertical = YES;
     [self.view addSubview:_scroll];
 
-    _plate = [[UIView alloc] initWithFrame:CGRectMake(0, 0, contentW, 570)];
+    _plate = [[UIView alloc] initWithFrame:CGRectMake(0, 0, contentW, 410)];
     _plate.backgroundColor = [UIColor clearColor];
     _plate.autoresizingMask = UIViewAutoresizingNone;
     [_scroll addSubview:_plate];
 
-    [self addSwitchRowTo:_plate y:0 w:contentW title:@"Encrypted subscription"];
-    [self addSwitchRowTo:_plate y:64 w:contentW title:@"Allow insecure"];
-    [self addSwitchRowTo:_plate y:128 w:contentW title:@"Send HWID in Cookie"];
+    [self addHwidSwitchTo:_plate y:0 w:contentW];
 
-    _sectionLbl = [[self labelWithFrame:CGRectMake(18, 210, contentW - 36, 28)
+    _sectionLbl = [[self labelWithFrame:CGRectMake(18, 80, contentW - 36, 28)
                                    text:SenkoLocalizedText(@"Title and URL")
                                   color:kAccentBlue
                                    size:18
                                    bold:YES] retain];
     [_plate addSubview:_sectionLbl];
 
-    _nameField = [[UITextField alloc] initWithFrame:CGRectMake(18, 260, contentW - 36, 42)];
+    _nameField = [[UITextField alloc] initWithFrame:CGRectMake(18, 125, contentW - 36, 42)];
     _nameField.backgroundColor = [UIColor clearColor];
     _nameField.textColor = kInk;
     _nameField.font = [UIFont boldSystemFontOfSize:21];
@@ -217,13 +279,13 @@
     _nameField.returnKeyType = UIReturnKeyNext;
     [_plate addSubview:_nameField];
 
-    _nameLine = [[UIView alloc] initWithFrame:CGRectMake(0, 314, contentW, 1)];
+    _nameLine = [[UIView alloc] initWithFrame:CGRectMake(0, 179, contentW, 1)];
     _nameLine.backgroundColor = SenkoThemeIsLight()
         ? [UIColor colorWithWhite:0 alpha:0.14]
         : [UIColor colorWithWhite:1 alpha:0.28];
     [_plate addSubview:_nameLine];
 
-    _urlField = [[UITextField alloc] initWithFrame:CGRectMake(18, 332, contentW - 36, 42)];
+    _urlField = [[UITextField alloc] initWithFrame:CGRectMake(18, 197, contentW - 36, 42)];
     _urlField.backgroundColor = [UIColor clearColor];
     _urlField.textColor = kInk;
     _urlField.font = [UIFont systemFontOfSize:15];
@@ -237,13 +299,13 @@
     _urlField.returnKeyType = UIReturnKeyDone;
     [_plate addSubview:_urlField];
 
-    _urlLine = [[UIView alloc] initWithFrame:CGRectMake(0, 386, contentW, 1)];
+    _urlLine = [[UIView alloc] initWithFrame:CGRectMake(0, 251, contentW, 1)];
     _urlLine.backgroundColor = SenkoThemeIsLight()
         ? [UIColor colorWithWhite:0 alpha:0.14]
         : [UIColor colorWithWhite:1 alpha:0.28];
     [_plate addSubview:_urlLine];
 
-    _headerField = [[UITextField alloc] initWithFrame:CGRectMake(18, 402, contentW - 36, 64)];
+    _headerField = [[UITextField alloc] initWithFrame:CGRectMake(18, 267, contentW - 36, 48)];
     _headerField.backgroundColor = [UIColor clearColor];
     _headerField.textColor = kInk;
     _headerField.font = [UIFont systemFontOfSize:15];
@@ -256,18 +318,29 @@
     _headerField.returnKeyType = UIReturnKeyDone;
     [_plate addSubview:_headerField];
 
-    _headerLine = [[UIView alloc] initWithFrame:CGRectMake(0, 472, contentW, 1)];
+    _headerLine = [[UIView alloc] initWithFrame:CGRectMake(0, 337, contentW, 1)];
     _headerLine.backgroundColor = SenkoThemeIsLight()
         ? [UIColor colorWithWhite:0 alpha:0.14]
         : [UIColor colorWithWhite:1 alpha:0.28];
     [_plate addSubview:_headerLine];
 
-    _saveBtn = [[UIButton buttonWithType:UIButtonTypeCustom] retain];
-    _saveBtn.autoresizingMask = UIViewAutoresizingNone;
-    [_saveBtn addTarget:self action:@selector(savePressed) forControlEvents:UIControlEventTouchUpInside];
-    [_plate addSubview:_saveBtn];
-
     [self layoutEditForm];
+}
+
+- (void)hwidChanged:(UISwitch *)sender {
+    BOOL compatible = YES;
+    NSString *header = SenkoHeaderWithHWID(_headerField.text, sender.on, &compatible);
+    if (!compatible) {
+        sender.on = NO;
+        UIAlertView *alert = [[[UIAlertView alloc]
+            initWithTitle:SenkoLocalizedText(@"Error")
+                  message:SenkoLocalizedText(@"HWID requires a Cookie request header")
+                 delegate:nil cancelButtonTitle:SenkoLocalizedText(@"OK")
+            otherButtonTitles:nil] autorelease];
+        [alert show];
+        return;
+    }
+    _headerField.text = header;
 }
 
 - (void)viewDidLayoutSubviews {

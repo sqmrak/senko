@@ -38,6 +38,7 @@
     NSMutableSet *_collapsedSubs;
     NSString     *_state;
     NSString     *_lastErr;
+    NSString     *_lastAlertErr;
     int           _selectedSrvIdx;
     int           _menuSubIdx;
     BOOL          _busy;
