@@ -66,7 +66,9 @@ typedef struct {
     int            vision_upstream_direct_pending;
     int            vision_upstream_direct_mark_transport;
     int            vision_downstream_direct;
+    int            vision_downstream_framing_done;
     long           vision_first_deadline_ms;
+    vision_traffic_t vision_traffic;
     vision_wrap_t  vwrap;
     vision_unpad_t vunpad;
 

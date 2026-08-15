@@ -9,6 +9,68 @@
 #define VISION_LONG_PAD_BASE 900
 #define VISION_SHORT_PAD_RANDOM 256
 
+static int bytes_contains(const uint8_t *buf, size_t len,
+                          const uint8_t *needle, size_t needle_len) {
+    if (!buf || !needle || needle_len == 0 || len < needle_len) return 0;
+    for (size_t i = 0; i + needle_len <= len; ++i)
+        if (memcmp(buf + i, needle, needle_len) == 0) return 1;
+    return 0;
+}
+
+void vision_traffic_init(vision_traffic_t *traffic) {
+    if (!traffic) return;
+    memset(traffic, 0, sizeof *traffic);
+    traffic->number_of_packet_to_filter = VISION_DEFAULT_PAD_PACKETS;
+    traffic->remaining_server_hello = -1;
+}
+
+void vision_filter_tls(vision_traffic_t *traffic, const uint8_t *buf, size_t len) {
+    static const uint8_t tls13_versions[] = { 0x00, 0x2b, 0x00, 0x02, 0x03, 0x04 };
+    if (!traffic || !buf || len == 0 || traffic->number_of_packet_to_filter <= 0)
+        return;
+
+    traffic->number_of_packet_to_filter--;
+
+    if (len >= 6 && buf[0] == 0x16 && buf[1] == 0x03 &&
+        buf[2] == 0x03 && buf[5] == 0x02) {
+        traffic->remaining_server_hello =
+            (int32_t)(((uint16_t)buf[3] << 8) | buf[4]) + 5;
+        traffic->is_tls12_or_above = 1;
+        traffic->is_tls = 1;
+
+        /* xray leaves the cipher unknown for short server hello records */
+        if (len >= 79 && traffic->remaining_server_hello >= 79) {
+            size_t session_len = buf[43];
+            size_t cipher_at = 44 + session_len;
+            if (cipher_at + 2 <= len) {
+                traffic->cipher = (uint16_t)(((uint16_t)buf[cipher_at] << 8) |
+                                             buf[cipher_at + 1]);
+            }
+        }
+    } else if (len >= 6 && buf[0] == 0x16 && buf[1] == 0x03 &&
+               buf[5] == 0x01) {
+        traffic->is_tls = 1;
+    }
+
+    if (traffic->remaining_server_hello > 0) {
+        size_t inspect = (size_t)traffic->remaining_server_hello;
+        if (inspect > len) inspect = len;
+        if (bytes_contains(buf, inspect, tls13_versions, sizeof tls13_versions)) {
+            if (traffic->cipher >= 0x1301 && traffic->cipher <= 0x1305 &&
+                traffic->cipher != 0x1305)
+                traffic->enable_xtls = 1;
+            traffic->number_of_packet_to_filter = 0;
+            traffic->remaining_server_hello = 0;
+            return;
+        }
+        traffic->remaining_server_hello -= (int32_t)len;
+        if (traffic->remaining_server_hello <= 0) {
+            traffic->remaining_server_hello = 0;
+            traffic->number_of_packet_to_filter = 0;
+        }
+    }
+}
+
 static uint32_t seed_now(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
@@ -72,9 +134,15 @@ static int scan_tls_records(const uint8_t *in, size_t len,
 void vision_wrap_init(vision_wrap_t *ctx, const uint8_t uuid[16]) {
     memset(ctx, 0, sizeof *ctx);
     memcpy(ctx->uuid, uuid, 16);
+    vision_traffic_init(&ctx->traffic_storage);
+    ctx->traffic = &ctx->traffic_storage;
     ctx->padding_active = 1;
     ctx->packets_left = VISION_DEFAULT_PAD_PACKETS;
     ctx->prng = seed_now() ^ ((uint32_t)uuid[0] << 24) ^ ((uint32_t)uuid[15] << 8);
+}
+
+void vision_wrap_bind_traffic(vision_wrap_t *ctx, vision_traffic_t *traffic) {
+    if (ctx) ctx->traffic = traffic ? traffic : &ctx->traffic_storage;
 }
 
 static int build_block(vision_wrap_t *ctx, uint8_t cmd,
@@ -124,32 +192,41 @@ int vision_wrap(vision_wrap_t *ctx, const uint8_t *in, size_t in_len,
 
     if (in_len > 0xffff) in_len = 0xffff;
     int has_ch = 0, app_records = 0;
+    if (ctx->traffic) vision_filter_tls(ctx->traffic, in, in_len);
     int tls_records = scan_tls_records(in, in_len, &has_ch, &app_records);
-    if (tls_records && has_ch) ctx->client_hello_seen = 1;
-
-    uint8_t cmd = (ctx->packets_left <= 1) ? VISION_CMD_END : VISION_CMD_CONTINUE;
-    if (tls_records && ctx->client_hello_seen && app_records > 0) {
-        int prev_app = ctx->client_tls_app_records;
-        ctx->client_tls_app_records += app_records;
-        if (prev_app > 0 || app_records > 1)
-            cmd = VISION_CMD_DIRECT;
+    int tls_app = tls_records && in_len >= 6 && in[0] == 0x17 &&
+                  in[1] == 0x03 && in[2] == 0x03 && app_records > 0;
+    uint8_t cmd = VISION_CMD_CONTINUE;
+    if (ctx->traffic && ctx->traffic->is_tls && tls_app) {
+        cmd = ctx->traffic->enable_xtls ? VISION_CMD_DIRECT : VISION_CMD_END;
+    } else if (ctx->traffic && !ctx->traffic->is_tls12_or_above &&
+               ctx->traffic->number_of_packet_to_filter <= 1) {
+        cmd = VISION_CMD_END;
     }
 
-    int long_padding = (in_len < VISION_LONG_PAD_THRESHOLD) ? 1 : 0;
+    ctx->packets_left = ctx->traffic ? ctx->traffic->number_of_packet_to_filter :
+                                         ctx->packets_left;
+    int long_padding = ctx->traffic && ctx->traffic->is_tls;
     int r = build_block(ctx, cmd, in, in_len, long_padding, out, cap, out_len);
     if (r != 0) return r;
-    if (ctx->packets_left > 0) ctx->packets_left--;
     if (cmd != VISION_CMD_CONTINUE) ctx->padding_active = 0;
     if (cmd == VISION_CMD_DIRECT) ctx->direct_sent = 1;
+    if (cmd == VISION_CMD_END) ctx->end_sent = 1;
     return 0;
 }
 
 void vision_unpad_init(vision_unpad_t *ctx, const uint8_t uuid[16]) {
     memset(ctx, 0, sizeof *ctx);
     memcpy(ctx->uuid, uuid, 16);
+    vision_traffic_init(&ctx->traffic_storage);
+    ctx->traffic = &ctx->traffic_storage;
     ctx->remaining_command = -1;
     ctx->remaining_content = -1;
     ctx->remaining_padding = -1;
+}
+
+void vision_unpad_bind_traffic(vision_unpad_t *ctx, vision_traffic_t *traffic) {
+    if (ctx) ctx->traffic = traffic ? traffic : &ctx->traffic_storage;
 }
 
 int vision_unpad(vision_unpad_t *ctx, const uint8_t *in, size_t in_len,
@@ -160,7 +237,7 @@ int vision_unpad(vision_unpad_t *ctx, const uint8_t *in, size_t in_len,
     size_t o = 0;
     size_t i = 0;
 
-    if (ctx->direct) {
+    if (ctx->direct || ctx->framing_done) {
         if (in_len > cap) return -1;
         if (in_len) memcpy(out, in, in_len);
         *out_len = in_len;
@@ -228,10 +305,12 @@ int vision_unpad(vision_unpad_t *ctx, const uint8_t *in, size_t in_len,
                 if (ctx->current_command == VISION_CMD_DIRECT) {
                     ctx->direct = 1;
                     if (switched_direct) *switched_direct = 1;
-                    size_t rest = in_len - i;
-                    if (rest > cap - o) return -1;
-                    memcpy(out + o, in + i, rest); o += rest; i = in_len;
+                } else {
+                    ctx->framing_done = 1;
                 }
+                size_t rest = in_len - i;
+                if (rest > cap - o) return -1;
+                memcpy(out + o, in + i, rest); o += rest; i = in_len;
                 ctx->remaining_command = -1; /* end switches back to idle */
                 ctx->remaining_content = -1;
                 ctx->remaining_padding = -1;

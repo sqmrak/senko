@@ -94,8 +94,8 @@ int main(void) {
 
     ok("pump direct", session_pump_remote(&s) == SESS_OK);
     ok("downstream direct latched", s.vision_downstream_direct == 1);
-    ok("upstream direct latched", s.vision_upstream_direct == 1);
-    ok("transport raw marked", ft.mark_calls == 1);
+    ok("upstream direct stays framed", s.vision_upstream_direct == 0);
+    ok("transport raw stays framed", ft.mark_calls == 0);
 
     uint8_t out[8];
     size_t got = session_take_client(&s, out, sizeof out);
@@ -104,9 +104,8 @@ int main(void) {
     size_t consumed = 0;
     ok("feed raw client", session_feed_client(&s, (const uint8_t *)"GET", 3, &consumed) == SESS_OK);
     ok("client consumed", consumed == 3);
-    ok("raw write used", ft.raw_calls == 1);
-    ok("normal write not used", ft.write_calls == 0);
-    ok("raw payload", ft.raw_len == 3 && memcmp(ft.raw_buf, "GET", 3) == 0);
+    ok("framed write used", ft.write_calls == 1);
+    ok("raw write not used", ft.raw_calls == 0);
 
     if (g_fail) {
         fprintf(stderr, "%d check(s) failed\n", g_fail);

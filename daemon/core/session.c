@@ -142,16 +142,18 @@ static sess_status_t send_vision_first(session_t *s,
 
     uint8_t blk[8192 + VISION_MAX_OVERHEAD];
     size_t blk_len = 0;
-    int sent_direct = 0;
+    int sent_mode_switch = 0;
     if (content > 0) {
         senko_upload_in_feed(s, payload, content);
         int was_direct = s->vwrap.direct_sent;
+        int was_end = s->vwrap.end_sent;
         if (vision_wrap(&s->vwrap, payload, content,
                         blk, sizeof blk, &blk_len) != 0) {
             s->state = SESS_ERROR;
             return SESS_ERR;
         }
-        sent_direct = !was_direct && s->vwrap.direct_sent;
+        sent_mode_switch = (!was_direct && s->vwrap.direct_sent) ||
+                            (!was_end && s->vwrap.end_sent);
     } else {
         if (vision_wrap_bootstrap(&s->vwrap, blk, sizeof blk, &blk_len) != 0) {
             s->state = SESS_ERROR;
@@ -178,8 +180,8 @@ static sess_status_t send_vision_first(session_t *s,
 
     s->state = SESS_VLESS_RESP;
 /* enable bulk aead when vision requests direct mode immediately */
-    if (sent_direct)
-        request_upstream_direct(s, "vision first DIRECT", 1);
+    if (sent_mode_switch)
+        request_upstream_direct(s, "vision first framing end", 1);
     if (taken) *taken = content;
     senko_trace_sess(s, content ? "vision_first_payload" : "vision_first_bootstrap",
                      content ? "header+payload" : "header+bootstrap");
@@ -214,13 +216,15 @@ static size_t push_app(session_t *s, const uint8_t *buf, size_t len) {
     uint8_t blk[8192 + VISION_MAX_OVERHEAD];
     size_t bn = 0;
     int was_direct = s->vwrap.direct_sent;
+    int was_end = s->vwrap.end_sent;
     if (vision_wrap(&s->vwrap, buf, content, blk, sizeof blk, &bn) != 0) return 0;
-    int sent_direct = !was_direct && s->vwrap.direct_sent;
+    int sent_mode_switch = (!was_direct && s->vwrap.direct_sent) ||
+                           (!was_end && s->vwrap.end_sent);
 
     push_remote(s, blk, bn);
     if (s->state == SESS_ERROR) return 0;
-    if (sent_direct)
-        request_upstream_direct(s, "local DIRECT", 1);
+    if (sent_mode_switch)
+        request_upstream_direct(s, "local framing end", 1);
 #ifndef SENKO_RELEASE
     s->trace_app_tx += (uint64_t)content;
 #endif
@@ -229,7 +233,9 @@ static size_t push_app(session_t *s, const uint8_t *buf, size_t len) {
 
 static void deliver_client(session_t *s, const uint8_t *buf, size_t len) {
 /* reject overflow so package downloads cannot become partial archives */
-    if (!s->vision_on || s->vision_downstream_direct) {
+    if (!s->vision_on || s->vision_downstream_direct ||
+        s->vision_downstream_framing_done) {
+        if (s->vision_on) vision_filter_tls(&s->vision_traffic, buf, len);
         size_t took = q_append(s->to_client, &s->to_client_len,
                                sizeof s->to_client, buf, len);
         if (took < len) {
@@ -257,9 +263,11 @@ static void deliver_client(session_t *s, const uint8_t *buf, size_t len) {
         s->state = SESS_ERROR;
         return;
     }
+    if (s->vunpad.framing_done)
+        s->vision_downstream_framing_done = 1;
+    if (an > 0) vision_filter_tls(&s->vision_traffic, app, an);
     if (dir) {
         s->vision_downstream_direct = 1;
-        request_upstream_direct(s, "downstream DIRECT", 1);
         fprintf(stderr, "senkod: vision downstream direct\n");
         senko_trace_sess(s, "downstream_direct", "vision CMD_DIRECT");
     }
@@ -307,8 +315,11 @@ sess_status_t session_init(session_t *s,
 /* enable vision only for its explicit flow so both directions agree */
         if (flow && strcmp(flow, "xtls-rprx-vision") == 0 && uuid) {
             s->vision_on = 1;
+            vision_traffic_init(&s->vision_traffic);
             vision_wrap_init(&s->vwrap, uuid);
             vision_unpad_init(&s->vunpad, uuid);
+            vision_wrap_bind_traffic(&s->vwrap, &s->vision_traffic);
+            vision_unpad_bind_traffic(&s->vunpad, &s->vision_traffic);
             senko_trace_sess(s, "sess_init", "vision");
         }
     } else if (proto == VL_PROTO_SOCKS5) {
