@@ -9,6 +9,7 @@
 #include "core/store.h"
 #include "ctl_server.h"
 #include "daemon_ctl.h"
+#include "legacy_ios.h"
 #include "dialer.h"
 #include "loop.h"
 #include "storefile.h"
@@ -155,8 +156,11 @@ static int run_managed(const char *ctl_path, const char *config_path,
 
     vpn_icon_set(0);
 
-    /* remove routing left behind by a crashed daemon */
-    routing_exec_clear_stale();
+    /* avoid legacy kernel routing commands on ios 5 */
+    if (senko_is_ios5())
+        fprintf(stderr, "senkod: ios 5 routing cleanup disabled for safety\n");
+    else
+        routing_exec_clear_stale();
 
     static ctl_server_t cs;
     if (ctl_server_init(&cs, ctl_path, daemon_ctl_apply, &dc) != CTLS_OK) {

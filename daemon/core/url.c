@@ -65,6 +65,95 @@ url_status_t url_parse(const char *url, url_t *out) {
     return URL_OK;
 }
 
+static url_status_t url_copy_redirect(const char *url, char *buf, size_t cap) {
+    size_t len;
+    url_t parsed;
+    if (!url || !buf || cap == 0) return URL_ERR_ARG;
+    len = strlen(url);
+    if (len + 1 > cap) return URL_ERR_TOOLONG;
+    memcpy(buf, url, len + 1);
+    return url_parse(buf, &parsed);
+}
+
+url_status_t url_resolve_redirect(const url_t *base, const char *location,
+                                  char *buf, size_t cap) {
+    const char *scheme;
+    const char *path;
+    const char *query;
+    size_t path_len;
+    size_t dir_len;
+    int default_port;
+    int n;
+
+    if (!base || !location || !buf || cap == 0) return URL_ERR_ARG;
+    while (*location == ' ' || *location == '\t') ++location;
+    if (!location[0]) return URL_ERR_HOST;
+
+    if (strncmp(location, "http://", 7) == 0 ||
+        strncmp(location, "https://", 8) == 0)
+        return url_copy_redirect(location, buf, cap);
+
+    scheme = base->is_https ? "https" : "http";
+    default_port = base->is_https ? 443 : 80;
+    if (strncmp(location, "//", 2) == 0) {
+        n = snprintf(buf, cap, "%s:%s", scheme, location);
+        if (n < 0 || (size_t)n >= cap) return URL_ERR_TOOLONG;
+        {
+            url_t parsed;
+            return url_parse(buf, &parsed);
+        }
+    }
+
+    n = snprintf(buf, cap, "%s://%s", scheme, base->host);
+    if (n < 0 || (size_t)n >= cap) return URL_ERR_TOOLONG;
+    size_t off = (size_t)n;
+    if (base->port != (uint16_t)default_port) {
+        n = snprintf(buf + off, cap - off, ":%u", base->port);
+        if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
+        off += (size_t)n;
+    }
+
+    if (location[0] == '/') {
+        path = location;
+    } else if (location[0] == '?') {
+        path = base->path;
+        query = strchr(path, '?');
+        path_len = query ? (size_t)(query - path) : strlen(path);
+        if (off + path_len + strlen(location) + 1 > cap)
+            return URL_ERR_TOOLONG;
+        memcpy(buf + off, path, path_len);
+        off += path_len;
+        memcpy(buf + off, location, strlen(location) + 1);
+        {
+            url_t parsed;
+            return url_parse(buf, &parsed);
+        }
+    } else {
+        path = base->path;
+        query = strchr(path, '?');
+        path_len = query ? (size_t)(query - path) : strlen(path);
+        dir_len = path_len;
+        while (dir_len > 0 && path[dir_len - 1] != '/') --dir_len;
+        if (dir_len == 0) dir_len = 1;
+        if (off + dir_len + strlen(location) + 1 > cap)
+            return URL_ERR_TOOLONG;
+        memcpy(buf + off, path, dir_len);
+        off += dir_len;
+        memcpy(buf + off, location, strlen(location) + 1);
+        {
+            url_t parsed;
+            return url_parse(buf, &parsed);
+        }
+    }
+
+    n = snprintf(buf + off, cap - off, "%s", path);
+    if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
+    {
+        url_t parsed;
+        return url_parse(buf, &parsed);
+    }
+}
+
 static int header_valid(const char *header) {
     if (!header || !header[0]) return 1;
     const char *colon = strchr(header, ':');

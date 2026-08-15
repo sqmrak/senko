@@ -171,9 +171,10 @@ static subfetch_status_t fetch_once(const subfetch_cfg_t *cfg, const url_t *u,
                         cookie_jar_merge(cookie_jar, cookie_cap, hp.set_cookie);
                     if (http_parser_is_redirect(&hp)) {
                         if (!hp.have_location) { result = SUBFETCH_ERR_REDIRECT; break; }
-                        size_t ll = strlen(hp.location);
-                        if (ll + 1 > redir_cap) { result = SUBFETCH_ERR_REDIRECT; break; }
-                        memcpy(redir, hp.location, ll + 1);
+                        if (url_resolve_redirect(u, hp.location, redir, redir_cap) != URL_OK) {
+                            result = SUBFETCH_ERR_REDIRECT;
+                            break;
+                        }
                         result = SUBFETCH_ERR_REDIRECT; /* follow the redirect */
                     } else {
                         *body_len = hp.body_len;
@@ -194,9 +195,7 @@ static subfetch_status_t fetch_once(const subfetch_cfg_t *cfg, const url_t *u,
                     if (hp.have_set_cookie && cookie_jar && cookie_cap)
                         cookie_jar_merge(cookie_jar, cookie_cap, hp.set_cookie);
                     if (http_parser_is_redirect(&hp) && hp.have_location) {
-                        size_t ll = strlen(hp.location);
-                        if (ll + 1 <= redir_cap) {
-                            memcpy(redir, hp.location, ll + 1);
+                        if (url_resolve_redirect(u, hp.location, redir, redir_cap) == URL_OK) {
                             result = SUBFETCH_ERR_REDIRECT;
                         } else result = SUBFETCH_ERR_REDIRECT;
                     } else {

@@ -27,6 +27,10 @@ typedef enum {
 
 url_status_t url_parse(const char *url, url_t *out);
 
+/* resolve an http redirect against the current request url */
+url_status_t url_resolve_redirect(const url_t *base, const char *location,
+                                  char *buf, size_t cap);
+
 /* use close-delimited requests so old http stacks need no chunk support */
 url_status_t url_build_get(const url_t *u, char *buf, size_t cap, size_t *out_len);
 url_status_t url_build_get_cookie(const url_t *u, const char *cookie,

@@ -1,6 +1,7 @@
 #define _DEFAULT_SOURCE /* expose getaddrinfo */
 
 #include "daemon_ctl.h"
+#include "legacy_ios.h"
 #include "storefile.h"
 #include "vpn_icon.h"
 
@@ -137,6 +138,12 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
         case CTL_ACT_START: {
             const vl_server_t *s = &action->server;
             /* show the vpn icon after verification */
+
+            if (d->full_device && senko_is_ios5()) {
+                fprintf(stderr, "senkod: ios 5 full-device routing disabled for safety\n");
+                vpn_icon_set(0);
+                return DCTL_ERR_IOS5;
+            }
 
             const transport_vt_t *vt = transport_for_server(s);
             if (!vt) {

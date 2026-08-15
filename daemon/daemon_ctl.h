@@ -14,6 +14,7 @@
 #define DCTL_ERR_LOOP      (-3)
 #define DCTL_ERR_DNS       (-4)
 #define DCTL_ERR_ROUTING   (-5)
+#define DCTL_ERR_IOS5      (-6)
 
 #ifdef __cplusplus
 extern "C" {

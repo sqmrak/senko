@@ -364,6 +364,8 @@ static void connect_failure_from_apply(connect_failure_t *f, int r) {
         connect_failure_set(f, "server", "dns resolution failed");
     else if (r == DCTL_ERR_ROUTING)
         connect_failure_set(f, "routing", "routing setup failed");
+    else if (r == DCTL_ERR_IOS5)
+        connect_failure_set(f, "routing", "ios 5 full-device routing is disabled for safety");
     else
         connect_failure_set(f, "server", "unknown error");
 }

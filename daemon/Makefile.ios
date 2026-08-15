@@ -30,7 +30,7 @@ CORE_SRC = core/vless.c core/b64.c core/config.c core/happ.c core/third_party/cJ
            core/tls13_transcript.c core/tls13_handshake.c core/reality_handshake.c \
            core/socks5_client.c core/http_client.c core/vision.c core/awg_config.c core/awg_handshake.c
 DAEMON_SRC = dialer.c loop.c pf_natlook.c ctl_server.c daemon_ctl.c storefile.c settings.c vpn_icon.c \
-             routing.c routing_exec.c main.c
+             routing.c routing_exec.c legacy_ios.c main.c
 
 .PHONY: all senkod senkoctl senko-kick senkoawgd clean
 all: $(IOS_BINDIR)/senkod $(IOS_BINDIR)/senkoctl $(IOS_BINDIR)/senko-kick $(IOS_BINDIR)/senkoawgd
@@ -56,9 +56,9 @@ $(IOS_BINDIR)/senkoctl: senkoctl.c core/b64.c
 	$(LDID) -S $@
 	@echo "signed. deps:"; $(TC)/otool -L $@ | tail -n +2
 
-$(IOS_BINDIR)/senkoawgd: senkoawgd.c awg_utun.c awg_route.c awg_pfroute.c core/awg_config.c core/awg_handshake.c core/awg_tunnel.c core/b64.c core/reality_crypto.c vpn_icon.c
+$(IOS_BINDIR)/senkoawgd: senkoawgd.c awg_utun.c awg_route.c awg_pfroute.c core/awg_config.c core/awg_handshake.c core/awg_tunnel.c core/b64.c core/reality_crypto.c vpn_icon.c legacy_ios.c
 	mkdir -p $(IOS_BINDIR)
-	$(CC) $(CFLAGS) senkoawgd.c awg_utun.c awg_route.c awg_pfroute.c core/awg_config.c core/awg_handshake.c core/awg_tunnel.c core/b64.c core/reality_crypto.c vpn_icon.c -o $@ $(LDFLAGS) $(LIBS)
+	$(CC) $(CFLAGS) senkoawgd.c awg_utun.c awg_route.c awg_pfroute.c core/awg_config.c core/awg_handshake.c core/awg_tunnel.c core/b64.c core/reality_crypto.c vpn_icon.c legacy_ios.c -o $@ $(LDFLAGS) $(LIBS)
 	$(LDID) -S $@
 	@echo "signed. deps:"; $(TC)/otool -L $@ | tail -n +2
 
