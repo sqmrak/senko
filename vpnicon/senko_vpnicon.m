@@ -18,6 +18,13 @@ static BOOL gSenkoDidApply = NO;
 static BOOL gSenkoLastState = NO;
 static unsigned gSenkoRetries = 0;
 
+static BOOL SenkoIsIOS5(void) {
+    NSDictionary *system = [NSDictionary dictionaryWithContentsOfFile:
+        @"/System/Library/CoreServices/SystemVersion.plist"];
+    NSString *version = [system objectForKey:@"ProductVersion"];
+    return [version hasPrefix:@"5."];
+}
+
 static BOOL SenkoReadVPNState(void) {
     char buf[8];
     int fd = open(kSenkoVPNIconStatePath, O_RDONLY);
@@ -158,6 +165,7 @@ static void SenkoVPNIconNotify(CFNotificationCenterRef center,
 __attribute__((constructor))
 static void SenkoVPNIconInit(void) {
     @autoreleasepool {
+        if (SenkoIsIOS5()) return;
         NSString *bundle = [[NSBundle mainBundle] bundleIdentifier];
         if (![bundle isEqualToString:@"com.apple.springboard"]) return;
 

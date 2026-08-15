@@ -98,7 +98,11 @@ rm -f /usr/bin/redsocks-senko /var/run/senko-redsocks.conf >/dev/null 2>&1 || tr
 [ -e /usr/lib/senkovpnicon.plist ] && chown root:wheel /usr/lib/senkovpnicon.plist && chmod 644 /usr/lib/senkovpnicon.plist || true
 mkdir -p /usr/lib/senkotlsfix/roots || true
 
-if tlsfix_installed; then
+IOS_MAJOR="$(firmware_major)"
+if [ "$IOS_MAJOR" = "5" ]; then
+  disable_senkotlsfix_hooks
+  disable_senkovpnicon_hooks
+elif tlsfix_installed; then
   disable_senkotlsfix_hooks
 elif substrate_installed; then
   enable_senkotlsfix_hooks
@@ -106,7 +110,7 @@ else
   disable_senkotlsfix_hooks
 fi
 
-if substrate_installed; then
+if [ "$IOS_MAJOR" != "5" ] && substrate_installed; then
   enable_senkovpnicon_hooks
 else
   disable_senkovpnicon_hooks

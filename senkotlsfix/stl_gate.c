@@ -2,6 +2,7 @@
 
 #include "stl_gate.h"
 #include "stl_log.h"
+#include "../daemon/legacy_ios.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <pthread.h>
@@ -79,6 +80,11 @@ static int stl_external_tlsfix(void) {
 }
 
 static void stl_gate_init(void) {
+    if (senko_is_ios5()) {
+        g_gate_state = -1;
+        stl_log("gate: ios 5 disabled");
+        return;
+    }
     if (stl_external_tlsfix()) {
         g_gate_state = -1;
         return;

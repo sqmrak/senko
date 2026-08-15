@@ -7,7 +7,7 @@ void stl_trust_install_hooks(void);
 
 __attribute__((constructor))
 static void stl_init(void) {
-    if (stl_gate_skip_process())
+    if (stl_gate_skip_process() || !stl_gate_is_active())
         return;
     stl_shadow_install_hooks();
     stl_trust_install_hooks();
