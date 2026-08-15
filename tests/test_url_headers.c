@@ -38,6 +38,16 @@ int main(void) {
                    strstr(req, "User-Agent: Happ/3.13.0\r\n") != NULL,
                    "happ-compatible default user agent");
 
+    char redirect[1024];
+    failed += check(url_resolve_redirect(&u, "/sub/token/",
+                                         redirect, sizeof redirect) == URL_OK &&
+                   strcmp(redirect, "https://sub.example/sub/token/") == 0,
+                   "resolve root-relative redirect");
+    failed += check(url_resolve_redirect(&u, "?format=base64",
+                                         redirect, sizeof redirect) == URL_OK &&
+                   strcmp(redirect, "https://sub.example/feed?format=base64") == 0,
+                   "resolve query redirect");
+
     if (failed) return 1;
     puts("all url header checks passed");
     return 0;
