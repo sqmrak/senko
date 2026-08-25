@@ -68,6 +68,7 @@ typedef struct loop {
     int                   listen_fd; /* local socks listener */
     int                   tproxy_fd; /* transparent listener, -1 means off */
     uint16_t              tproxy_port; /* redirect port used by natlook */
+    int                   tproxy_sockname; /* ipfw retains original destination */
     const transport_vt_t *vt; /* active remote transport */
     loop_dialer_fn        dial;
     void                 *dial_ctx;
@@ -140,6 +141,7 @@ void loop_stop(loop_t *lp);
 
 /* enable the listener used by full-device transparent routing */
 loop_status_t loop_enable_tproxy(loop_t *lp, uint16_t port);
+loop_status_t loop_enable_tproxy_ios5(loop_t *lp, uint16_t port);
 void loop_disable_tproxy(loop_t *lp);
 
 /* advance sockets, workers, and completed connections for one poll interval */

@@ -54,6 +54,7 @@ void daemon_ctl_shutdown(daemon_ctl_t *d) {
     if (d->full_device) {
         loop_disable_tproxy(d->loop);
         routing_exec_down(&d->routing);
+        routing_ios5_down(&d->routing_ios5);
     }
 }
 
@@ -139,12 +140,6 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
             const vl_server_t *s = &action->server;
             /* show the vpn icon after verification */
 
-            if (d->full_device && senko_is_ios5()) {
-                fprintf(stderr, "senkod: ios 5 full-device routing disabled for safety\n");
-                vpn_icon_set(0);
-                return DCTL_ERR_IOS5;
-            }
-
             const transport_vt_t *vt = transport_for_server(s);
             if (!vt) {
                 fprintf(stderr, "senkod: unsupported transport/security for server\n");
@@ -163,9 +158,11 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
             }
 
             /* clear routing before a switch */
-            if (d->full_device && d->routing.mode != ROUTING_MODE_NONE) {
+            if (d->full_device &&
+                (d->routing.mode != ROUTING_MODE_NONE || d->routing_ios5.active)) {
                 loop_disable_tproxy(d->loop);
                 routing_exec_down(&d->routing);
+                routing_ios5_down(&d->routing_ios5);
             }
 
             dialer_set_target(&d->dialer, s->host, s->port);
@@ -194,26 +191,43 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
                     return DCTL_ERR_DNS;
                 }
 
-                if (routing_exec_up(&d->routing, loop_listen_port(d->loop),
-                                    first_ip, ip_list,
-                                    d->settings.dns_upstream,
-                                    (int)d->settings.dns_local_port) != REXEC_OK) {
+                int ios5 = senko_is_ios5();
+                int routing_ok;
+                if (ios5) {
+                    routing_ok = routing_ios5_up(&d->routing_ios5,
+                                                 (int)loop_listen_port(d->loop),
+                                                 first_ip, ip_list) == 0;
+                    if (routing_ok)
+                        d->routing.use_internal_tproxy = 1;
+                } else {
+                    routing_ok = routing_exec_up(&d->routing,
+                                                 (int)loop_listen_port(d->loop),
+                                                 first_ip, ip_list,
+                                                 d->settings.dns_upstream,
+                                                 (int)d->settings.dns_local_port) == REXEC_OK;
+                }
+                if (!routing_ok) {
                     fprintf(stderr, "senkod: routing setup failed\n");
                     loop_stop(d->loop);
                     vpn_icon_set(0);
                     return DCTL_ERR_ROUTING;
                 }
+                int redir_port = ios5 ? d->routing_ios5.redir_port
+                                      : d->routing.redir_port;
                 if (d->routing.use_internal_tproxy) {
-                    if (loop_enable_tproxy(d->loop,
-                            (uint16_t)d->routing.redir_port) != LOOP_OK) {
+                    loop_status_t loop_rc = ios5
+                        ? loop_enable_tproxy_ios5(d->loop, (uint16_t)redir_port)
+                        : loop_enable_tproxy(d->loop, (uint16_t)redir_port);
+                    if (loop_rc != LOOP_OK) {
                         fprintf(stderr, "senkod: transparent listener failed\n");
                         routing_exec_down(&d->routing);
+                        routing_ios5_down(&d->routing_ios5);
                         loop_stop(d->loop);
                         vpn_icon_set(0);
                         return DCTL_ERR_ROUTING;
                     }
-                    fprintf(stderr, "senkod: transparent tcp on 127.0.0.1:%d\n",
-                            d->routing.redir_port);
+                    fprintf(stderr, "senkod: transparent tcp on %s:%d\n",
+                            ios5 ? "0.0.0.0" : "127.0.0.1", redir_port);
                 }
             }
             return 0;
@@ -225,6 +239,7 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
             if (d->full_device) {
                 loop_disable_tproxy(d->loop);
                 routing_exec_down(&d->routing);
+                routing_ios5_down(&d->routing_ios5);
             }
             loop_stop(d->loop);
             return 0;

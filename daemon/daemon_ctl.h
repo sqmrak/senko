@@ -6,6 +6,7 @@
 #include "dialer.h"
 #include "loop.h"
 #include "routing_exec.h"
+#include "routing_ios5.h"
 #include "settings.h"
 
 #define DCTL_OK             0
@@ -29,6 +30,7 @@ typedef struct {
     int            full_device;
     daemon_settings_t settings;
     routing_exec_t routing; /* keep live routing state */
+    routing_ios5_t routing_ios5;
 } daemon_ctl_t;
 
 /* attach the daemon loop */

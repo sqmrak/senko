@@ -248,13 +248,23 @@ int pf_natlook_dest(int accepted_fd, const struct sockaddr_in *clientaddr,
     if (!host || host_cap == 0 || !port || accepted_fd < 0 || !clientaddr)
         return -1;
 
-    int pffd = pf_fd_get();
-    if (pffd < 0) return -1;
-
     struct sockaddr_in local;
     socklen_t slen = sizeof local;
     if (getsockname(accepted_fd, (struct sockaddr *)&local, &slen) != 0)
         return -1;
+
+    int pffd = pf_fd_get();
+    if (pffd < 0) {
+/* ios 5 ipfw fwd keeps the original destination on the socket */
+        if (local.sin_addr.s_addr != htonl(INADDR_LOOPBACK) &&
+            local.sin_port != htons(redir_port)) {
+            if (!inet_ntop(AF_INET, &local.sin_addr, host, (socklen_t)host_cap))
+                return -1;
+            *port = ntohs(local.sin_port);
+            return 0;
+        }
+        return -1;
+    }
 
     struct pfioc_natlook_nl nl;
     memset(&nl, 0, sizeof nl);

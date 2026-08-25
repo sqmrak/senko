@@ -19,7 +19,7 @@ CORE_SRC = core/vless.c core/b64.c core/config.c core/happ.c core/third_party/cJ
            core/tls13_transcript.c core/tls13_handshake.c core/reality_handshake.c \
            core/socks5_client.c core/http_client.c core/vision.c core/awg_config.c core/awg_handshake.c
 DAEMON_SRC = dialer.c loop.c pf_natlook.c ctl_server.c daemon_ctl.c storefile.c settings.c vpn_icon.c \
-             routing.c routing_exec.c legacy_ios.c main.c
+             routing.c routing_exec.c routing_ios5.c legacy_ios.c main.c
 
 .PHONY: all clean
 

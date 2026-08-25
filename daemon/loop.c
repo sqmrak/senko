@@ -502,7 +502,8 @@ void loop_stop(loop_t *lp) {
     lp->active = 0; /* refuse new clients until a server is selected again */
 }
 
-loop_status_t loop_enable_tproxy(loop_t *lp, uint16_t port) {
+static loop_status_t loop_enable_tproxy_mode(loop_t *lp, uint16_t port,
+                                             int sockname_dest) {
     if (!lp || port == 0) return LOOP_ERR_ARG;
     loop_disable_tproxy(lp);
 
@@ -515,7 +516,8 @@ loop_status_t loop_enable_tproxy(loop_t *lp, uint16_t port) {
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof addr);
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_addr.s_addr = sockname_dest ? htonl(INADDR_ANY)
+                                          : htonl(INADDR_LOOPBACK);
     addr.sin_port = htons(port);
     if (bind(fd, (struct sockaddr *)&addr, sizeof addr) != 0 ||
         listen(fd, 32) != 0) {
@@ -525,7 +527,16 @@ loop_status_t loop_enable_tproxy(loop_t *lp, uint16_t port) {
     set_nonblock(fd);
     lp->tproxy_fd = fd;
     lp->tproxy_port = port;
+    lp->tproxy_sockname = sockname_dest;
     return LOOP_OK;
+}
+
+loop_status_t loop_enable_tproxy(loop_t *lp, uint16_t port) {
+    return loop_enable_tproxy_mode(lp, port, 0);
+}
+
+loop_status_t loop_enable_tproxy_ios5(loop_t *lp, uint16_t port) {
+    return loop_enable_tproxy_mode(lp, port, 1);
 }
 
 void loop_disable_tproxy(loop_t *lp) {
@@ -534,6 +545,7 @@ void loop_disable_tproxy(loop_t *lp) {
         close(lp->tproxy_fd);
         lp->tproxy_fd = -1;
         lp->tproxy_port = 0;
+        lp->tproxy_sockname = 0;
     }
     pf_natlook_close();
 }
@@ -621,10 +633,20 @@ static void accept_tproxy_one(loop_t *lp) {
 
     if (!lp->active || !lp->vt || !lp->dial) { close(cfd); return; }
 
-    char host[256];
+    char host[INET_ADDRSTRLEN];
     uint16_t dport = 0;
-    if (pf_natlook_dest(cfd, &clientaddr, lp->tproxy_port,
-                         host, sizeof host, &dport) != 0) {
+    if (lp->tproxy_sockname) {
+        struct sockaddr_in dest;
+        socklen_t destlen = sizeof dest;
+        if (getsockname(cfd, (struct sockaddr *)&dest, &destlen) != 0 ||
+            dest.sin_family != AF_INET ||
+            !inet_ntop(AF_INET, &dest.sin_addr, host, sizeof host)) {
+            close(cfd);
+            return;
+        }
+        dport = ntohs(dest.sin_port);
+    } else if (pf_natlook_dest(cfd, &clientaddr, lp->tproxy_port,
+                               host, sizeof host, &dport) != 0) {
         close(cfd);
         return;
     }
