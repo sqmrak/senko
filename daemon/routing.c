@@ -115,6 +115,11 @@ routing_status_t routing_pf_conf(const char *server_ips,
 
     pf_w_t w = { buf, cap, 0, 0 };
 
+    /* ios 7 pf retains idle tcp states long enough to exhaust its small table */
+    pf_ap(&w, "set timeout { tcp.first 30, tcp.opening 30, tcp.established 7200, "
+              "tcp.closing 30, tcp.finwait 30, udp.first 30, udp.single 30, "
+              "udp.multiple 60, icmp.first 10, other.first 30, frag 30 }\n");
+
     switch (mode) {
         case ROUTING_PF_ROUTE_TO_LO0:
         case ROUTING_PF_ROUTE_TO_LO0_NOGW: {
