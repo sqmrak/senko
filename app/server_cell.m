@@ -103,8 +103,8 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
         _plate.layer.shadowOpacity = 0.0f;
         _plate.layer.shadowRadius = 0;
         _plate.layer.shadowPath = nil;
-/* cache modern glass cards, let classic themes stay on the normal gpu path */
-        _plate.layer.shouldRasterize = SenkoThemeIsIos16() || SenkoThemeIsIos26();
+/* cached plates reduce blend work while classic lists scroll */
+        _plate.layer.shouldRasterize = YES;
         if (_plate.layer.shouldRasterize)
             _plate.layer.rasterizationScale = [UIScreen mainScreen].scale;
         if ([_plate.layer respondsToSelector:@selector(setDrawsAsynchronously:)])
