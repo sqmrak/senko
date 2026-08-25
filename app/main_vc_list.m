@@ -1235,7 +1235,9 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
         return;
     }
     [_ctl stopAWG:^(NSString *status) {
-        if (!status || ![status hasPrefix:@"idle"]) {
+        NSString *clean = [status stringByTrimmingCharactersInSet:
+                           [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (!clean.length || ![clean hasPrefix:@"idle"]) {
             [self setLastErr:@"could not stop amneziawg"];
             [self applyState];
             return;

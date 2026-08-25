@@ -606,8 +606,18 @@ static SenkoSub *parseSUB(NSString *line) {
             posix_spawn_file_actions_destroy(&fa);
             close(pipefd[1]);
             if (ok) {
-                ssize_t n = read(pipefd[0], output, sizeof output - 1);
-                if (n > 0) output[n] = '\0';
+/* kick may wait on its startup lock before answering; keep draining */
+                size_t total = 0;
+                while (total + 1 < sizeof output) {
+                    ssize_t n = read(pipefd[0], output + total, sizeof output - 1 - total);
+                    if (n > 0) {
+                        total += (size_t)n;
+                        continue;
+                    }
+                    if (n < 0 && errno == EINTR) continue;
+                    break;
+                }
+                output[total] = '\0';
                 int st = 0;
                 while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
             }

@@ -95,10 +95,10 @@ static void senkoClearVpnIcon(void) {
         if (awgLive) {
             [self setToggleBusy:YES];
             [_ctl stopAWG:^(NSString *stopReply) {
-                if (!stopReply || [stopReply hasPrefix:@"error"]) {
-                    [self setLastErr:stopReply ?
-                        [stopReply stringByTrimmingCharactersInSet:
-                         [NSCharacterSet whitespaceAndNewlineCharacterSet]] :
+                NSString *stopClean = [stopReply stringByTrimmingCharactersInSet:
+                                       [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                if (!stopClean.length || [stopClean hasPrefix:@"error"]) {
+                    [self setLastErr:stopClean.length ? stopClean :
                         @"could not stop amneziawg"];
                     [_state release]; _state = [@"error" copy];
                     senkoClearVpnIcon();
@@ -147,10 +147,10 @@ static void senkoClearVpnIcon(void) {
         [self setLastErr:nil];
         [self applyState];
         [_ctl stopAWG:^(NSString *stopReply) {
-            if (!stopReply || [stopReply hasPrefix:@"error"]) {
-                [self setLastErr:stopReply ?
-                    [stopReply stringByTrimmingCharactersInSet:
-                     [NSCharacterSet whitespaceAndNewlineCharacterSet]] :
+            NSString *stopClean = [stopReply stringByTrimmingCharactersInSet:
+                                   [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (!stopClean.length || [stopClean hasPrefix:@"error"]) {
+                [self setLastErr:stopClean.length ? stopClean :
                     @"could not stop amneziawg"];
                 [_state release]; _state = [@"error" copy];
                 senkoClearVpnIcon();
@@ -290,7 +290,9 @@ static void senkoClearVpnIcon(void) {
     [vc dismissViewControllerAnimated:YES completion:nil];
     if (_activeBackend == SenkoBackendAmneziaWG) {
         [_ctl stopAWG:^(NSString *status) {
-            if (!status || ![status hasPrefix:@"idle"]) {
+            NSString *clean = [status stringByTrimmingCharactersInSet:
+                               [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (!clean.length || ![clean hasPrefix:@"idle"]) {
                 [self setLastErr:@"could not stop amneziawg"];
                 [self applyState];
                 return;
@@ -368,7 +370,9 @@ static void senkoClearVpnIcon(void) {
     };
     if (_activeBackend == SenkoBackendAmneziaWG) {
         [_ctl stopAWG:^(NSString *status) {
-            if (status && [status hasPrefix:@"idle"]) finish();
+            NSString *finishClean = [status stringByTrimmingCharactersInSet:
+                                     [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if ([finishClean hasPrefix:@"idle"]) finish();
             else {
                 [self setLastErr:@"could not stop amneziawg"];
                 [self applyState];

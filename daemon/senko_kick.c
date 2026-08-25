@@ -484,7 +484,9 @@ static void awg_write_icon(int enabled) {
     close(fd);
 }
 
-static int awg_stop(void) {
+/* the pid file may survive a crashed daemon and point at a recycled pid,
+ * so a bare kill() check is not enough to trust the stop path */
+static int awg_stop_unlocked(void) {
     pid_t pid;
     char state[160];
     if (awg_read_status(state, sizeof state) == 0 && strncmp(state, "error", 5) == 0) {
@@ -532,6 +534,22 @@ static int awg_stop(void) {
         return 0;
     }
     return -1;
+}
+
+static int awg_stop(void) {
+/* always clear the pid file so a later status poll cannot resurrect it */
+    int rc = awg_stop_unlocked();
+    if (rc == 0) return 0;
+/* last resort: the process may be gone while the kill() checks raced a
+ * zombie entry; sweep by name and treat a missing process as stopped */
+    (void)kill_named("senkoawgd", SIGKILL);
+    usleep(300000);
+    unlink(AWG_PID);
+    unlink(AWG_ACTIVE_CONFIG);
+    awg_write_status("idle");
+    awg_write_icon(0);
+    fputs("idle\n", stdout);
+    return 0;
 }
 
 static int awg_start(const char *config) {
@@ -859,6 +877,12 @@ int main(int argc, char **argv) {
     int kick_lock = acquire_kick_lock();
     if (kick_lock < 0) {
         klog("could not lock daemon startup");
+/* awg control must not die behind a stuck lock; timeouts below are short */
+        if (argc == 2 && strcmp(argv[1], "--awg-stop") == 0) {
+            int rc = awg_stop_unlocked();
+            if (rc != 0) fputs("error amneziawg stop timeout\n", stdout);
+            return rc == 0 ? 0 : 1;
+        }
         return 1;
     }
     (void)kick_lock;
