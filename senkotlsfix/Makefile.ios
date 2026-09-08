@@ -4,20 +4,22 @@ THEOS   ?= $(error set THEOS=/path/to/theos)
 TC      ?= $(if $(SENKO_TC),$(SENKO_TC),$(THEOS)/toolchain/linux/iphone/bin)
 SDK     ?= $(if $(SENKO_SDK_V7),$(SENKO_SDK_V7),$(error set SDK=/path/to/iphoneos.sdk))
 LDID    ?= $(TC)/ldid
+EXTRA_CFLAGS ?=
+INSTALL_NAME ?= /usr/lib/senkotlsfix.dylib
 # static archives from scripts/build_mbedtls.sh
 MBED    ?= $(if $(SENKO_MBED),$(SENKO_MBED),$(error set MBED=/path/to/mbedtls-output))
 
 TRIPLE  ?= arm-apple-darwin11
 CC      := $(TC)/clang -target $(TRIPLE) -B $(TC)
 ARCH    ?= -arch armv7 -miphoneos-version-min=5.0
-CFLAGS  := -std=c99 -Wall -Wextra -O2 -fPIC $(ARCH) -isysroot $(SDK) \
+CFLAGS  := -std=c99 -Wall -Wextra -O2 -fPIC $(EXTRA_CFLAGS) $(ARCH) -isysroot $(SDK) \
            -I../daemon \
            -I$(MBED)/include -DMBEDTLS_PLATFORM_MS_TIME_ALT
 LDFLAGS := $(ARCH) -isysroot $(SDK) -dynamiclib -Wl,-no_warn_inits \
-           -install_name /usr/lib/senkotlsfix.dylib \
+           -install_name $(INSTALL_NAME) \
            -framework Security -framework CoreFoundation
 
-SRC = fishhook.c stl_gate.c stl_log.c stl_roots.c stl_shadow.c stl_trust.c stl_init.c \
+SRC = fishhook.c stl_gate.c stl_log.c stl_proxy.c stl_roots.c stl_shadow.c stl_trust.c stl_init.c \
       ms_time_ios.c builtins.c ../daemon/legacy_ios.c
 MBEDLIBS ?= $(MBED)/lib/libmbedtls-armv7.a \
             $(MBED)/lib/libmbedx509-armv7.a \

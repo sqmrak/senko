@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#include <stddef.h>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -51,57 +52,75 @@ static id SenkoSharedObject(NSString *className, SEL first, SEL second) {
     return nil;
 }
 
-static BOOL SenkoCallBoolSetter(id obj, SEL sel, BOOL value) {
+static BOOL SenkoCallVoid(id obj, SEL sel) {
     if (!obj || ![obj respondsToSelector:sel]) return NO;
-    IMP imp = [obj methodForSelector:sel];
-    void (*call)(id, SEL, BOOL) = (void (*)(id, SEL, BOOL))imp;
-    call(obj, sel, value);
-    return YES;
-}
-
-static BOOL SenkoCallStatusSetter(id obj, SEL sel, int status) {
-    if (!obj || ![obj respondsToSelector:sel]) return NO;
-    IMP imp = [obj methodForSelector:sel];
-    void (*call)(id, SEL, int) = (void (*)(id, SEL, int))imp;
-    call(obj, sel, status);
-    return YES;
-}
-
-static void SenkoCallVoid(id obj, SEL sel) {
-    if (!obj || ![obj respondsToSelector:sel]) return;
     IMP imp = [obj methodForSelector:sel];
     void (*call)(id, SEL) = (void (*)(id, SEL))imp;
     call(obj, sel);
+    return YES;
+}
+
+static BOOL gSenkoVPNForced = NO;
+static BOOL (*gSenkoOrigUsingVPN)(id, SEL) = NULL;
+
+static BOOL SenkoUsingVPNConnection(id self, SEL _cmd) {
+    if (gSenkoVPNForced) return YES;
+    if (gSenkoOrigUsingVPN) return gSenkoOrigUsingVPN(self, _cmd);
+    return NO;
+}
+
+/* springboard rebuilds the status bar from SBTelephonyManager whenever the
+   network changes, so a value written into the manager was overwritten within
+   seconds and writing its ivar by offset also cleared the neighbouring wifi
+   state. answering the getter keeps every rebuild reporting the tunnel */
+static BOOL SenkoInstallVPNHook(void) {
+    static const char *names[] = {
+        "isUsingVPNConnection", "usingVPNConnection", "isVPNActive", NULL
+    };
+    if (gSenkoOrigUsingVPN) return YES;
+    Class cls = NSClassFromString(@"SBTelephonyManager");
+    if (!cls) return NO;
+    for (size_t i = 0; names[i]; ++i) {
+        SEL sel = sel_registerName(names[i]);
+        Method method = class_getInstanceMethod(cls, sel);
+        if (!method) continue;
+        const char *types = method_getTypeEncoding(method);
+/* both BOOL encodings return one byte in the same register; anything else
+   would be a different method wearing the same name */
+        if (types && types[0] != 'c' && types[0] != 'B') continue;
+        gSenkoOrigUsingVPN = (BOOL (*)(id, SEL))
+            method_setImplementation(method, (IMP)SenkoUsingVPNConnection);
+        return YES;
+    }
+    NSLog(@"senko vpnicon: SBTelephonyManager has no vpn getter to answer");
+    return NO;
 }
 
 static BOOL SenkoApplyVPNIcon(BOOL enabled) {
+    if (!SenkoInstallVPNHook()) return NO;
+    gSenkoVPNForced = enabled;
+
+/* the aggregator was renamed when statuskit took over the status bar, so both
+   names are tried and whichever one the system has answers. only the vpn item
+   is refreshed: rebuilding the data network or service items dropped the wifi
+   glyph until the next system update */
+    static NSString * const kAggregators[] = {
+        @"SBStatusBarStateAggregator", @"STStatusBarStateAggregator"
+    };
+    for (size_t i = 0; i < sizeof kAggregators / sizeof kAggregators[0]; ++i) {
+        id aggregator = SenkoSharedObject(kAggregators[i],
+                                          @selector(sharedInstance),
+                                          @selector(sharedAggregator));
+        if (!aggregator) continue;
+        if (!SenkoCallVoid(aggregator, NSSelectorFromString(@"_updateVPNItem")))
+            SenkoCallVoid(aggregator, NSSelectorFromString(@"updateVPNItem"));
+    }
+
     id telephony = SenkoSharedObject(@"SBTelephonyManager",
                                      @selector(sharedTelephonyManager),
                                      @selector(sharedInstance));
-    if (!telephony) return NO;
-
-    BOOL changed = SenkoCallBoolSetter(telephony,
-                                       @selector(setIsUsingVPNConnection:),
-                                       enabled);
-    if (!changed) {
-        changed = SenkoCallBoolSetter(telephony,
-                                      @selector(_setIsUsingVPNConnection:),
-                                      enabled);
-    }
-    if (!changed) {
-        changed = SenkoCallStatusSetter(telephony,
-                                        NSSelectorFromString(@"_setVPNConnectionStatus:"),
-                                        enabled ? 2 : 0);
-    }
-    if (!changed) return NO;
-
     SenkoCallVoid(telephony, @selector(updateSpringBoard));
-    SenkoCallVoid(telephony, @selector(_updateSpringBoard));
-    id statusBar = SenkoSharedObject(@"SBStatusBarDataManager",
-                                     @selector(sharedDataManager),
-                                     @selector(sharedInstance));
-    SenkoCallVoid(statusBar, @selector(_dataChanged));
-    SenkoCallVoid(statusBar, @selector(_updateTimeString));
+
     return YES;
 }
 

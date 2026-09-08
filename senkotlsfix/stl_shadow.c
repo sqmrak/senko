@@ -18,6 +18,7 @@
 #include "mbedtls/error.h"
 #include "mbedtls/x509_crt.h"
 #include "psa/crypto.h"
+#include "../common/senko_paths.h"
 
 #ifndef MBEDTLS_ERR_NET_RECV_FAILED
 #define MBEDTLS_ERR_NET_RECV_FAILED -0x004C
@@ -34,7 +35,7 @@
 #define ST_Connected       2
 #define ST_TLS12           8
 
-#define stl_ca_path "/usr/lib/senkotlsfix/cacert.pem"
+#define stl_ca_path SENKO_USR_LIB "/senkotlsfix/cacert.pem"
 #define MAXSH 256
 #define DRAIN_MAX 64
 
@@ -73,8 +74,7 @@ static void *g_trust_ring[64];
 static int g_trust_idx;
 static pthread_mutex_t g_trust_lock = PTHREAD_MUTEX_INITIALIZER;
 
-/* short-lived host blacklist only for permanent mbed_init failures.
-   never poison hosts for wire blips: that forced safari double-reloads*/
+/* blacklisting only permanent init failures prevents safari double reloads after wire loss */
 static char g_fail_hosts[32][256];
 static unsigned g_fail_ts[32];
 static int g_fail_idx;
@@ -427,8 +427,7 @@ static OSStatus stl_SSLRead(SSLContextRef c, void *data, size_t len, size_t *pro
     if (n == 0 || n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY ||
         n == MBEDTLS_ERR_SSL_CONN_EOF)
         return ST_ClosedGraceful;
-    /* tunnel drop mid-body: graceful close lets safari retry the connection
-       instead of painting a permanent hard-fail interstitial*/
+    /* a graceful mid-body close lets safari retry instead of caching a hard failure */
     if (n == MBEDTLS_ERR_NET_RECV_FAILED || n == MBEDTLS_ERR_NET_SEND_FAILED)
         return ST_ClosedGraceful;
     if (n < 0) {

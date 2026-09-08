@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include "../common/senko_paths.h"
 
 #define stl_prefs_path "/var/mobile/Library/Preferences/com.senko.senkotlsfix.plist"
 
@@ -76,13 +77,20 @@ static int stl_cfbool(CFDictionaryRef d, const char *key, int def) {
 }
 
 static int stl_external_tlsfix(void) {
-    return access("/Library/MobileSubstrate/DynamicLibraries/tlsfix.dylib", F_OK) == 0;
+    return access(SENKO_SUBSTRATE_DIR "/tlsfix.dylib", F_OK) == 0;
 }
 
 static void stl_gate_init(void) {
-    if (senko_is_ios5()) {
+    int ios_major = senko_ios_major();
+    if (ios_major == 5) {
         g_gate_state = -1;
         stl_log("gate: ios 5 disabled");
+        return;
+    }
+    if (ios_major >= 12) {
+        /* injecting the legacy shim on ios 12 adds crash surface without fixing TLS */
+        g_gate_state = -1;
+        stl_log("gate: ios %d uses system tls", ios_major);
         return;
     }
     if (stl_external_tlsfix()) {

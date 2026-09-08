@@ -6,8 +6,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "../common/senko_paths.h"
 
-#define stl_roots_dir "/usr/lib/senkotlsfix/roots"
+#define stl_roots_dir SENKO_USR_LIB "/senkotlsfix/roots"
 
 static unsigned char stl_b64_val(unsigned char c) {
     if (c >= 'A' && c <= 'Z') return (unsigned char)(c - 'A');
