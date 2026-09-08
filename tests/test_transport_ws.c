@@ -170,6 +170,47 @@ static int write_bad_u64_length(int fd) {
     return write(fd, frame, sizeof frame) == (ssize_t)sizeof frame ? 0 : -1;
 }
 
+/* one binary frame larger than the receive buffer, drained in small reads: the
+   caller's read size is bounded by how much the client socket can still take,
+   so a big frame has to survive many partial reads */
+#define BIG_FRAME_TOTAL 200000
+
+static int big_frame_roundtrip(int fd, void *h) {
+    static const uint8_t hdr[10] = { 0x82, 127, 0, 0, 0, 0, 0, 0x03, 0x0d, 0x40 };
+    size_t sent_hdr = 0, sent = 0, got = 0;
+    int idle = 0;
+
+    while (sent_hdr < sizeof hdr) {
+        ssize_t n = write(fd, hdr + sent_hdr, sizeof hdr - sent_hdr);
+        if (n <= 0) return -1;
+        sent_hdr += (size_t)n;
+    }
+
+    while (got < BIG_FRAME_TOTAL && idle < 100000) {
+        while (sent < BIG_FRAME_TOTAL) {
+            uint8_t chunk[4096];
+            size_t want = BIG_FRAME_TOTAL - sent < sizeof chunk
+                        ? BIG_FRAME_TOTAL - sent : sizeof chunk;
+            for (size_t i = 0; i < want; ++i)
+                chunk[i] = (uint8_t)((sent + i) & 0xff);
+            ssize_t n = write(fd, chunk, want);
+            if (n <= 0) break; /* socket buffer full, drain the client side */
+            sent += (size_t)n;
+        }
+
+        uint8_t out[4096];
+        int r = transport_ws_tcp.read(h, out, sizeof out);
+        if (r == TRANSPORT_EOF) return -2;
+        if (r == TRANSPORT_WANT_READ || r == TRANSPORT_WANT_WRITE) { idle++; continue; }
+        if (r < 0) return -3;
+        for (int i = 0; i < r; ++i)
+            if (out[i] != (uint8_t)((got + (size_t)i) & 0xff)) return -4;
+        got += (size_t)r;
+        idle = 0;
+    }
+    return got == BIG_FRAME_TOTAL ? 0 : -5;
+}
+
 int main(void) {
     int sv[2];
     void *h = NULL;
@@ -230,6 +271,12 @@ int main(void) {
     ok("write bad u64 length", write_bad_u64_length(sv[1]) == 0);
     rr = transport_ws_tcp.read(h, tmp, sizeof tmp);
     ok("bad u64 length rejected", rr == TRANSPORT_ERR);
+    close_pair(sv, h);
+
+    h = NULL;
+    ok("start ws big frame", start_ws(sv, &h, req, sizeof req) == 0);
+    ok("complete ws big frame", complete_ws(sv[1], h, req) == 0);
+    ok("big frame survives partial reads", big_frame_roundtrip(sv[1], h) == 0);
     close_pair(sv, h);
 
     if (g_fail) {

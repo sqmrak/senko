@@ -411,14 +411,20 @@ static int ws_read(void *handle, uint8_t *buf, size_t len) {
     if (h->rx_off > 0 && h->rx_off == h->rx_len) {
         h->rx_len = 0;
         h->rx_off = 0;
-    } else if (h->rx_off > sizeof(h->rx_buf) / 2) {
+    } else if (h->rx_off > 0 && (h->rx_off > sizeof(h->rx_buf) / 2 ||
+                                 h->rx_len == sizeof(h->rx_buf))) {
+        /* a full buffer must reclaim the consumed prefix even below the
+           halfway mark, otherwise the read below is left with no room */
         memmove(h->rx_buf, h->rx_buf + h->rx_off, h->rx_len - h->rx_off);
         h->rx_len -= h->rx_off;
         h->rx_off = 0;
     }
 
-    if (h->rx_len - h->rx_off == 0 || (h->rx_has_frame && h->rx_frame_left > 0 && h->rx_len - h->rx_off < h->rx_frame_left)) {
-        int r = h->sub_vt->read(h->sub_h, h->rx_buf + h->rx_len, sizeof(h->rx_buf) - h->rx_len);
+    size_t rx_space = sizeof(h->rx_buf) - h->rx_len;
+    /* a zero-length read reports EOF, so only read when there is real room */
+    if (rx_space > 0 &&
+        (h->rx_len - h->rx_off == 0 || (h->rx_has_frame && h->rx_frame_left > 0 && h->rx_len - h->rx_off < h->rx_frame_left))) {
+        int r = h->sub_vt->read(h->sub_h, h->rx_buf + h->rx_len, rx_space);
         if (r > 0) {
             h->rx_len += (size_t)r;
         } else if (r < 0) {
@@ -450,8 +456,6 @@ static int ws_read(void *handle, uint8_t *buf, size_t len) {
 
         if (payload_len == 126) header_size = 4;
         else if (payload_len == 127) header_size = 10;
-
-        if (masked) header_size += 4;
 
         if (unparsed < header_size) return TRANSPORT_WANT_READ;
 

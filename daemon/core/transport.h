@@ -22,6 +22,7 @@ typedef struct {
     const char *path; /* preserve the transport request path */
     const char *ws_host; /* preserve the websocket host header */
     const char *xhttp_mode; /* preserve the xhttp stream mode */
+    const char *peer_host; /* dial target host, last authority fallback */
 } transport_tls_cfg_t;
 
 typedef struct transport_vt {
@@ -40,6 +41,9 @@ typedef struct transport_vt {
 
 /* report pending ciphertext so the loop continues polling for output */
     int (*want_write)(void *h);
+
+/* half close after the relay drained cleanly; optional (http/2 end stream) */
+    void (*shutdown)(void *h);
 } transport_vt_t;
 
 extern const transport_vt_t transport_tcp; /* plain tcp transport */

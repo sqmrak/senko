@@ -1,5 +1,7 @@
 /* select xhttp stream mode and keep upload and download framing compatible */
 #include "transport.h"
+#include "grpc_core.h"
+#include "hpack.h"
 #include "reality_handshake.h"
 
 #include <stdio.h>
@@ -14,8 +16,10 @@
 
 enum {
     H2_DATA = 0, H2_HEADERS = 1, H2_RST_STREAM = 3, H2_SETTINGS = 4,
-    H2_PING = 6, H2_GOAWAY = 7, H2_WINDOW_UPDATE = 8
+    H2_PING = 6, H2_GOAWAY = 7, H2_WINDOW_UPDATE = 8, H2_CONTINUATION = 9
 };
+
+enum { H2_FLAG_END_STREAM = 0x01, H2_FLAG_END_HEADERS = 0x04, H2_FLAG_PADDED = 0x08 };
 
 enum { XH_MODE_ONE = 0, XH_MODE_UP = 1, XH_MODE_PKT = 2 };
 
@@ -34,6 +38,14 @@ typedef struct {
     int                   peer_end;
     int                   security_tls; /* 1 if tls/reality (scheme https) */
     int                   grpc; /* use the xray gRPC stream envelope */
+
+/* http/2 response header assembly and failure reporting */
+    int                   hdr_wait; /* expecting CONTINUATION */
+    uint8_t               hdr_blk[1024];
+    size_t                hdr_len;
+    int                   we_end; /* our END_STREAM queued */
+    int                   saw_status;
+    char                  last_err[128];
 
     uint32_t peer_win, our_win;
     uint32_t up_peer_win, up_our_win; /* upload stream windows */
@@ -85,6 +97,31 @@ static int tx_append(xh_t *h, const uint8_t *p, size_t n) {
     memcpy(h->tx + h->tx_len, p, n);
     h->tx_len += n;
     return 0;
+}
+
+/* record the failure at the owning boundary and fail the connection */
+static int h2_fail(xh_t *h, const char *reason) {
+    if (h->state == XH_ST_FAIL) return TRANSPORT_ERR;
+    snprintf(h->last_err, sizeof h->last_err, "%s", reason);
+    fprintf(stderr, "senkod: http2: %s\n", reason);
+    h->state = XH_ST_FAIL;
+    return TRANSPORT_ERR;
+}
+
+static const char *h2_error_name(uint32_t code) {
+    switch (code) {
+        case 0:  return "no error";
+        case 1:  return "protocol error";
+        case 2:  return "internal error";
+        case 3:  return "flow control error";
+        case 7:  return "refused stream";
+        case 8:  return "cancel";
+        case 10: return "remote refused";
+        case 11: return "cancel by peer";
+        case 12: return "compression error";
+        case 13: return "connection error";
+        default: return "http/2 error";
+    }
 }
 
 static int frame_append(xh_t *h, uint8_t type, uint8_t flags,
@@ -247,7 +284,7 @@ static int read_varint(const uint8_t *p, size_t n, size_t *used, uint32_t *value
     return -1;
 }
 
-/* Hunk is a tiny protobuf message with one bytes field: data = 1. */
+/* xray hunk payloads use protobuf field 1 for application bytes */
 static int grpc_message_to_app(xh_t *h, const uint8_t *msg, size_t len) {
     size_t pos = 0;
     while (pos < len) {
@@ -312,6 +349,60 @@ static int grpc_rx_push(xh_t *h, const uint8_t *data, size_t len) {
     return 0;
 }
 
+/* collect one header block across CONTINUATION and run it through hpack */
+static int process_header_block(xh_t *h, uint8_t type, uint8_t flags,
+                                const uint8_t *pay, size_t plen) {
+    if (type == H2_HEADERS) {
+        if (h->hdr_wait) return h2_fail(h, "headers inside unfinished block");
+        h->hdr_len = 0;
+        h->hdr_wait = !(flags & H2_FLAG_END_HEADERS);
+        if (flags & H2_FLAG_PADDED) {
+            if (plen < 1) return h2_fail(h, "truncated padded headers");
+            size_t pad = pay[0];
+            pay++; plen--;
+            if (plen < pad) return h2_fail(h, "truncated padded headers");
+            plen -= pad;
+        }
+    } else { /* H2_CONTINUATION */
+        if (!h->hdr_wait)
+            return h2_fail(h, "continuation without headers");
+        h->hdr_wait = !(flags & H2_FLAG_END_HEADERS);
+    }
+    if (plen > sizeof h->hdr_blk - h->hdr_len)
+        return h2_fail(h, "header block too large");
+    memcpy(h->hdr_blk + h->hdr_len, pay, plen);
+    h->hdr_len += plen;
+    if (h->hdr_wait) return 0;
+
+    senko_hpack_fields_t f;
+    if (senko_hpack_parse(h->hdr_blk, h->hdr_len, &f) != 0)
+        return h2_fail(h, "malformed response headers");
+
+    if (f.have_status) {
+        if (f.status != 200) {
+            char msg[96];
+            snprintf(msg, sizeof msg, "http status %d", f.status);
+            return h2_fail(h, msg);
+        }
+        h->saw_status = 1;
+    } else if (!h->saw_status) {
+/* a first response without :status cannot be verified */
+        return h2_fail(h, "response status missing");
+    }
+
+    if ((flags & H2_FLAG_END_STREAM) && h->grpc) {
+        if (f.have_grpc_status && f.grpc_status != 0) {
+            char msg[160];
+            snprintf(msg, sizeof msg, "grpc status %d: %s",
+                     f.grpc_status, f.grpc_message);
+            return h2_fail(h, msg);
+        }
+        if (!f.have_grpc_status)
+            return h2_fail(h, "grpc trailers without status");
+    }
+    return 0;
+}
+
 static int process_frames(xh_t *h) {
     while (h->rx_len - h->rx_off >= 9) {
         const uint8_t *hdr = h->rx + h->rx_off;
@@ -322,13 +413,25 @@ static int process_frames(xh_t *h) {
         const uint8_t *pay = hdr + 9;
         h->rx_off += (size_t)(9 + plen);
 
+/* we never advertise SETTINGS_MAX_FRAME_SIZE above the default */
+        if (plen > 16384) return h2_fail(h, "frame size above advertised max");
+        if (stream == 0 &&
+            (type == H2_DATA || type == H2_HEADERS ||
+             type == H2_CONTINUATION))
+            return h2_fail(h, "frame on stream 0");
+        if (stream != 0 && type == H2_SETTINGS)
+            return h2_fail(h, "settings on a stream");
+        if (h->hdr_wait && type != H2_CONTINUATION)
+            return h2_fail(h, "frame inside header block");
+
         if (type == H2_SETTINGS) {
             if (!(flags & 0x01)) {
-/* apply the peer window before sending stream data */
                 for (int i = 0; i + 6 <= plen; i += 6) {
                     uint16_t id = (uint16_t)((pay[i] << 8) | pay[i + 1]);
                     uint32_t val = h2_u32(pay + i + 2);
                     if (id == 0x4) { /* update the stream flow-control window */
+                        if (val > 0x7fffffffu)
+                            return h2_fail(h, "peer initial window overflow");
                         h->peer_win = val;
                         h->up_peer_win = val;
                         h->dn_peer_win = val;
@@ -343,10 +446,17 @@ static int process_frames(xh_t *h) {
             continue;
         }
         if (type == H2_WINDOW_UPDATE && plen == 4) {
-            uint32_t inc = h2_u32(pay) & 0x7fffffffu;
-            if (stream == 0) h->peer_win += inc;
-            else if (stream == h->up_stream) h->up_peer_win += inc;
-            else if (stream == h->dn_stream) h->dn_peer_win += inc;
+            uint32_t inc = h2_u32(pay) & 0x7fffffffu; /* reserved bit ignored */
+            if (inc == 0)
+                return h2_fail(h, "window update increment 0");
+            uint32_t *win = stream == 0 ? &h->peer_win :
+                            stream == h->up_stream ? &h->up_peer_win :
+                            stream == h->dn_stream ? &h->dn_peer_win : NULL;
+            if (win) {
+                if (*win > 0x7fffffffu - inc)
+                    return h2_fail(h, "flow control window overflow");
+                *win += inc;
+            }
             continue;
         }
         if (type == H2_PING && plen == 8) {
@@ -355,31 +465,52 @@ static int process_frames(xh_t *h) {
                 return TRANSPORT_ERR;
             continue;
         }
-        if (type == H2_GOAWAY || type == H2_RST_STREAM) {
-            h->state = XH_ST_FAIL;
-            return TRANSPORT_EOF;
+        if (type == H2_GOAWAY) {
+            if (plen < 8)
+                return h2_fail(h, "short goaway");
+            char msg[96];
+            snprintf(msg, sizeof msg, "goaway: %s",
+                     h2_error_name(h2_u32(pay + 4)));
+            return h2_fail(h, msg);
         }
-        if (type == H2_HEADERS) {
-            if (stream == h->dn_stream || stream == h->up_stream) {
-/* accept; optional:status check skipped for size */
-                if ((flags & 0x01) && stream == h->dn_stream) h->peer_end = 1;
+        if (type == H2_RST_STREAM) {
+            if (plen != 4)
+                return h2_fail(h, "short rst stream");
+/* rst for a finished packet-up stream can still be in flight */
+            if (stream == h->up_stream || stream == h->dn_stream) {
+                char msg[96];
+                snprintf(msg, sizeof msg, "rst stream: %s",
+                         h2_error_name(h2_u32(pay)));
+                return h2_fail(h, msg);
             }
+            continue;
+        }
+        if (type == H2_HEADERS || type == H2_CONTINUATION) {
+            if (stream != h->up_stream && stream != h->dn_stream)
+                continue; /* never opened: server-side stray stream */
+            int r = process_header_block(h, type, flags, pay, (size_t)plen);
+            if (r != 0) return r;
             continue;
         }
         if (type == H2_DATA) {
             const uint8_t *data = pay;
             size_t dlen = (size_t)plen;
-            if (flags & 0x08) {
-                if (dlen < 1) return TRANSPORT_ERR;
+            if (flags & H2_FLAG_PADDED) {
+                if (dlen < 1) return h2_fail(h, "truncated padded data");
                 size_t pad = data[0];
                 data++; dlen--;
-                if (dlen < pad) return TRANSPORT_ERR;
+                if (dlen < pad) return h2_fail(h, "truncated padded data");
                 dlen -= pad;
             }
+            if (stream != h->up_stream && stream != h->dn_stream)
+                continue; /* never opened: server-side stray stream */
             if (stream == h->dn_stream && dlen > 0) {
                 if (h->grpc) {
-                    if (grpc_rx_push(h, data, dlen) != 0) return TRANSPORT_ERR;
-                } else if (app_push(h, data, dlen) != 0) return TRANSPORT_ERR;
+                    if (grpc_rx_push(h, data, dlen) != 0)
+                        return h2_fail(h, "bad grpc message stream");
+                } else if (app_push(h, data, dlen) != 0) {
+                    return h2_fail(h, "app buffer overflow");
+                }
                 if (h->our_win > dlen) h->our_win -= (uint32_t)dlen;
                 else h->our_win = 0;
                 if (h->dn_our_win > dlen) h->dn_our_win -= (uint32_t)dlen;
@@ -394,8 +525,9 @@ static int process_frames(xh_t *h) {
                     h->dn_our_win += 65535;
                 }
             }
-            if ((flags & 0x01) && stream == h->dn_stream) {
-                if (h->grpc && h->grpc_rx_len != 0) return TRANSPORT_ERR;
+            if ((flags & H2_FLAG_END_STREAM) && stream == h->dn_stream) {
+                if (h->grpc && h->grpc_rx_len != 0)
+                    return h2_fail(h, "truncated grpc message at end stream");
                 h->peer_end = 1;
             }
             continue;
@@ -439,9 +571,21 @@ static int queue_boot(xh_t *h, const transport_tls_cfg_t *cfg, int is_sec) {
     h->up_peer_win = h->up_our_win = 65535;
     h->dn_peer_win = h->dn_our_win = 65535;
 
-    snprintf(h->host, sizeof h->host, "%s",
-             (cfg && cfg->ws_host && cfg->ws_host[0]) ? cfg->ws_host :
-             ((cfg && cfg->sni && cfg->sni[0]) ? cfg->sni : "localhost"));
+/* http/2 authority: explicit host param wins. gRPC routes on the dial target
+   like xray and only falls back to sni; ws keeps sni as its camouflage host */
+    const char *authority;
+    if (cfg && cfg->ws_host && cfg->ws_host[0]) {
+        authority = cfg->ws_host;
+    } else if (h->grpc && cfg && cfg->peer_host && cfg->peer_host[0]) {
+        authority = cfg->peer_host;
+    } else if (cfg && cfg->sni && cfg->sni[0]) {
+        authority = cfg->sni;
+    } else if (cfg && cfg->peer_host && cfg->peer_host[0]) {
+        authority = cfg->peer_host;
+    } else {
+        authority = "localhost";
+    }
+    snprintf(h->host, sizeof h->host, "%s", authority);
 
     int trail = (h->mode != XH_MODE_ONE);
     normalize_base_path(cfg && cfg->path ? cfg->path : "/",
@@ -454,18 +598,12 @@ static int queue_boot(xh_t *h, const transport_tls_cfg_t *cfg, int is_sec) {
     static const char preface[] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
     if (tx_append(h, (const uint8_t *)preface, sizeof preface - 1) != 0)
         return -1;
-/* raise concurrent streams for packet-up */
-    uint8_t setpay[12];
-    h2_put_u32(setpay, 0x3); /* max concurrent streams */
-    h2_put_u32(setpay + 4, 100);
-    h2_put_u32(setpay + 8, 0); /* pad - actually need id+val pairs */
-/* proper: id u16 + val u32 each */
-    uint8_t settings[12];
+/* raise max concurrent streams for packet-up; keep the initial stream window
+   at the 65535 default because the app buffers hold at most one 64k window */
+    uint8_t settings[6];
     settings[0] = 0; settings[1] = 0x3;
     h2_put_u32(settings + 2, 128);
-    settings[6] = 0; settings[7] = 0x4; /* initial window size */
-    h2_put_u32(settings + 8, 1024 * 1024);
-    if (frame_append(h, H2_SETTINGS, 0, 0, settings, 12) != 0) return -1;
+    if (frame_append(h, H2_SETTINGS, 0, 0, settings, 6) != 0) return -1;
 
     uint8_t block[512];
     size_t blen = 0;
@@ -573,35 +711,16 @@ static void xh_close(void *handle) {
     free(h);
 }
 
-static size_t put_varint(uint8_t *dst, uint32_t value) {
-    size_t n = 0;
-    do {
-        uint8_t b = (uint8_t)(value & 0x7f);
-        value >>= 7;
-        if (value) b |= 0x80;
-        dst[n++] = b;
-    } while (value);
-    return n;
-}
-
 static int grpc_frame_append(xh_t *h, const uint8_t *data, size_t len,
                              size_t *wire_len) {
     uint8_t frame[16384 + 16];
-    size_t pos = 0;
-    size_t proto_len;
+    size_t frame_len = 0;
 
-    if (!len || len > 16368) return -1;
-    frame[pos++] = 0; /* uncompressed gRPC message */
-    proto_len = 1 + (len < 128 ? 1 : (len < 16384 ? 2 : 3)) + len;
-    h2_put_u32(frame + pos, (uint32_t)proto_len);
-    pos += 4;
-    frame[pos++] = 0x0a; /* Hunk.data */
-    pos += put_varint(frame + pos, (uint32_t)len);
-    memcpy(frame + pos, data, len);
-    pos += len;
-    if (frame_append(h, H2_DATA, 0, h->up_stream, frame, pos) != 0)
+    if (senko_grpc_encode(data, len, frame, sizeof frame, &frame_len) != 0)
         return -1;
-    if (wire_len) *wire_len = pos;
+    if (frame_append(h, H2_DATA, 0, h->up_stream, frame, frame_len) != 0)
+        return -1;
+    if (wire_len) *wire_len = frame_len;
     return 0;
 }
 
@@ -737,12 +856,30 @@ static int xh_want_write(void *handle) {
     return 0;
 }
 
+/* half close after the relay drained: end the upload stream so grpc and
+   xhttp servers see a complete request instead of a transport reset */
+static void xh_shutdown(void *handle) {
+    xh_t *h = (xh_t *)handle;
+    if (!h || h->we_end || h->state == XH_ST_FAIL) return;
+    h->we_end = 1;
+    if (h->mode == XH_MODE_PKT) {
+        if (h->pkt_len == 0) return; /* every packet already ends its stream */
+        if (send_packet(h, h->pkt, h->pkt_len) != 0) return;
+        h->pkt_len = 0;
+    } else if (frame_append(h, H2_DATA, H2_FLAG_END_STREAM, h->up_stream,
+                            NULL, 0) != 0) {
+        return;
+    }
+    (void)flush_tx(h);
+}
+
 const transport_vt_t transport_xhttp_tcp = {
-    xh_open_tcp, xh_read, xh_write, NULL, xh_close, xh_want_write
+    xh_open_tcp, xh_read, xh_write, NULL, xh_close, xh_want_write, xh_shutdown
 };
 const transport_vt_t transport_xhttp_tls = {
-    xh_open_tls, xh_read, xh_write, NULL, xh_close, xh_want_write
+    xh_open_tls, xh_read, xh_write, NULL, xh_close, xh_want_write, xh_shutdown
 };
 const transport_vt_t transport_xhttp_reality = {
-    xh_open_reality, xh_read, xh_write, NULL, xh_close, xh_want_write
+    xh_open_reality, xh_read, xh_write, NULL, xh_close, xh_want_write,
+    xh_shutdown
 };
