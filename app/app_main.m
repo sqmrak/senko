@@ -14,10 +14,11 @@
 #import "bubble_field.h"
 #import "themes_vc.h"
 #import "server_cell.h"
-#import "main_layout.h"
+#import "home_layout.h"
 #import "update_install.h"
 #import "meow.h"
 #import "app_common.h"
+#include "../common/senko_paths.h"
 
 @interface UIViewController (SenkoRotation)
 @end
@@ -41,61 +42,73 @@
 @end
 
 static BOOL ExternalTlsfixInstalled(void) {
-    return access("/Library/MobileSubstrate/DynamicLibraries/tlsfix.dylib", F_OK) == 0;
+    return access(SENKO_SUBSTRATE_DIR "/tlsfix.dylib", F_OK) == 0;
 }
 
 NSString *SenkoAboutAppReport(void) {
     int tlsfix = ExternalTlsfixInstalled();
+    BOOL systemTLS = [[[UIDevice currentDevice] systemVersion] floatValue] >= 12.0f;
     if (SenkoLanguageIsRussian()) {
         return [NSString stringWithFormat:
-                @"Полноценный VLESS- и AmneziaWG-клиент для джейлбрейкнутых iOS 5-10.\n"
-                 "Для маршрутизации всего устройства нужен root.\n\n"
-                 "Протоколы\n"
-                 "- VLESS + TCP (none / TLS / Reality+Vision)\n"
-                 "- VLESS + WebSocket / XHTTP\n"
-                 "- AmneziaWG\n"
-                 "- SOCKS5, HTTP(S) CONNECT\n\n"
-                 "Пути\n"
-                 "Управление: %@\n"
-                 "Конфигурация: /var/root/Library/Preferences/senko.cfg\n"
-                 "Логи: /var/log/senkod.log, /var/log/senkoawgd.log\n\n"
-                 "TLS-хук: %@\n\n"
-                 "Тестеры: ogeprint, rafal_official, nifty, wolfer, lineysom, lime, fr0n1k, inraxx, qualcomm",
-                SENKO_SOCK,
-                tlsfix
+                @"vpn для всего устройства\n"
+                 "приложения и системный трафик идут через выбранный профиль. для маршрутизации нужен root.\n\n"
+                 "транспорты\n"
+                 "tcp · tls · reality + vision\n"
+                 "websocket · xhttp · grpc\n"
+                 "amneziawg · socks5 · http(s) connect\n\n"
+                 "совместимость\n"
+                 "ios 5-15 · armv7 + arm64\n"
+                 "интерфейс подстраивается под компактные, plus, x/mini/max и ipad-экраны.\n\n"
+                 "безопасность и диагностика\n"
+                 "control socket с токеном · защита подписок от ssrf · скрытие секретов в логах · настоящая проверка транспорта.\n"
+                 "общий журнал: /var/log/senko-system.log\n\n"
+                 "tls-режим: %@\n\n"
+                 "тестировали: @inraxx, @s3dativee, @rafal_official, @RealPetuh, @QuaIcomm, @belo4kaFLUNI, @Wolfer_QUIC, @fluffynifty, @not_a_modder, @Lineysom, @Lime_iOS6, @fr0n1k, @ogeprint, @CookieValerka",
+                systemTLS
+                    ? @"системный tls (compatibility hook не внедряется)"
+                    : tlsfix
                     ? @"внешний tlsfix найден, хуки senkotlsfix отключены"
-                    : @"senkotlsfix для TLS1.3 Safari при установленном MobileSubstrate"];
+                    : @"senkotlsfix для tls1.3 safari при установленном mobilesubstrate"];
     }
     return [NSString stringWithFormat:
-            @"Full-device VLESS and AmneziaWG client for jailbroken iOS 5-10.\n"
-             "Needs root for full-device routing.\n\n"
-             "Protocols\n"
-             "- VLESS + TCP (none / TLS / Reality+Vision)\n"
-             "- VLESS + WebSocket / XHTTP\n"
-             "- AmneziaWG\n"
-             "- SOCKS5, HTTP(S) CONNECT\n\n"
-             "Paths\n"
-             "Control: %@\n"
-             "Config: /var/root/Library/Preferences/senko.cfg\n"
-             "Logs: /var/log/senkod.log, /var/log/senkoawgd.log\n\n"
-             "TLS hook: %@\n\n"
-             "Testers: ogeprint, rafal_official, nifty, wolfer, lineysom, lime, fr0n1k, inraxx, qualcomm",
-            SENKO_SOCK,
-            tlsfix
+            @"full-device vpn\n"
+             "apps and system traffic use the selected profile. root is required for routing.\n\n"
+             "transports\n"
+             "tcp · tls · reality + vision\n"
+             "websocket · xhttp · grpc\n"
+             "amneziawg · socks5 · http(s) connect\n\n"
+             "compatibility\n"
+             "ios 5-15 · armv7 + arm64\n"
+             "adaptive layouts for compact, plus, x/mini/max and ipad displays.\n\n"
+             "security and diagnostics\n"
+             "token-authenticated control socket · subscription ssrf protection · secret redaction · real transport checks.\n"
+             "combined log: /var/log/senko-system.log\n\n"
+             "tls mode: %@\n\n"
+             "testers: @inraxx, @s3dativee, @rafal_official, @RealPetuh, @QuaIcomm, @belo4kaFLUNI, @Wolfer_QUIC, @fluffynifty, @not_a_modder, @Lineysom, @Lime_iOS6, @fr0n1k, @ogeprint, @CookieValerka",
+            systemTLS
+                ? @"system tls (the compatibility hook is not injected)"
+                : tlsfix
                 ? @"external tlsfix present - senkotlsfix hooks stay off"
-                : @"senkotlsfix (Safari TLS1.3 when MobileSubstrate is installed)"];
+                : @"senkotlsfix (safari tls1.3 when mobilesubstrate is installed)"];
 }
 
+/* uikit looks the main window up through the delegate on systems that expect a
+   scene manifest, so the property is part of the launch contract, not decor */
 @interface AppDelegate : UIResponder <UIApplicationDelegate> {
     UIWindow *_window;
 }
+@property (nonatomic, retain) UIWindow *window;
 @end
 
 @implementation AppDelegate
+@synthesize window = _window;
 - (BOOL)application:(UIApplication *)app didFinishLaunchingWithOptions:(NSDictionary *)opts {
-    _window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
+    (void)app; (void)opts;
+    UIWindow *w = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
     MainVC *vc = [[[MainVC alloc] init] autorelease];
-    _window.rootViewController = vc;
+    w.rootViewController = vc;
+    self.window = w;
+    [w release];
     [_window makeKeyAndVisible];
     return YES;
 }
@@ -105,7 +118,7 @@ NSString *SenkoAboutAppReport(void) {
 int main(int argc, char **argv) {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     if (!ExternalTlsfixInstalled())
-        (void)dlopen("/usr/lib/senkotlsfix.dylib", RTLD_NOW | RTLD_GLOBAL);
+        (void)dlopen(SENKO_USR_LIB "/senkotlsfix.dylib", RTLD_NOW | RTLD_GLOBAL);
     SenkoLocalizationInstall();
     InitPalette();
     SenkoMeowInstallHooks();

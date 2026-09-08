@@ -14,7 +14,7 @@
 #import "bubble_field.h"
 #import "themes_vc.h"
 #import "server_cell.h"
-#import "main_layout.h"
+#import "home_layout.h"
 #import "update_install.h"
 #import "meow.h"
 #import "app_common.h"
@@ -171,21 +171,29 @@
         cell.textLabel.font = [UIFont boldSystemFontOfSize:15];
         cell.detailTextLabel.font = [UIFont systemFontOfSize:11];
     }
+    cell.textLabel.numberOfLines = 2;
+    cell.textLabel.lineBreakMode = NSLineBreakByWordWrapping;
+    cell.textLabel.adjustsFontSizeToFitWidth = YES;
+    cell.textLabel.minimumFontSize = 11.0f;
+    cell.detailTextLabel.numberOfLines = 2;
+    cell.detailTextLabel.lineBreakMode = NSLineBreakByWordWrapping;
     cell.backgroundColor = kCellHi;
     SenkoStyleInkLabel(cell.textLabel);
     SenkoStyleMutedLabel(cell.detailTextLabel);
     cell.accessoryType = UITableViewCellAccessoryNone;
-    cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+    SenkoStyleSelectableCell(cell);
     if (_errorText) {
         cell.textLabel.text = @"cannot open folder";
         cell.detailTextLabel.text = _errorText;
         cell.accessoryType = UITableViewCellAccessoryNone;
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
         return cell;
     }
     if ([_rows count] == 0) {
         cell.textLabel.text = @"empty folder";
         cell.detailTextLabel.text = _path ? _path : @"no readable folders";
         cell.accessoryType = UITableViewCellAccessoryNone;
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
         return cell;
     }
     NSDictionary *row = [_rows objectAtIndex:ip.row];
@@ -194,6 +202,11 @@
     cell.detailTextLabel.text = isDir ? [row objectForKey:@"path"] : [row objectForKey:@"detail"];
     cell.accessoryType = isDir ? UITableViewCellAccessoryDisclosureIndicator : UITableViewCellAccessoryNone;
     return cell;
+}
+
+- (CGFloat)tableView:(UITableView *)tv heightForRowAtIndexPath:(NSIndexPath *)ip {
+    (void)tv; (void)ip;
+    return 66.0f;
 }
 
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
@@ -210,4 +223,3 @@
 }
 
 @end
-

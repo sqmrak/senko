@@ -14,7 +14,7 @@
 #import "bubble_field.h"
 #import "themes_vc.h"
 #import "server_cell.h"
-#import "main_layout.h"
+#import "home_layout.h"
 #import "update_install.h"
 #import "meow.h"
 #import "app_common.h"
@@ -66,7 +66,7 @@
     CGRect b = self.view.bounds;
     UIView *plate = [[[UIView alloc] initWithFrame:CGRectInset(b, 10, 10)] autorelease];
     plate.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    plate.layer.cornerRadius = 8;
+    plate.layer.cornerRadius = SenkoThemeCardRadius();
     plate.layer.borderWidth = 0;
     plate.layer.borderColor = [UIColor clearColor].CGColor;
     SenkoStyleTerminalPlate(plate);
@@ -84,4 +84,3 @@
 }
 
 @end
-

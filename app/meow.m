@@ -6,7 +6,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-/* sfx via avaudioplayer when present, else systemsound */
+/* runtime lookup prevents AVFoundation from becoming an ios 5 launch dependency */
 
 NSString * const SenkoMeowKey = @"senko.meowmeowmeow";
 NSString * const SenkoOuchKey = @"senko.ooouch";
@@ -83,7 +83,6 @@ static NSString *SenkoSfxFindPath(NSString *base) {
     return path;
 }
 
-/* create avaudioplayer without linking the class */
 static id SenkoSfxMakePlayer(NSURL *url) {
     Class cls = NSClassFromString(@"AVAudioPlayer");
     if (!cls) return nil;
@@ -177,7 +176,7 @@ static void SenkoSfxPlayLoaded(id *player,
     if (*player) {
         if (SenkoSfxPlayerPlay(*player))
             return;
-/* reopen session after interrupt */
+/* interruptions invalidate the old audio session on early iOS */
         gSessionOk = NO;
         SenkoSfxActivateSession();
         *ready = NO;

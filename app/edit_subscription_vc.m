@@ -14,12 +14,23 @@
 #import "bubble_field.h"
 #import "themes_vc.h"
 #import "server_cell.h"
-#import "main_layout.h"
+#import "home_layout.h"
 #import "update_install.h"
 #import "meow.h"
 #import "app_common.h"
+#include "../common/senko_paths.h"
 
+/* the same id the daemon already sends as x-hwid. a panel that binds a device
+   must see one value whichever header carries it, so this never mints a second
+   identity while the shared file exists */
 static NSString *SenkoSubscriptionHWID(void) {
+    NSString *shared = [NSString stringWithContentsOfFile:@SENKO_HWID_PATH
+                                                 encoding:NSUTF8StringEncoding
+                                                    error:NULL];
+    shared = [shared stringByTrimmingCharactersInSet:
+              [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([shared length] >= 10 && [shared length] <= 64) return shared;
+
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     NSString *value = [defaults stringForKey:@"SenkoSubscriptionHWID"];
     if ([value length]) return value;

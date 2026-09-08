@@ -158,15 +158,17 @@
     CGRect b = SenkoViewBounds(self.view);
     if (b.size.width < 1.0f || b.size.height < 1.0f) return;
 
-    CGFloat top = GetTopOffset() + 24.0f;
+    UIEdgeInsets safe = SenkoSafeAreaInsets(self.view);
+    CGFloat top = MAX(GetTopOffset(), safe.top) + 24.0f;
     CGFloat pad = 18.0f;
-    CGFloat w = MAX(1.0f, b.size.width - pad * 2.0f);
+    CGFloat x = safe.left + pad;
+    CGFloat w = MAX(1.0f, b.size.width - safe.left - safe.right - pad * 2.0f);
 
     _bgGrad.frame = b;
-    _titleLbl.frame = CGRectMake(pad, top, w, 28.0f);
-    _pkgLbl.frame = CGRectMake(pad, top + 32.0f, w, 22.0f);
+    _titleLbl.frame = CGRectMake(x, top, w, 28.0f);
+    _pkgLbl.frame = CGRectMake(x, top + 32.0f, w, 22.0f);
 
-    _plate.frame = CGRectMake(pad, top + 70.0f, w, 72.0f);
+    _plate.frame = CGRectMake(x, top + 70.0f, w, 72.0f);
     _bar.frame = CGRectMake(14.0f, 18.0f,
                             MAX(1.0f, _plate.bounds.size.width - 28.0f), 12.0f);
     _statusLbl.frame = CGRectMake(14.0f, 40.0f,
@@ -174,14 +176,14 @@
 
     CGFloat logY = top + 156.0f;
     CGFloat btnH = 44.0f;
-    CGFloat btnY = b.size.height - btnH - 24.0f;
+    CGFloat btnY = b.size.height - safe.bottom - btnH - 24.0f;
     if (btnY < logY + 100.0f) btnY = logY + 100.0f;
     CGFloat logH = btnY - logY - 16.0f;
     if (logH < 80.0f) logH = 80.0f;
 
-    _logPlate.frame = CGRectMake(pad, logY, w, logH);
+    _logPlate.frame = CGRectMake(x, logY, w, logH);
     _log.frame = CGRectInset(_logPlate.bounds, 8.0f, 8.0f);
-    _closeBtn.frame = CGRectMake(pad, btnY, w, btnH);
+    _closeBtn.frame = CGRectMake(x, btnY, w, btnH);
     StyleGlossyCapsuleLayout(_closeBtn);
 }
 
@@ -200,6 +202,9 @@
     _titleLbl.backgroundColor = [UIColor clearColor];
     _titleLbl.textAlignment = NSTextAlignmentCenter;
     _titleLbl.font = [UIFont boldSystemFontOfSize:20];
+    _titleLbl.lineBreakMode = NSLineBreakByClipping;
+    _titleLbl.adjustsFontSizeToFitWidth = YES;
+    _titleLbl.minimumFontSize = 12.0f;
 /* fixed dark sheet independent of theme */
     SenkoStyleInkOnDark(_titleLbl);
     _titleLbl.text = @"Installing";
@@ -210,15 +215,17 @@
     _pkgLbl.backgroundColor = [UIColor clearColor];
     _pkgLbl.textAlignment = NSTextAlignmentCenter;
     _pkgLbl.font = [UIFont systemFontOfSize:15];
+    _pkgLbl.lineBreakMode = NSLineBreakByClipping;
+    _pkgLbl.adjustsFontSizeToFitWidth = YES;
+    _pkgLbl.minimumFontSize = 10.0f;
     SenkoStyleAccentOnDark(_pkgLbl);
     _pkgLbl.text = @"Senko";
     _pkgLbl.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     [self.view addSubview:_pkgLbl];
 
-/* holds bar + label */
     _plate = [[[UIView alloc] initWithFrame:CGRectMake(pad, top + 70, w, 72)] autorelease];
     _plate.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    _plate.layer.cornerRadius = 10;
+    _plate.layer.cornerRadius = SenkoThemeCardRadius();
     _plate.layer.borderWidth = 0;
     _plate.layer.borderColor = [UIColor clearColor].CGColor;
     _plate.backgroundColor = [UIColor colorWithWhite:0.08 alpha:1];
@@ -238,6 +245,9 @@
     _statusLbl.backgroundColor = [UIColor clearColor];
     _statusLbl.textAlignment = NSTextAlignmentCenter;
     _statusLbl.font = [UIFont boldSystemFontOfSize:13];
+    _statusLbl.lineBreakMode = NSLineBreakByClipping;
+    _statusLbl.adjustsFontSizeToFitWidth = YES;
+    _statusLbl.minimumFontSize = 9.0f;
     SenkoStyleMutedOnDark(_statusLbl);
     _statusLbl.text = @"Starting";
     _statusLbl.autoresizingMask = UIViewAutoresizingFlexibleWidth;
@@ -252,7 +262,7 @@
 
     _logPlate = [[[UIView alloc] initWithFrame:CGRectMake(pad, logY, w, logH)] autorelease];
     _logPlate.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    _logPlate.layer.cornerRadius = 10;
+    _logPlate.layer.cornerRadius = SenkoThemeCardRadius();
     _logPlate.layer.borderWidth = 0;
     _logPlate.layer.borderColor = [UIColor clearColor].CGColor;
     _logPlate.backgroundColor = [UIColor colorWithWhite:0.04 alpha:1];
@@ -312,7 +322,6 @@
                              NSString *ver = [line substringFromIndex:20];
                              [self appendLog:[NSString stringWithFormat:@"Version %@", ver]];
                          } else if ([line hasPrefix:@"UPDATE OK"]) {
-/* completion path owns final state */
                          } else if ([line hasPrefix:@"UPDATE ERR"]) {
 /* still show in log; completion finishes */
                              [self appendLog:line];

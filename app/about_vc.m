@@ -11,6 +11,8 @@
     UIView *_info;
     UILabel *_bodyLbl;
     UIButton *_sponsorButton;
+    UIButton *_githubButton;
+    UIButton *_telegramButton;
     CAGradientLayer *_cardGrad;
     CAGradientLayer *_infoGrad;
 
@@ -18,7 +20,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"About";
+    self.title = SenkoLocalizedText(@"about");
     if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
         ((void (*)(id, SEL, NSUInteger))objc_msgSend)(self, @selector(setEdgesForExtendedLayout:), 0);
     SenkoApplyScreenChrome(self.view);
@@ -30,11 +32,11 @@
     [self.view addSubview:_scroll];
 
     _card = [[UIView alloc] initWithFrame:CGRectZero];
-    _card.layer.cornerRadius = 12;
+    _card.layer.cornerRadius = SenkoThemeCardRadius();
     _card.clipsToBounds = YES;
     _card.opaque = NO;
     _cardGrad = [CAGradientLayer layer];
-    _cardGrad.cornerRadius = 12;
+    _cardGrad.cornerRadius = SenkoThemeCardRadius();
     [_card.layer insertSublayer:_cardGrad atIndex:0];
     [_scroll addSubview:_card];
 
@@ -50,15 +52,36 @@
     name.backgroundColor = [UIColor clearColor];
     name.font = [UIFont boldSystemFontOfSize:15];
     SenkoStyleInkLabel(name);
-    name.text = [NSString stringWithFormat:@"Senko %@\ngithub.com/sqmrak\nhttps://t.me/sqmrakdev", SENKO_VERSION];
+    name.text = [NSString stringWithFormat:@"senko\n%@\nios 5-15 · armv7 + arm64", SENKO_VERSION];
     [_card addSubview:name];
 
+    _githubButton = [[UIButton buttonWithType:UIButtonTypeCustom] retain];
+    [_githubButton setTitle:@"github" forState:UIControlStateNormal];
+    [_githubButton addTarget:self action:@selector(githubPressed)
+            forControlEvents:UIControlEventTouchUpInside];
+    [_card addSubview:_githubButton];
+
+    _telegramButton = [[UIButton buttonWithType:UIButtonTypeCustom] retain];
+    [_telegramButton setTitle:@"telegram" forState:UIControlStateNormal];
+    [_telegramButton addTarget:self action:@selector(telegramPressed)
+              forControlEvents:UIControlEventTouchUpInside];
+    [_card addSubview:_telegramButton];
+    for (UIButton *link in [NSArray arrayWithObjects:_githubButton, _telegramButton, nil]) {
+        link.titleLabel.font = [UIFont boldSystemFontOfSize:12.0f];
+        link.titleLabel.lineBreakMode = NSLineBreakByClipping;
+        [link setTitleColor:kAccentBlue forState:UIControlStateNormal];
+        link.backgroundColor = [kAccentBlue colorWithAlphaComponent:0.12f];
+        link.layer.cornerRadius = 12.0f;
+        link.layer.borderWidth = 0.5f;
+        link.layer.borderColor = [kAccentBlue colorWithAlphaComponent:0.30f].CGColor;
+    }
+
     _info = [[UIView alloc] initWithFrame:CGRectZero];
-    _info.layer.cornerRadius = 12;
+    _info.layer.cornerRadius = SenkoThemeCardRadius();
     _info.clipsToBounds = YES;
     _info.opaque = NO;
     _infoGrad = [CAGradientLayer layer];
-    _infoGrad.cornerRadius = 12;
+    _infoGrad.cornerRadius = SenkoThemeCardRadius();
     [_info.layer insertSublayer:_infoGrad atIndex:0];
     [_scroll addSubview:_info];
 
@@ -74,6 +97,8 @@
     _sponsorButton = [[UIButton buttonWithType:UIButtonTypeCustom] retain];
     _sponsorButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
     _sponsorButton.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+    _sponsorButton.titleLabel.lineBreakMode = NSLineBreakByWordWrapping;
+    _sponsorButton.titleLabel.numberOfLines = 2;
     [_sponsorButton addTarget:self action:@selector(sponsorPressed)
              forControlEvents:UIControlEventTouchUpInside];
     [_info addSubview:_sponsorButton];
@@ -94,6 +119,8 @@
     [_info release];
     [_bodyLbl release];
     [_sponsorButton release];
+    [_githubButton release];
+    [_telegramButton release];
     [super dealloc];
 }
 
@@ -106,8 +133,8 @@
 
 - (void)updateSponsorButton {
     NSString *title = SenkoLanguageIsRussian()
-        ? @"Спонсоры: 2xvpn.shop"
-        : @"Sponsors: 2xvpn.shop";
+        ? @"спонсоры: 2xvpn.shop"
+        : @"sponsors: 2xvpn.shop";
     [_sponsorButton setTitle:title forState:UIControlStateNormal];
     [_sponsorButton setTitleColor:kAccentBlue forState:UIControlStateNormal];
 }
@@ -117,17 +144,26 @@
     if (url) [[UIApplication sharedApplication] openURL:url];
 }
 
+- (void)githubPressed {
+    NSURL *url = [NSURL URLWithString:@"https://github.com/sqmrak/Senko"];
+    if (url) [[UIApplication sharedApplication] openURL:url];
+}
+
+- (void)telegramPressed {
+    NSURL *url = [NSURL URLWithString:@"https://t.me/sqmrakdev"];
+    if (url) [[UIApplication sharedApplication] openURL:url];
+}
+
 - (void)layoutAbout {
     CGRect b = SenkoViewBounds(self.view);
     if (b.size.width < 2.0f || b.size.height < 2.0f) return;
 
-/* keep wallpaper sized to real bounds */
     UIView *bg = [self.view viewWithTag:9111];
     if (bg) bg.frame = CGRectMake(0, 0, b.size.width, b.size.height);
 
     _scroll.frame = CGRectMake(0, 0, b.size.width, b.size.height);
 
-/* use full width on phone landscape; cap only on wide tablets */
+/* limiting only tablet width keeps phone landscape text from truncating */
     CGFloat contentW = b.size.width;
     if (contentW > 700.0f) contentW = 700.0f;
     CGFloat contentX = floorf((b.size.width - contentW) * 0.5f);
@@ -135,29 +171,25 @@
     CGFloat cardW = contentW - side * 2.0f;
     if (cardW < 120.0f) cardW = 120.0f;
 
-    _card.frame = CGRectMake(contentX + side, 16, cardW, 100);
-    _cardGrad.frame = CGRectMake(0, 0, cardW, 100);
+    CGFloat heroH = 126.0f;
+    _card.frame = CGRectMake(contentX + side, 16, cardW, heroH);
+    _cardGrad.frame = CGRectMake(0, 0, cardW, heroH);
 
     UIImageView *avatar = (UIImageView *)[_card viewWithTag:1];
     UILabel *name = (UILabel *)[_card viewWithTag:2];
-    avatar.frame = CGRectMake(12, 12, 76, 76);
-    name.frame = CGRectMake(100, 22, MAX(40.0f, cardW - 118.0f), 56);
+    avatar.frame = CGRectMake(12, 12, 68, 68);
+    avatar.layer.cornerRadius = 18.0f;
+    name.frame = CGRectMake(92, 12, MAX(40.0f, cardW - 104.0f), 68);
+    CGFloat linkGap = 8.0f;
+    CGFloat linkW = floorf((cardW - 24.0f - linkGap) * 0.5f);
+    _githubButton.frame = CGRectMake(12, 90, linkW, 24);
+    _telegramButton.frame = CGRectMake(12 + linkW + linkGap, 90, linkW, 24);
 
     CGFloat textPad = 14.0f;
     CGFloat textW = cardW - textPad * 2.0f;
     if (textW < 80.0f) textW = 80.0f;
-    CGSize bodySz = CGSizeMake(textW, 40);
     NSString *txt = _bodyLbl.text ? _bodyLbl.text : @"";
-    if ([txt respondsToSelector:@selector(sizeWithFont:constrainedToSize:lineBreakMode:)]) {
-        bodySz = [txt sizeWithFont:_bodyLbl.font
-                 constrainedToSize:CGSizeMake(textW, 5000)
-                     lineBreakMode:NSLineBreakByWordWrapping];
-    } else {
-        _bodyLbl.frame = CGRectMake(0, 0, textW, 10);
-        [_bodyLbl sizeToFit];
-        bodySz = _bodyLbl.bounds.size;
-        if (bodySz.width > textW) bodySz.width = textW;
-    }
+    CGSize bodySz = SenkoTextSize(txt, _bodyLbl.font, textW);
     if (bodySz.height < 40.0f) bodySz.height = 40.0f;
     if (bodySz.height > 2000.0f) bodySz.height = 2000.0f;
 

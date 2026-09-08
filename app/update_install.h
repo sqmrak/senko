@@ -6,7 +6,6 @@
 
 @class SenkoControl;
 
-/* cydia-style modal install sheet for.deb updates */
 @interface UpdateInstallVC : UIViewController {
     SenkoControl *_ctl;
     NSString *_path;

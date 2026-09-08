@@ -7,6 +7,7 @@
 #import <unistd.h>
 #include <math.h>
 #include <objc/message.h>
+#include <string.h>
 #import "control_client.h"
 #import "qr_scan.h"
 #import "ui_theme.h"
@@ -14,10 +15,32 @@
 #import "bubble_field.h"
 #import "themes_vc.h"
 #import "server_cell.h"
-#import "main_layout.h"
+#import "home_layout.h"
 #import "update_install.h"
 #import "meow.h"
 #import "app_common.h"
+
+/* a backup is the config file itself, so there is no magic to check for and no
+   format version to compare: the file is ours when one of its first lines is a
+   keyword the daemon writes. files from older builds open with a version line
+   the parser has always ignored */
+static BOOL SenkoLooksLikeBackup(NSData *data) {
+    static const char *const keys[] = { "SET ", "SRV ", "SUB ", "SEL ", "ORDER" };
+    const char *p = (const char *)[data bytes];
+    NSUInteger len = [data length];
+    if (len > 4096) len = 4096;
+    NSUInteger start = 0;
+    for (NSUInteger i = 0; i <= len; ++i) {
+        if (i != len && p[i] != '\n') continue;
+        NSUInteger n = i - start;
+        for (size_t k = 0; k < sizeof keys / sizeof keys[0]; ++k) {
+            size_t kl = strlen(keys[k]);
+            if (n >= kl && memcmp(p + start, keys[k], kl) == 0) return YES;
+        }
+        start = i + 1;
+    }
+    return NO;
+}
 
 static void SenkoSettingsStyleTable(UITableView *tv) {
     if (!tv) return;
@@ -62,17 +85,22 @@ static void SenkoSettingsStyleTable(UITableView *tv) {
     }
     CAShapeLayer *mask = [CAShapeLayer layer];
     mask.frame = self.bounds;
+    CGFloat radius = SenkoThemeCardRadius();
     mask.path = [UIBezierPath bezierPathWithRoundedRect:self.bounds
                                        byRoundingCorners:_roundedCorners
-                                             cornerRadii:CGSizeMake(10.0f, 10.0f)].CGPath;
+                                             cornerRadii:CGSizeMake(radius, radius)].CGPath;
     self.layer.mask = mask;
 }
 
 @end
 
+/* the row count comes from the data source, not from the table: asking the
+   table for it while it is building a cell re-enters a table that has not
+   finished loading */
 static void SenkoSettingsApplyCellBackground(UITableView *tv,
                                               UITableViewCell *cell,
-                                              NSIndexPath *ip) {
+                                              NSIndexPath *ip,
+                                              NSInteger rowsInSection) {
     SenkoSettingsCellBackground *bg = nil;
     if ([cell.backgroundView isKindOfClass:[SenkoSettingsCellBackground class]]) {
         bg = (SenkoSettingsCellBackground *)cell.backgroundView;
@@ -80,10 +108,11 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
         bg = [[[SenkoSettingsCellBackground alloc] initWithFrame:CGRectZero] autorelease];
         cell.backgroundView = bg;
     }
+    (void)tv;
     UIRectCorner corners = 0;
     if (ip.row == 0)
         corners |= UIRectCornerTopLeft | UIRectCornerTopRight;
-    if (ip.row == [tv numberOfRowsInSection:ip.section] - 1)
+    if (ip.row == rowsInSection - 1)
         corners |= UIRectCornerBottomLeft | UIRectCornerBottomRight;
     bg.roundedCorners = corners;
     bg.backgroundColor = kCellHi;
@@ -94,18 +123,34 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
 }
 
 
+static NSString *SenkoSortModeName(void) {
+    switch ((SenkoServerSort)[[NSUserDefaults standardUserDefaults]
+                              integerForKey:SENKO_SERVER_SORT_KEY]) {
+        case SenkoSortName: return SenkoLocalizedText(@"By name");
+        case SenkoSortPing: return SenkoLocalizedText(@"By latency");
+        case SenkoSortManual:
+        default: return SenkoLocalizedText(@"Stored order");
+    }
+}
+
 @implementation SettingsVC {
 
     UITableView *_tv;
     SenkoControl *_ctl;
     NSString *_daemonState;
+    BOOL _backupImportMode;
+    NSString *_pendingBackupPath;
 
 }
 
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    _tv.dataSource = nil;
+    _tv.delegate = nil;
+    [_tv release];
     [_ctl release];
     [_daemonState release];
+    [_pendingBackupPath release];
     [super dealloc];
 }
 
@@ -113,7 +158,7 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
     [super viewDidLoad];
     self.title = @"Settings";
     _ctl = [[SenkoControl alloc] initWithSocketPath:SENKO_SOCK];
-    _daemonState = [@"..." copy];
+    _daemonState = [SenkoLocalizedText(@"checking") copy];
 
     if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
         ((void (*)(id, SEL, NSUInteger))objc_msgSend)(self, @selector(setEdgesForExtendedLayout:), 0);
@@ -128,8 +173,8 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
                                                        action:@selector(donePressed)] autorelease];
 
     SenkoApplyScreenChrome(self.view);
-    _tv = [[[UITableView alloc] initWithFrame:SenkoViewBounds(self.view)
-                                        style:UITableViewStyleGrouped] autorelease];
+    _tv = [[UITableView alloc] initWithFrame:SenkoViewBounds(self.view)
+                                       style:UITableViewStyleGrouped];
     _tv.dataSource = self;
     _tv.delegate = self;
     SenkoSettingsStyleTable(_tv);
@@ -144,6 +189,16 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
                                              selector:@selector(languageDidChange:)
                                                  name:SenkoLanguageDidChangeNotification
                                                object:nil];
+}
+
+/* ios 5 releases the view of an offscreen controller, so the retained table
+   must go with it instead of pointing into a freed hierarchy */
+- (void)viewDidUnload {
+    _tv.dataSource = nil;
+    _tv.delegate = nil;
+    [_tv release];
+    _tv = nil;
+    [super viewDidUnload];
 }
 
 - (void)themeDidChange:(NSNotification *)n {
@@ -208,13 +263,12 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
 
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
     if (s == 0) return 4;
-    return 6;
+    return 9;
 }
 
-- (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s {
-    (void)tv;
-    if (s == 0) return @"DAEMON";
-    if (s == 1) return @"GENERAL";
+- (NSString *)headerTextForSection:(NSInteger)s {
+    if (s == 0) return SenkoLocalizedText(@"CONNECTION");
+    if (s == 1) return SenkoLocalizedText(@"APP");
     return nil;
 }
 
@@ -223,52 +277,82 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
     return 28.0f;
 }
 
-- (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
-    (void)tv;
+- (CGFloat)tableView:(UITableView *)tv heightForRowAtIndexPath:(NSIndexPath *)ip {
+    (void)tv; (void)ip;
+    return 60.0f;
+}
+
+- (NSString *)footerTextForSection:(NSInteger)s {
     if (s == 0)
-        return @"SOCKS is localhost-only by default. socks_public=1 in config opens it to the LAN.";
-    return nil;
+        return SenkoLocalizedText(@"Senko sends device traffic through the selected profile. The local proxy is available only on this device.");
+    return SenkoLocalizedText(@"Hide links only changes what is shown on screen. Backups keep the complete configuration.");
 }
 
 - (CGFloat)tableView:(UITableView *)tv heightForFooterInSection:(NSInteger)s {
-    (void)tv;
-    return (s == 0) ? 36.0f : 10.0f;
+    NSString *text = [self footerTextForSection:s];
+    CGFloat width = tv.bounds.size.width - 40.0f;
+    if (width < 120.0f) width = 120.0f;
+    CGSize size = SenkoTextSize(text, [UIFont systemFontOfSize:12.0f], width);
+    return MAX(50.0f, size.height + 24.0f);
 }
 
-- (void)tableView:(UITableView *)tv willDisplayHeaderView:(UIView *)view
-                       forSection:(NSInteger)s {
-    (void)tv; (void)s;
-    if (![view respondsToSelector:@selector(textLabel)]) return;
-    UILabel *label = [(UITableViewHeaderFooterView *)view textLabel];
-    label.font = [UIFont boldSystemFontOfSize:12.0f];
+/* a plain label in an owned view is the only way these keep the theme ink:
+   from ios 14 UITableViewHeaderFooterView re-applies its own content
+   configuration after willDisplayHeaderView:, which put the section titles
+   back to the system colour (black on the dark palettes) */
+- (UIView *)sectionTextViewWithText:(NSString *)text
+                               font:(UIFont *)font
+                             height:(CGFloat)height
+                              width:(CGFloat)width {
+    if (![text length]) return nil;
+    UIView *wrap = [[[UIView alloc] initWithFrame:
+                     CGRectMake(0, 0, width, height)] autorelease];
+    wrap.backgroundColor = [UIColor clearColor];
+    wrap.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    UILabel *label = [[[UILabel alloc] initWithFrame:
+                       CGRectMake(20.0f, 4.0f, width - 40.0f, height - 8.0f)] autorelease];
+    label.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+                             UIViewAutoresizingFlexibleHeight;
+    label.backgroundColor = [UIColor clearColor];
+    label.font = font;
+    label.numberOfLines = 0;
+    label.lineBreakMode = NSLineBreakByWordWrapping;
+    label.text = text;
     SenkoStyleMutedLabel(label);
     label.shadowColor = nil;
     label.shadowOffset = CGSizeZero;
+    [wrap addSubview:label];
+    return wrap;
 }
 
-- (void)tableView:(UITableView *)tv willDisplayFooterView:(UIView *)view
-                       forSection:(NSInteger)s {
-    (void)tv; (void)s;
-    if (![view respondsToSelector:@selector(textLabel)]) return;
-    UILabel *label = [(UITableViewHeaderFooterView *)view textLabel];
-    label.font = [UIFont systemFontOfSize:12.0f];
-    SenkoStyleMutedLabel(label);
-    label.shadowColor = nil;
-    label.shadowOffset = CGSizeZero;
+- (UIView *)tableView:(UITableView *)tv viewForHeaderInSection:(NSInteger)s {
+    return [self sectionTextViewWithText:[self headerTextForSection:s]
+                                    font:[UIFont boldSystemFontOfSize:12.0f]
+                                  height:28.0f
+                                   width:tv.bounds.size.width];
+}
+
+- (UIView *)tableView:(UITableView *)tv viewForFooterInSection:(NSInteger)s {
+    return [self sectionTextViewWithText:[self footerTextForSection:s]
+                                    font:[UIFont systemFontOfSize:12.0f]
+                                  height:[self tableView:tv heightForFooterInSection:s]
+                                   width:tv.bounds.size.width];
 }
 
 - (void)tableView:(UITableView *)tv willDisplayCell:(UITableViewCell *)cell
  forRowAtIndexPath:(NSIndexPath *)ip {
-    SenkoSettingsApplyCellBackground(tv, cell, ip);
+    SenkoSettingsApplyCellBackground(tv, cell, ip,
+                                     [self tableView:tv numberOfRowsInSection:ip.section]);
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
     static NSString *cid = @"set";
     UITableViewCell *cell = [tv dequeueReusableCellWithIdentifier:cid];
     if (!cell)
-        cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+        cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
                                        reuseIdentifier:cid] autorelease];
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    cell.selectedBackgroundView = nil;
     cell.accessoryType = UITableViewCellAccessoryNone;
     cell.accessoryView = nil;
     cell.detailTextLabel.text = nil;
@@ -280,7 +364,13 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
     cell.detailTextLabel.shadowOffset = CGSizeZero;
     cell.textLabel.font = [UIFont systemFontOfSize:16.0f];
     cell.detailTextLabel.font = [UIFont systemFontOfSize:13.0f];
-    SenkoSettingsApplyCellBackground(tv, cell, ip);
+    cell.textLabel.lineBreakMode = NSLineBreakByClipping;
+    cell.textLabel.adjustsFontSizeToFitWidth = YES;
+    cell.textLabel.minimumFontSize = 12.0f;
+    cell.detailTextLabel.numberOfLines = 2;
+    cell.detailTextLabel.lineBreakMode = NSLineBreakByWordWrapping;
+    SenkoSettingsApplyCellBackground(tv, cell, ip,
+                                     [self tableView:tv numberOfRowsInSection:ip.section]);
     cell.textLabel.backgroundColor = [UIColor clearColor];
     cell.detailTextLabel.backgroundColor = [UIColor clearColor];
 
@@ -290,15 +380,15 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
             cell.detailTextLabel.text = _daemonState;
         } else if (ip.row == 1) {
             cell.textLabel.text = @"Routing";
-            cell.detailTextLabel.text = @"full-device";
+            cell.detailTextLabel.text = SenkoLocalizedText(@"All apps and system traffic");
         } else if (ip.row == 2) {
             cell.textLabel.text = @"Version";
             cell.detailTextLabel.text = SENKO_VERSION;
         } else {
             cell.textLabel.text = @"Edit selected server";
-            cell.detailTextLabel.text = @"manual";
+            cell.detailTextLabel.text = SenkoLocalizedText(@"Manually added profiles only");
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-            cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+            SenkoStyleSelectableCell(cell);
         }
     } else {
         if (ip.row == 0) {
@@ -310,41 +400,47 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
             cell.accessoryView = sw;
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
         } else if (ip.row == 1) {
+            cell.textLabel.text = @"Sort servers";
+            cell.detailTextLabel.text = SenkoSortModeName();
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            SenkoStyleSelectableCell(cell);
+        } else if (ip.row == 2) {
             cell.textLabel.text = @"Themes";
             cell.detailTextLabel.text = SenkoThemeStatusLine();
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-            cell.selectionStyle = UITableViewCellSelectionStyleBlue;
-        } else if (ip.row == 2) {
-            cell.textLabel.text = @"System Logs";
-            cell.detailTextLabel.text = nil;
-            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-            cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+            SenkoStyleSelectableCell(cell);
         } else if (ip.row == 3) {
-            cell.textLabel.text = @"Update Senko";
-            cell.detailTextLabel.text = @"install a .deb";
+            cell.textLabel.text = @"System Logs";
+            cell.detailTextLabel.text = SenkoLocalizedText(@"senkod + awg combined");
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-            cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+            SenkoStyleSelectableCell(cell);
         } else if (ip.row == 4) {
-            cell.textLabel.text = SenkoLocalizedText(@"Russian/English");
-            cell.detailTextLabel.text = nil;
-            UISwitch *sw = [[[UISwitch alloc] initWithFrame:CGRectZero] autorelease];
-            sw.on = SenkoLanguageIsRussian();
-            [sw addTarget:self action:@selector(languageSwitchChanged:)
-          forControlEvents:UIControlEventValueChanged];
-            cell.accessoryView = sw;
-            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            cell.textLabel.text = SenkoLocalizedText(@"Export backup");
+            cell.detailTextLabel.text = SenkoLocalizedText(@"Save a config file to Documents");
+            SenkoStyleSelectableCell(cell);
+        } else if (ip.row == 5) {
+            cell.textLabel.text = SenkoLocalizedText(@"Restore backup");
+            cell.detailTextLabel.text = SenkoLocalizedText(@"Validate, then replace configuration");
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            SenkoStyleSelectableCell(cell);
+        } else if (ip.row == 6) {
+            cell.textLabel.text = @"Update Senko";
+            cell.detailTextLabel.text = SenkoLocalizedText(@"Choose a Senko .deb package");
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            SenkoStyleSelectableCell(cell);
+        } else if (ip.row == 7) {
+            cell.textLabel.text = SenkoLocalizedText(@"Language");
+            cell.detailTextLabel.text = SenkoLanguageName();
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            SenkoStyleSelectableCell(cell);
         } else {
-            cell.textLabel.text = @"About";
+            cell.textLabel.text = SenkoLocalizedText(@"about");
             cell.detailTextLabel.text = nil;
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-            cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+            SenkoStyleSelectableCell(cell);
         }
     }
     return cell;
-}
-
-- (void)languageSwitchChanged:(UISwitch *)sw {
-    SenkoSetLanguage(sw.on);
 }
 
 - (void)hideLinksChanged:(UISwitch *)sw {
@@ -354,14 +450,30 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
 }
 
 - (void)openUpdateBrowser {
+    _backupImportMode = NO;
     FileImportVC *files = [[[FileImportVC alloc] initWithPath:nil delegate:self] autorelease];
     files.title = @"Update Senko";
     [self.navigationController pushViewController:files animated:YES];
 }
 
+- (void)openBackupBrowser {
+    _backupImportMode = YES;
+    FileImportVC *files = [[[FileImportVC alloc] initWithPath:nil delegate:self] autorelease];
+    files.title = SenkoLocalizedText(@"Restore configuration");
+    [self.navigationController pushViewController:files animated:YES];
+}
+
+- (void)showBackupMessage:(NSString *)message {
+    UIAlertView *av = [[[UIAlertView alloc] initWithTitle:SenkoLocalizedText(@"Configuration backup")
+                                                   message:SenkoHumanReadableError(message)
+                                                  delegate:nil
+                                         cancelButtonTitle:@"OK"
+                                         otherButtonTitles:nil] autorelease];
+    [av show];
+}
+
 - (void)fileImportVCDidCancel:(FileImportVC *)vc {
     (void)vc;
-/* return to settings */
     [self.navigationController popToViewController:self animated:YES];
 }
 
@@ -370,10 +482,8 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
     NSString *pkg = [[path copy] autorelease];
     UINavigationController *nav = self.navigationController;
     void (^showInstall)(void) = ^{
-/* present from settings */
         UIViewController *host = nav ? (UIViewController *)nav : (UIViewController *)self;
         if (host.presentedViewController) {
-/* use self when no nav is active */
             host = self;
         }
         UpdateInstallVC *uvc = [[[UpdateInstallVC alloc] initWithControl:_ctl
@@ -395,6 +505,24 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
 
 - (void)fileImportVC:(FileImportVC *)vc didPickPath:(NSString *)path {
     (void)vc;
+    if (_backupImportMode) {
+        NSData *data = [NSData dataWithContentsOfFile:path];
+        if (![data length] || [data length] > 1024 * 1024 ||
+            !SenkoLooksLikeBackup(data)) {
+            [self showBackupMessage:SenkoLocalizedText(@"Not a senko backup")];
+            return;
+        }
+        [_pendingBackupPath release];
+        _pendingBackupPath = [path copy];
+        UIAlertView *confirm = [[[UIAlertView alloc]
+            initWithTitle:SenkoLocalizedText(@"Replace configuration?")
+                  message:SenkoLocalizedText(@"The imported backup will replace all current servers and subscriptions.")
+                 delegate:self cancelButtonTitle:SenkoLocalizedText(@"Cancel")
+        otherButtonTitles:SenkoLocalizedText(@"Replace"), nil] autorelease];
+        confirm.tag = 4201;
+        [confirm show];
+        return;
+    }
     if ([[path pathExtension] caseInsensitiveCompare:@"deb"] != NSOrderedSame) {
         UIAlertView *av = [[[UIAlertView alloc] initWithTitle:@"Update Senko"
                                                        message:@"choose a .deb package"
@@ -405,6 +533,38 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
         return;
     }
     [self presentUpdateInstallForPath:path];
+}
+
+- (void)alertView:(UIAlertView *)alert clickedButtonAtIndex:(NSInteger)buttonIndex {
+    if (alert.tag == 4202) {
+        if (buttonIndex == 1) SenkoSetLanguage(NO);
+        else if (buttonIndex == 2) SenkoSetLanguage(YES);
+        return;
+    }
+    if (alert.tag == 4203) {
+        if (buttonIndex == alert.cancelButtonIndex) return;
+        NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+        [d setInteger:(NSInteger)(buttonIndex - 1) forKey:SENKO_SERVER_SORT_KEY];
+        [d synchronize];
+        [_tv reloadData];
+        return;
+    }
+    if (alert.tag != 4201 || buttonIndex == alert.cancelButtonIndex) return;
+    NSData *data = [NSData dataWithContentsOfFile:_pendingBackupPath];
+    NSString *dir = @"/var/mobile/Library/Preferences/Senko";
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                              withIntermediateDirectories:YES attributes:nil error:NULL];
+    NSString *stage = [dir stringByAppendingPathComponent:@"import.senko"];
+    if (![data writeToFile:stage options:NSDataWritingAtomic error:NULL]) {
+        [self showBackupMessage:SenkoLocalizedText(@"Could not stage backup")];
+        return;
+    }
+    [_ctl restoreBackup:^(NSString *reply) {
+        if ([reply hasPrefix:@"OK "])
+            [self showBackupMessage:SenkoLocalizedText(@"Configuration restored")];
+        else
+            [self showBackupMessage:reply ?: SenkoLocalizedText(@"Backup restore failed")];
+    }];
 }
 
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
@@ -452,18 +612,51 @@ static void SenkoSettingsApplyCellBackground(UITableView *tv,
     }
     if (ip.section == 1) {
         if (ip.row == 1) {
+            [self showSortMenu];
+        } else if (ip.row == 2) {
             ThemesVC *vc = [[[ThemesVC alloc] init] autorelease];
             [self.navigationController pushViewController:vc animated:YES];
-        } else if (ip.row == 2) {
+        } else if (ip.row == 3) {
             LogsVC *vc = [[[LogsVC alloc] init] autorelease];
             [self.navigationController pushViewController:vc animated:YES];
-        } else if (ip.row == 3) {
-            [self openUpdateBrowser];
+        } else if (ip.row == 4) {
+            [_ctl exportBackup:^(NSString *reply) {
+                NSString *msg = [reply hasPrefix:@"OK "] ?
+                    SenkoLocalizedText(@"Saved to Documents/senko-backup.senko") : reply;
+                [self showBackupMessage:msg ?: SenkoLocalizedText(@"Backup export failed")];
+            }];
         } else if (ip.row == 5) {
+            [self openBackupBrowser];
+        } else if (ip.row == 6) {
+            [self openUpdateBrowser];
+        } else if (ip.row == 7) {
+            UIAlertView *language = [[[UIAlertView alloc]
+                initWithTitle:SenkoLocalizedText(@"Language")
+                      message:SenkoLanguageName()
+                     delegate:self
+            cancelButtonTitle:SenkoLocalizedText(@"Cancel")
+            otherButtonTitles:@"English", @"Русский", nil] autorelease];
+            language.tag = 4202;
+            [language show];
+        } else if (ip.row == 8) {
             AboutVC *vc = [[[AboutVC alloc] init] autorelease];
             [self.navigationController pushViewController:vc animated:YES];
         }
     }
+}
+
+/* the alert picker is the one control that exists unchanged from ios 5 to 15 */
+- (void)showSortMenu {
+    UIAlertView *sort = [[[UIAlertView alloc]
+        initWithTitle:SenkoLocalizedText(@"Sort servers")
+              message:SenkoSortModeName()
+             delegate:self
+    cancelButtonTitle:SenkoLocalizedText(@"Cancel")
+    otherButtonTitles:SenkoLocalizedText(@"Stored order"),
+                      SenkoLocalizedText(@"By name"),
+                      SenkoLocalizedText(@"By latency"), nil] autorelease];
+    sort.tag = 4203;
+    [sort show];
 }
 
 - (void)editServerVC:(EditServerVC *)vc saveLink:(NSString *)link index:(int)idx {

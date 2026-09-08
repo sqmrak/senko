@@ -14,7 +14,7 @@
 #import "bubble_field.h"
 #import "themes_vc.h"
 #import "server_cell.h"
-#import "main_layout.h"
+#import "home_layout.h"
 #import "update_install.h"
 #import "meow.h"
 #import "app_common.h"
@@ -112,7 +112,7 @@
     NSString *uuid = [_uuid.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (![address length] || ![port length] || ![uuid length]) return;
     NSArray *securityValues = [NSArray arrayWithObjects:@"none", @"tls", @"reality", nil];
-    NSArray *transportValues = [NSArray arrayWithObjects:@"tcp", @"ws", @"xhttp", nil];
+    NSArray *transportValues = [NSArray arrayWithObjects:@"tcp", @"ws", @"xhttp", @"grpc", nil];
     NSString *security = [securityValues objectAtIndex:_security.selectedSegmentIndex];
     NSString *transport = [transportValues objectAtIndex:_transport.selectedSegmentIndex];
     NSMutableString *uri = [NSMutableString stringWithFormat:@"vless://%@@%@:%@?security=%@&type=%@",
@@ -236,11 +236,12 @@
     _remark = [self makeField];
 
     _transport = [[UISegmentedControl alloc] initWithItems:
-                  [NSArray arrayWithObjects:@"TCP", @"WS", @"XHTTP", nil]];
+                  [NSArray arrayWithObjects:@"TCP", @"WS", @"XHTTP", @"gRPC", nil]];
     SenkoStyleGlassSegmented(_transport);
     NSString *type = [self queryValue:@"type" query:query];
     _transport.selectedSegmentIndex = [type isEqualToString:@"ws"] ? 1 :
-        ([type isEqualToString:@"xhttp"] ? 2 : 0);
+        ([type isEqualToString:@"xhttp"] ? 2 :
+         ([type isEqualToString:@"grpc"] ? 3 : 0));
 
     _security = [[UISegmentedControl alloc] initWithItems:
                  [NSArray arrayWithObjects:@"НЕТ", @"TLS", @"REALITY", nil]];
@@ -262,6 +263,8 @@
     _uuid.text = [url user];
     _flow.text = [self queryValue:@"flow" query:query];
     _path.text = [self queryValue:@"path" query:query];
+    if ([type isEqualToString:@"grpc"] && ![_path.text length])
+        _path.text = [self queryValue:@"serviceName" query:query];
     _sni.text = [self queryValue:@"sni" query:query];
     _fingerprint.text = [self queryValue:@"fp" query:query];
     _remark.text = [url fragment];

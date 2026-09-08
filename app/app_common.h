@@ -6,13 +6,21 @@
 #import "control_client.h"
 
 #define SENKO_SOCK @"/var/tmp/senkod.sock"
-#define SENKO_VERSION @"v1.0.7-stable"
+#define SENKO_VERSION @"v2.0.0-stable"
 #define SENKO_HIDE_LINKS_KEY @"SenkoHideServerLinks"
 #define SENKO_PINNED_SUB_URL_KEY @"SenkoPinnedSubscriptionURL"
 #define SENKO_AWG_PROFILE_KEY @"SenkoAWGProfilePath"
 #define SENKO_AWG_PROFILE_PATH @"/var/mobile/Library/Preferences/Senko/amneziawg.conf"
 #define SENKO_SELECTED_BACKEND_KEY @"SenkoSelectedBackend"
 #define SENKO_LANGUAGE_KEY @"SenkoLanguage"
+/* 0 keeps the order the daemon stores, 1 sorts by name, 2 by latency */
+#define SENKO_SERVER_SORT_KEY @"SenkoServerSort"
+
+typedef enum {
+    SenkoSortManual = 0,
+    SenkoSortName,
+    SenkoSortPing
+} SenkoServerSort;
 
 typedef NS_ENUM(NSInteger, SenkoBackendKind) {
     SenkoBackendServer = 0,
@@ -26,6 +34,8 @@ BOOL SenkoLanguageIsRussian(void);
 void SenkoSetLanguage(BOOL russian);
 NSString *SenkoLanguageName(void);
 NSString *SenkoLocalizedText(NSString *text);
+NSString *SenkoHumanReadableError(NSString *text);
+NSString *SenkoRedactSecrets(NSString *text);
 void SenkoLocalizationInstall(void);
 void SenkoRelocalizeAllWindows(void);
 
@@ -37,6 +47,7 @@ void SenkoRelocalizeAllWindows(void);
 @class MainVC;
 @class AboutVC;
 @class LogsVC;
+@class SubscriptionInfoVC;
 
 @protocol FileImportDelegate
 - (void)fileImportVCDidCancel:(FileImportVC *)vc;
@@ -59,17 +70,22 @@ void SenkoRelocalizeAllWindows(void);
 - (void)editAWGVC:(EditAWGVC *)vc saveConfig:(NSString *)config;
 @end
 
-/* public class shells for cross-file types */
 @interface MainVC : UIViewController
 @end
 
-@interface SettingsVC : UIViewController
+@interface SettingsVC : UIViewController <UITableViewDataSource, UITableViewDelegate,
+                                          FileImportDelegate, EditServerDelegate,
+                                          UIAlertViewDelegate>
 @end
 
 @interface AboutVC : UIViewController
 @end
 
 @interface LogsVC : UIViewController
+@end
+
+@interface SubscriptionInfoVC : UITableViewController
+- (id)initWithSubscription:(SenkoSub *)sub;
 @end
 
 @interface EditServerVC : UIViewController

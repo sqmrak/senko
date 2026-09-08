@@ -11,12 +11,16 @@
 @interface QRScanVC : UIViewController {
 @private
     id _session; /* retain the camera capture session */
+    id _captureOutput; /* clear its delegate before the decoder is released */
+    id _metadataOutput; /* the system detector, where the system has one */
     id _previewLayer; /* retain the preview layer attached to the view */
     dispatch_queue_t _queue; /* serialize frame decoding off the main thread */
     struct quirc *_qr;
     int _qrw, _qrh;
     BOOL _done;
+    BOOL _captureSetup;
     UILabel *_hintLabel;
+    UIView *_aimView;
     id<QRScanDelegate> _delegate;
 }
 @property (nonatomic, assign) id<QRScanDelegate> delegate;
