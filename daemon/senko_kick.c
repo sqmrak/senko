@@ -15,19 +15,21 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "../common/senko_paths.h"
 
 extern char **environ;
 
-#define PLIST  "/Library/LaunchDaemons/com.senko.senkod.plist"
+#define PLIST  SENKO_LAUNCH_DAEMONS "/com.senko.senkod.plist"
 #define SOCK   "/var/tmp/senkod.sock"
-#define BIN    "/usr/bin/senkod"
+#define BIN    SENKO_USR_BIN "/senkod"
 #define CFG    "/var/root/Library/Preferences/senko.cfg"
 #define KLOG   "/var/log/senko-kick.log"
 #define LABEL  "com.senko.senkod"
-#define AWG_BIN "/usr/bin/senkoawgd"
-#define CTL_BIN "/usr/bin/senkoctl"
+#define AWG_BIN SENKO_USR_BIN "/senkoawgd"
+#define CTL_BIN SENKO_USR_BIN "/senkoctl"
 #define AWG_PID "/var/run/senkoawgd.pid"
-#define AWG_LOG "/var/log/senkoawgd.log"
+#define SYSTEM_LOG SENKO_SYSTEM_LOG
+#define AWG_LOG SYSTEM_LOG
 #define AWG_STATUS "/var/run/senkoawgd.status"
 #define AWG_ACTIVE_CONFIG "/var/run/senkoawgd.config"
 #define AWG_CONFIG_DIR "/var/mobile/Library/Preferences/Senko/"
@@ -38,6 +40,10 @@ extern char **environ;
 #define UPDATE_AWG_MARKER "/var/run/senkoawgd.upgrade"
 #define KICK_LOCK "/var/tmp/senko-kick.lock"
 #define KICK_LOCK_WAIT_MS 5000
+/* one ensure_senkod pass can hold the lock through two launchd and two direct
+   attempts. each probe costs its own connect and read timeout, so this bounds
+   the wait at roughly a minute and a half rather than exactly 30 seconds */
+#define KICK_CONCURRENT_WAIT_TENTHS 300
 #define COMMAND_TIMEOUT_MS 30000
 #define DPKG_TIMEOUT_MS 180000
 
@@ -210,7 +216,6 @@ static int update_path_ok(const char *path) {
     if (!under) return 0;
     size_t len = strlen(path);
     if (len < 5) return 0;
-    /* accept .deb paths in any case */
     const char *ext = path + len - 4;
     if (!((ext[0] == '.' ) &&
           (ext[1] == 'd' || ext[1] == 'D') &&
@@ -222,7 +227,6 @@ static int update_path_ok(const char *path) {
     return st.st_size > 0 && st.st_size <= UPDATE_MAX_BYTES;
 }
 
-/* copy to a private temporary file */
 static int update_stage_copy(const char *src, char *dst, size_t dstcap) {
     if (!src || !dst || dstcap < 40) return -1;
     char tmpl[] = "/tmp/senko-update-XXXXXX";
@@ -272,7 +276,18 @@ static int update_stage_copy(const char *src, char *dst, size_t dstcap) {
     return 0;
 }
 
-/* a live status reply proves that the listener is more than just a socket file */
+/* the control socket answers an unauthenticated STATUS with the auth challenge,
+   and only senkod speaks that. checking for the state line alone meant every
+   probe failed once the control token landed: the helper then killed a healthy
+   daemon, spent its whole repair budget, and reported a start failure while the
+   daemon it killed had been answering the app all along */
+static int reply_proves_daemon(const char *buf, size_t len) {
+    static const char challenge[] = "ERR auth required";
+    if (len >= 6 && memcmp(buf, "STATE ", 6) == 0) return 1;
+    return len >= sizeof challenge - 1 &&
+           memcmp(buf, challenge, sizeof challenge - 1) == 0;
+}
+
 static int sock_alive(void) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return 0;
@@ -307,7 +322,7 @@ static int sock_alive(void) {
         break;
     }
     close(fd);
-    return tot >= 6 && memcmp(buf, "STATE ", 6) == 0;
+    return reply_proves_daemon(buf, tot);
 }
 
 static int wait_sock(int tenths) {
@@ -346,11 +361,11 @@ static int spawn_senkod_direct(void) {
         klog(msg);
         return -1;
     }
-    /* keep daemon logs where the ui expects them */
-    action_rc = posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, "/var/log/senkod.log",
+    /* keep both backends in one append-only stream for the ui */
+    action_rc = posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, SYSTEM_LOG,
                                                   O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (action_rc == 0)
-        action_rc = posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/var/log/senkod.log",
+        action_rc = posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, SYSTEM_LOG,
                                                       O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (action_rc != 0) {
         char msg[128];
@@ -376,7 +391,7 @@ static int spawn_senkod_direct(void) {
 }
 
 static void kill_senkod(void) {
-    static const char *kills[] = { "/usr/bin/killall", "/bin/killall", NULL };
+    static const char *kills[] = { SENKO_USR_BIN "/killall", "/usr/bin/killall", "/bin/killall", NULL };
     char killbin[64];
     if (find_bin(kills, killbin, sizeof killbin) != 0) return;
     char *argv[] = { killbin, (char *)"-9", (char *)"senkod", NULL };
@@ -384,7 +399,7 @@ static void kill_senkod(void) {
 }
 
 static int senkod_alive(void) {
-    static const char *kills[] = { "/usr/bin/killall", "/bin/killall", NULL };
+    static const char *kills[] = { SENKO_USR_BIN "/killall", "/usr/bin/killall", "/bin/killall", NULL };
     char killbin[64], output[32];
     if (find_bin(kills, killbin, sizeof killbin) != 0) return 0;
     char *argv[] = { killbin, (char *)"-0", (char *)"senkod", NULL };
@@ -419,7 +434,7 @@ static int launch_job_stop(const char *launchctl) {
 }
 
 static int kill_named(const char *name, int signal_number) {
-    static const char *kills[] = { "/usr/bin/killall", "/bin/killall", NULL };
+    static const char *kills[] = { SENKO_USR_BIN "/killall", "/usr/bin/killall", "/bin/killall", NULL };
     char killbin[64];
     if (!name || find_bin(kills, killbin, sizeof killbin) != 0) return -1;
     char signal_text[16];
@@ -636,6 +651,7 @@ static void restore_awg_upgrade_state(void) {
 static void stop_senkod_for_update(void) {
     char launchctl[64];
     static const char *launchctl_paths[] = {
+        SENKO_JBROOT "/bin/launchctl", SENKO_USR_BIN "/launchctl",
         "/bin/launchctl", "/usr/bin/launchctl", "/sbin/launchctl",
         "/usr/sbin/launchctl", NULL
     };
@@ -683,7 +699,6 @@ static int update_package(const char *path) {
 
     update_stage("checking package");
 
-    /* copy the package before installing it */
     char staged[96];
     staged[0] = '\0';
     if (update_stage_copy(path, staged, sizeof staged) != 0) {
@@ -694,6 +709,7 @@ static int update_package(const char *path) {
 
     char dpkg_deb[64];
     static const char *dpkg_deb_paths[] = {
+        SENKO_USR_BIN "/dpkg-deb", SENKO_JBROOT "/bin/dpkg-deb",
         "/usr/bin/dpkg-deb", "/bin/dpkg-deb", "/sbin/dpkg-deb", NULL
     };
     if (find_bin(dpkg_deb_paths, dpkg_deb, sizeof dpkg_deb) != 0) {
@@ -741,6 +757,7 @@ static int update_package(const char *path) {
 
     char dpkg[64];
     static const char *dpkg_paths[] = {
+        SENKO_USR_BIN "/dpkg", SENKO_JBROOT "/bin/dpkg",
         "/usr/bin/dpkg", "/bin/dpkg", "/sbin/dpkg", NULL
     };
     if (find_bin(dpkg_paths, dpkg, sizeof dpkg) != 0) {
@@ -802,23 +819,27 @@ static int ensure_senkod(void) {
         return 0;
     }
 
-    /* let a boot-time launchd start finish before taking over */
-    if (wait_sock(60) == 0) {
+    char lc[64];
+    static const char *lcs[] = {
+        SENKO_JBROOT "/bin/launchctl", SENKO_USR_BIN "/launchctl",
+        "/bin/launchctl", "/usr/bin/launchctl",
+        "/sbin/launchctl", "/usr/sbin/launchctl", NULL
+    };
+    int have_lc = (find_bin(lcs, lc, sizeof lc) == 0);
+
+    /* a job launchd already holds may still be starting, and waiting for it
+       beats racing it. when launchd does not hold the job there is nothing to
+       wait for, and the long wait was six seconds of nothing on every launch
+       of the app */
+    if (wait_sock(have_lc && launch_job_loaded(lc) ? 60 : 5) == 0) {
         klog("already up via launchctl");
         return 0;
     }
 
     if (access(BIN, X_OK) != 0) {
-        klog("/usr/bin/senkod missing");
+        klog(BIN " missing");
         return 2;
     }
-
-    char lc[64];
-    static const char *lcs[] = {
-        "/bin/launchctl", "/usr/bin/launchctl",
-        "/sbin/launchctl", "/usr/sbin/launchctl", NULL
-    };
-    int have_lc = (find_bin(lcs, lc, sizeof lc) == 0);
 
     for (int attempt = 0; attempt < 2; ++attempt) {
         if (have_lc && access(PLIST, R_OK) == 0) {
@@ -876,14 +897,22 @@ int main(int argc, char **argv) {
 
     int kick_lock = acquire_kick_lock();
     if (kick_lock < 0) {
-        klog("could not lock daemon startup");
 /* awg control must not die behind a stuck lock; timeouts below are short */
         if (argc == 2 && strcmp(argv[1], "--awg-stop") == 0) {
+            klog("could not lock daemon startup");
             int rc = awg_stop_unlocked();
             if (rc != 0) fputs("error amneziawg stop timeout\n", stdout);
             return rc == 0 ? 0 : 1;
         }
-        return 1;
+/* another senko-kick holds the lock, which means a start is already running.
+   its result is the answer, so wait for the socket instead of reporting a
+   failure the app then shows as "daemon start failed" */
+        if (argc == 1 && wait_sock(KICK_CONCURRENT_WAIT_TENTHS) == 0) {
+            klog("up via concurrent start");
+            return 0;
+        }
+        klog("could not lock daemon startup");
+        return 3;
     }
     (void)kick_lock;
 

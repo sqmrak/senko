@@ -8,6 +8,7 @@
 #include "awg_utun.h"
 #include "vpn_icon.h"
 #include "legacy_ios.h"
+#include "proc_detach.h"
 
 #include <openssl/crypto.h>
 
@@ -332,8 +333,11 @@ int main(int argc, char **argv) {
         fprintf(stderr, "senkoawgd: route plan probe %s\n", ok ? "ok" : "failed");
         return ok ? 0 : 1;
     }
-    if (strcmp(argv[1], "--run") == 0)
+    if (strcmp(argv[1], "--run") == 0) {
+        /* the tunnel has to outlive whatever started it */
+        senko_proc_detach();
         return run_tunnel(&cfg, timeout_ms);
+    }
     awg_hs_status_t hr = awg_handshake_probe(&cfg, timeout_ms, reason, sizeof reason);
     if (hr != AWG_HS_OK) {
         fprintf(stderr, "senkoawgd: %s\n", reason);
