@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# verify legacy dpkg layout, ownership, modes, and payload checksums
+# legacy dpkg needs deterministic ownership, member order, and checksum paths
 set -euo pipefail
 
 DEB="${1:-}"
+HOST_AR="${SENKO_HOST_AR:-/usr/bin/ar}"
 if [ -z "${DEB}" ] || [ ! -f "${DEB}" ]; then
   echo "usage: $0 package.deb" >&2
   exit 2
@@ -13,14 +14,14 @@ trap 'rm -rf "${WORK}"' EXIT
 
 cp "${DEB}" "${WORK}/pkg.deb"
 cd "${WORK}"
-ar x pkg.deb
+"${HOST_AR}" x pkg.deb
 
 for m in debian-binary control.tar.gz data.tar.gz; do
   [ -f "${m}" ] || { echo "missing ar member ${m}" >&2; exit 1; }
 done
 
 # dpkg expects the three archive members in this order
-order="$(ar t pkg.deb | tr '\n' ' ')"
+order="$("${HOST_AR}" t pkg.deb | tr '\n' ' ')"
 case "${order}" in
   "debian-binary control.tar.gz data.tar.gz "*) ;;
   *)
@@ -43,9 +44,44 @@ for f in control md5sums postinst postrm prerm; do
 done
 [ -x control/postinst ] || { echo "postinst not executable in tar" >&2; exit 1; }
 
-# reject builder ownership because legacy dpkg expects root-owned files
+arch="$(awk -F': ' '$1 == "Architecture" { print $2; exit }' control/control)"
+if [ "${arch}" != all ]; then
+  echo "universal package Architecture must be all, got ${arch:-<empty>}" >&2
+  exit 1
+fi
+
+[ -x data/var/jb/Applications/Senko.app/senko ] || {
+  echo "universal app payload missing" >&2; exit 1;
+}
+[ -x data/var/jb/usr/bin/senkod ] || {
+  echo "universal daemon payload missing" >&2; exit 1;
+}
+[ -f data/var/jb/Library/LaunchDaemons/com.senko.senkod.plist ] || {
+  echo "universal launchd plist missing" >&2; exit 1;
+}
+[ -f data/var/jb/etc/pf.os ] || {
+  echo "universal pf.os compatibility file missing" >&2; exit 1;
+}
+if [ -e data/Applications ] || [ -e data/usr ] || [ -e data/Library ]; then
+  echo "universal package would write into the rootless sealed root" >&2
+  exit 1
+fi
+grep -q '<string>/var/jb/usr/bin/senkod</string>' \
+  data/var/jb/Library/LaunchDaemons/com.senko.senkod.plist || {
+    echo "universal launchd program path mismatch" >&2; exit 1;
+  }
+grep -q 'install_rootful_layout' control/postinst || {
+  echo "rootful compatibility installer missing" >&2; exit 1;
+}
+
+if grep -R -q '@SENKO_' control data; then
+  echo "unexpanded packaging token" >&2
+  exit 1
+fi
+
+# builder ownership makes legacy dpkg reject otherwise valid payloads
 bad_uid="$(tar -tvzf data.tar.gz | awk 'NR>0 && $2 !~ /root|0\// {print; exit 1}')" || true
-# use python because tar metadata parsing is not portable in shell
+# tar listing formats disagree across hosts, while tarfile exposes numeric ids
 python3 - <<'PY'
 import tarfile, sys
 for name in ("data.tar.gz", "control.tar.gz"):
@@ -57,10 +93,10 @@ for name in ("data.tar.gz", "control.tar.gz"):
 print("ownership ok (uid/gid 0)")
 PY
 
-# require one matching checksum entry for every payload file
+# exact coverage detects stale files carried from an earlier package stage
 (
   cd data
-  # normalize find paths to the checksum format
+  # md5sums paths are relative without the leading ./ on legacy dpkg
   mapfile -t files < <(find . -type f | sed 's#^\./##' | sort)
   mapfile -t sums < <(awk '{print $2}' ../control/md5sums | sort)
   if [ "${#files[@]}" -ne "${#sums[@]}" ]; then
@@ -71,7 +107,7 @@ PY
 )
 echo "md5sums ok"
 
-# reject checksum paths that legacy dpkg cannot resolve
+# legacy dpkg resolves checksum entries without a leading ./
 if grep -qE ' \./' control/md5sums; then
   echo "md5sums contains ./ paths" >&2
   exit 1

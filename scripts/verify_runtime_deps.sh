@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# reject payloads that require non-system device libraries
+# undeclared device libraries turn installation success into a launch failure
 set -euo pipefail
+
+HOST_AR="${SENKO_HOST_AR:-/usr/bin/ar}"
 
 DEB="${1:-}"
 if [ -z "${DEB}" ] || [ ! -f "${DEB}" ]; then
@@ -16,10 +18,17 @@ trap 'rm -rf "${WORK}"' EXIT
 cp "${DEB}" "${WORK}/pkg.deb"
 (
   cd "${WORK}"
-  ar x pkg.deb control.tar.gz data.tar.gz
+  "${HOST_AR}" x pkg.deb control.tar.gz data.tar.gz
   mkdir control data
   tar -xzf control.tar.gz -C control
   tar -xzf data.tar.gz -C data
+
+  arch="$(awk -F': ' '$1 == "Architecture" { print $2; exit }' control/control)"
+  case "${arch}" in
+    all) relroot="var/jb" ;;
+    *) echo "universal package architecture must be all, got ${arch:-<none>}" >&2; exit 1 ;;
+  esac
+  payload="data${relroot:+/${relroot}}"
 
   deps="$(awk -F': ' '$1 == "Depends" { print $2 }' control/control)"
   case "${deps}" in
@@ -34,30 +43,30 @@ cp "${DEB}" "${WORK}/pkg.deb"
     exit 1
   fi
 
-  [ -x data/usr/bin/senkod ] || { echo "missing senkod" >&2; exit 1; }
-  [ -x data/usr/bin/senkoawgd ] || { echo "missing senkoawgd" >&2; exit 1; }
-  awg_bins="$(find data/usr/bin -maxdepth 1 -type f -name '*awgd' -print)"
-  [ "${awg_bins}" = "data/usr/bin/senkoawgd" ] || {
+  [ -x "${payload}/usr/bin/senkod" ] || { echo "missing senkod" >&2; exit 1; }
+  [ -x "${payload}/usr/bin/senkoawgd" ] || { echo "missing senkoawgd" >&2; exit 1; }
+  awg_bins="$(find "${payload}/usr/bin" -maxdepth 1 -type f -name '*awgd' -print)"
+  [ "${awg_bins}" = "${payload}/usr/bin/senkoawgd" ] || {
     echo "stale awg daemon binary" >&2
     exit 1
   }
-  [ ! -e data/usr/bin/redsocks-senko ] || {
+  [ ! -e "${payload}/usr/bin/redsocks-senko" ] || {
     echo "redsocks must not be packaged" >&2
     exit 1
   }
-  [ -f data/usr/lib/senkotlsfix.dylib ] || { echo "missing bundled tlsfix" >&2; exit 1; }
-  [ ! -e data/Library/MobileSubstrate ] || {
+  [ -f "${payload}/usr/lib/senkotlsfix.dylib" ] || { echo "missing bundled tlsfix" >&2; exit 1; }
+  [ ! -e "${payload}/Library/MobileSubstrate" ] || {
     echo "MobileSubstrate payload must be installed only when available" >&2
     exit 1
   }
 
-  for bin in data/usr/bin/senkod data/usr/bin/senkoctl data/usr/bin/senkoawgd \
-             data/usr/lib/senkotlsfix.dylib \
-             data/usr/lib/senkovpnicon.dylib \
-             data/Applications/Senko.app/senko; do
+  for bin in "${payload}/usr/bin/senkod" "${payload}/usr/bin/senkoctl" "${payload}/usr/bin/senkoawgd" \
+             "${payload}/usr/lib/senkotlsfix.dylib" \
+             "${payload}/usr/lib/senkovpnicon.dylib" \
+             "${payload}/Applications/Senko.app/senko"; do
     while IFS= read -r dep; do
       case "${dep}" in
-        /usr/lib/*|/System/Library/Frameworks/*) ;;
+        /usr/lib/*|/System/Library/Frameworks/*|/var/jb/usr/lib/senkotlsfix.dylib|/var/jb/usr/lib/senkovpnicon.dylib) ;;
         *) echo "non-system runtime dependency in ${bin}: ${dep}" >&2; exit 1 ;;
       esac
     done < <("${TC}/otool" -L "${bin}" | awk '/^[[:space:]]/ { print $1 }')

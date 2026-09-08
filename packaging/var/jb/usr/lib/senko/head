@@ -1,0 +1,20 @@
+#!/bin/sh
+# minimal head implementation for legacy jailbreaks without coreutils
+lines=10
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -n) shift; lines="$1"; shift ;;
+    -n*) lines="${1#-n}"; shift ;;
+    -[0-9]*) lines="${1#-}"; shift ;;
+    --) shift; break ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+if [ $# -gt 0 ]; then
+  for f in "$@"; do
+    sed "${lines}q" "$f" 2>/dev/null
+  done
+else
+  sed "${lines}q" 2>/dev/null
+fi

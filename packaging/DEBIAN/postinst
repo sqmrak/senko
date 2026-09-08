@@ -1,31 +1,136 @@
 #!/bin/sh
-# keep non-fatal setup errors from breaking dpkg
+# optional hooks must not leave dpkg half-configured when substrate is absent
 
-PLIST=/Library/LaunchDaemons/com.senko.senkod.plist
-SUBSTRATE_DIR=/Library/MobileSubstrate/DynamicLibraries
-SUBSTRATE_FILTER=/usr/lib/senkotlsfix/substrate-filter.plist
-VPNICON_DYLIB=/usr/lib/senkovpnicon.dylib
-VPNICON_PLIST=/usr/lib/senkovpnicon.plist
+PAYLOAD_ROOT=/var/jb
+if [ -e /var/jb/.procursus_strapped ] || \
+   [ -x /var/jb/basebin/launchctl ] || \
+   [ -x /var/jb/usr/bin/dpkg ]; then
+  JBROOT=/var/jb
+else
+  JBROOT=
+fi
+PLIST=${JBROOT}/Library/LaunchDaemons/com.senko.senkod.plist
+if [ -d "${JBROOT}/usr/lib/TweakInject" ] && [ ! -d "${JBROOT}/Library/MobileSubstrate/DynamicLibraries" ]; then
+  SUBSTRATE_DIR=${JBROOT}/usr/lib/TweakInject
+elif [ -d /usr/lib/TweakInject ] && [ ! -d /Library/MobileSubstrate/DynamicLibraries ]; then
+  SUBSTRATE_DIR=/usr/lib/TweakInject
+else
+  SUBSTRATE_DIR=${JBROOT}/Library/MobileSubstrate/DynamicLibraries
+fi
+SUBSTRATE_FILTER=${PAYLOAD_ROOT}/usr/lib/senkotlsfix/substrate-filter.plist
+TLSFIX_DYLIB=${PAYLOAD_ROOT}/usr/lib/senkotlsfix.dylib
+TLSFIX_DIR=${PAYLOAD_ROOT}/usr/lib/senkotlsfix
+VPNICON_DYLIB=${PAYLOAD_ROOT}/usr/lib/senkovpnicon.dylib
+VPNICON_PLIST=${PAYLOAD_ROOT}/usr/lib/senkovpnicon.plist
+APP=${PAYLOAD_ROOT}/Applications/Senko.app
+[ -n "$JBROOT" ] || APP=/Applications/Senko.app
+KICK=${PAYLOAD_ROOT}/usr/bin/senko-kick
+KILLALL=${JBROOT}/usr/bin/killall
+[ -x "$KILLALL" ] || KILLALL=/usr/bin/killall
+[ -x "$KILLALL" ] || KILLALL=/bin/killall
+UICACHE=${JBROOT}/usr/bin/uicache
+[ -x "$UICACHE" ] || UICACHE=/usr/bin/uicache
 VPNICON_STATE=/var/mobile/Library/Preferences/com.senko.vpnicon.state
 UPDATE_AWG_MARKER=/var/run/senkoawgd.upgrade
 CFG=/var/root/Library/Preferences/senko.cfg
 LEGACY_CFG=/var/mobile/Library/Preferences/senko.cfg
 
+install_rootful_link() {
+  source_path=$1
+  target_path=$2
+  [ -e "$source_path" ] || return 0
+  mkdir -p "${target_path%/*}" 2>/dev/null || true
+  if [ -e "$target_path" ] && [ ! -L "$target_path" ]; then
+    rm -rf "$target_path" 2>/dev/null || true
+  fi
+  if [ -L "$target_path" ]; then
+    rm -f "$target_path" 2>/dev/null || true
+  fi
+  ln -sf "$source_path" "$target_path" 2>/dev/null || true
+}
+
+# springboard on ios 13 and later refuses to launch a bundle whose path leaves
+# /Applications, and a symlinked bundle resolved to /var/jb: the app opened on a
+# black screen and was killed. the rootful layout gets a real directory
+install_rootful_app_bundle() {
+  source_path="${PAYLOAD_ROOT}/Applications/Senko.app"
+  target_path=/Applications/Senko.app
+  [ -d "$source_path" ] || return 0
+  rm -rf "${target_path}.dpkg-new" 2>/dev/null || true
+  cp -R "$source_path" "${target_path}.dpkg-new" || return 1
+  : > "${target_path}.dpkg-new/.senko-rootful-copy"
+  [ -L "$target_path" ] && rm -f "$target_path"
+  rm -rf "$target_path" 2>/dev/null || true
+  mv "${target_path}.dpkg-new" "$target_path" || return 1
+  chown -R root:wheel "$target_path" 2>/dev/null || true
+  chmod 755 "$target_path" "$target_path/senko" 2>/dev/null || true
+  find "$target_path" -type f ! -name senko -exec chmod 644 {} + 2>/dev/null || true
+  return 0
+}
+
+install_rootful_layout() {
+  [ -z "$JBROOT" ] || return 0
+  for name in senkod senkoctl senko-kick senkoawgd; do
+    install_rootful_link "${PAYLOAD_ROOT}/usr/bin/${name}" "/usr/bin/${name}" || true
+  done
+  install_rootful_link "${PAYLOAD_ROOT}/usr/lib/senkotlsfix.dylib" "/usr/lib/senkotlsfix.dylib" || true
+  install_rootful_link "${PAYLOAD_ROOT}/usr/lib/senkotlsfix" "/usr/lib/senkotlsfix" || true
+  install_rootful_link "${PAYLOAD_ROOT}/usr/lib/senkovpnicon.dylib" "/usr/lib/senkovpnicon.dylib" || true
+  install_rootful_link "${PAYLOAD_ROOT}/usr/lib/senkovpnicon.plist" "/usr/lib/senkovpnicon.plist" || true
+  install_rootful_app_bundle || true
+  install_rootful_link "${PAYLOAD_ROOT}/Library/LaunchDaemons/com.senko.senkod.plist" \
+    "/Library/LaunchDaemons/com.senko.senkod.plist" || true
+  if [ ! -e /usr/bin/head ] && [ -e "${PAYLOAD_ROOT}/usr/lib/senko/head" ]; then
+    install_rootful_link "${PAYLOAD_ROOT}/usr/lib/senko/head" "/usr/bin/head" || true
+  fi
+  if [ ! -e /etc/pf.os ] && [ -e "${PAYLOAD_ROOT}/etc/pf.os" ]; then
+    install_rootful_link "${PAYLOAD_ROOT}/etc/pf.os" "/etc/pf.os" || true
+  fi
+}
+
+# rootful systems need canonical links because armv7 code uses /usr paths
+install_rootful_layout || true
+
 tlsfix_installed() {
   dpkg -s com.tlsfix >/dev/null 2>&1 && return 0
-  [ -e /Library/MobileSubstrate/DynamicLibraries/tlsfix.dylib ] && return 0
+  [ -e "${SUBSTRATE_DIR}/tlsfix.dylib" ] && return 0
   return 1
 }
 
 substrate_installed() {
+  [ -d "${JBROOT}/Library/MobileSubstrate/DynamicLibraries" ] && return 0
+  [ -d "${JBROOT}/usr/lib/TweakInject" ] && return 0
+  [ -d /Library/MobileSubstrate/DynamicLibraries ] && return 0
+  [ -d /usr/lib/TweakInject ] && return 0
+  [ -e "${JBROOT}/Library/MobileSubstrate/MobileSubstrate.dylib" ] && return 0
+  [ -e "${JBROOT}/usr/lib/libsubstrate.dylib" ] && return 0
+  [ -e "${JBROOT}/usr/lib/libsubstitute.dylib" ] && return 0
+  [ -e "${JBROOT}/usr/lib/libhooker.dylib" ] && return 0
+  [ -e "${JBROOT}/usr/lib/libellekit.dylib" ] && return 0
   [ -e /Library/MobileSubstrate/MobileSubstrate.dylib ] && return 0
   [ -e /usr/lib/libsubstrate.dylib ] && return 0
+  [ -e /usr/lib/libsubstitute.dylib ] && return 0
+  [ -e /usr/lib/libhooker.dylib ] && return 0
+  [ -e /usr/lib/libellekit.dylib ] && return 0
   return 1
 }
 
 firmware_major() {
-  version="$(sed -n 's/.*<string>\([0-9][0-9]*\)\..*<\/string>.*/\1/p' \
-    /System/Library/CoreServices/SystemVersion.plist 2>/dev/null | head -n 1)"
+  version="$(sed -n '/<key>ProductVersion<\/key>/{n;s/.*<string>\([0-9][0-9]*\)\..*<\/string>.*/\1/p;q;}' \
+    /System/Library/CoreServices/SystemVersion.plist 2>/dev/null)"
+  if [ -z "$version" ]; then
+    version="$(sed -n 's/.*<string>\([0-9][0-9]*\)\..*<\/string>.*/\1/{p;q;}' \
+      /System/Library/CoreServices/SystemVersion.plist 2>/dev/null)"
+  fi
+  if [ -z "$version" ]; then
+    # SystemVersion.plist is a binary plist on some builds and the sed above
+    # reads nothing. darwin 11 is only ever ios 5, and ios 5 is the one branch
+    # below whose behaviour differs, so guessing 6 there would disable the only
+    # routing backend that device has
+    case "$(uname -r 2>/dev/null)" in
+      11.*) version=5 ;;
+    esac
+  fi
   [ -n "$version" ] || version=6
   printf '%s\n' "$version"
 }
@@ -62,7 +167,7 @@ remove_senkod_injection() {
 enable_senkotlsfix_hooks() {
   [ -f "${SUBSTRATE_FILTER}" ] || return 0
   mkdir -p "${SUBSTRATE_DIR}" || return 0
-  ln -sf /usr/lib/senkotlsfix.dylib "${SUBSTRATE_DIR}/senkotlsfix.dylib" || return 0
+  ln -sf "${TLSFIX_DYLIB}" "${SUBSTRATE_DIR}/senkotlsfix.dylib" || return 0
   cp "${SUBSTRATE_FILTER}" "${SUBSTRATE_DIR}/senkotlsfix.plist" || return 0
   chown root:wheel "${SUBSTRATE_DIR}/senkotlsfix.plist" || true
   chmod 644 "${SUBSTRATE_DIR}/senkotlsfix.plist" || true
@@ -82,25 +187,33 @@ enable_senkovpnicon_hooks() {
 chown root:wheel "$PLIST" || true
 chmod 644 "$PLIST" || true
 
-for bin in /usr/bin/senkod /usr/bin/senkoctl; do
+for bin in "${PAYLOAD_ROOT}/usr/bin/senkod" "${PAYLOAD_ROOT}/usr/bin/senkoctl"; do
   [ -e "$bin" ] && chown root:wheel "$bin" && chmod 755 "$bin" || true
 done
-[ -e /usr/bin/senkoawgd ] && chown root:wheel /usr/bin/senkoawgd && chmod 755 /usr/bin/senkoawgd || true
-# app restarts daemon through senko-kick
-if [ -e /usr/bin/senko-kick ]; then
-  chown root:wheel /usr/bin/senko-kick || true
-  chmod 4755 /usr/bin/senko-kick || true
+[ -e "${PAYLOAD_ROOT}/usr/bin/senkoawgd" ] && chown root:wheel "${PAYLOAD_ROOT}/usr/bin/senkoawgd" && chmod 755 "${PAYLOAD_ROOT}/usr/bin/senkoawgd" || true
+# setuid is required because the sandboxed app cannot signal the root daemon
+if [ -e "$KICK" ]; then
+  chown root:wheel "$KICK" || true
+  chmod 4755 "$KICK" || true
 fi
-# remove the old helper
-rm -f /usr/bin/redsocks-senko /var/run/senko-redsocks.conf >/dev/null 2>&1 || true
-[ -e /usr/lib/senkotlsfix.dylib ] && chown root:wheel /usr/lib/senkotlsfix.dylib && chmod 755 /usr/lib/senkotlsfix.dylib || true
-[ -e /usr/lib/senkovpnicon.dylib ] && chown root:wheel /usr/lib/senkovpnicon.dylib && chmod 755 /usr/lib/senkovpnicon.dylib || true
-[ -e /usr/lib/senkovpnicon.plist ] && chown root:wheel /usr/lib/senkovpnicon.plist && chmod 644 /usr/lib/senkovpnicon.plist || true
-mkdir -p /usr/lib/senkotlsfix/roots || true
+# the obsolete helper would compete for the local proxy port
+rm -f "${JBROOT}/usr/bin/redsocks-senko" "${PAYLOAD_ROOT}/usr/bin/redsocks-senko" /var/run/senko-redsocks.conf >/dev/null 2>&1 || true
+[ -e "$TLSFIX_DYLIB" ] && chown root:wheel "$TLSFIX_DYLIB" && chmod 755 "$TLSFIX_DYLIB" || true
+[ -e "$VPNICON_DYLIB" ] && chown root:wheel "$VPNICON_DYLIB" && chmod 755 "$VPNICON_DYLIB" || true
+[ -e "$VPNICON_PLIST" ] && chown root:wheel "$VPNICON_PLIST" && chmod 644 "$VPNICON_PLIST" || true
+mkdir -p "${TLSFIX_DIR}/roots" || true
 
 IOS_MAJOR="$(firmware_major)"
-if [ "$IOS_MAJOR" = "5" ]; then
+if [ "$IOS_MAJOR" -ge 12 ] 2>/dev/null; then
+  # injecting the legacy shim on ios 12 adds crash surface without fixing TLS
   disable_senkotlsfix_hooks
+elif [ "$IOS_MAJOR" = "5" ]; then
+  if substrate_installed; then
+    # ios 5 needs this dylib for application routing while its TLS hooks stay gated
+    enable_senkotlsfix_hooks
+  else
+    disable_senkotlsfix_hooks
+  fi
   disable_senkovpnicon_hooks
 elif tlsfix_installed; then
   disable_senkotlsfix_hooks
@@ -123,22 +236,30 @@ chmod 644 "$VPNICON_STATE" >/dev/null 2>&1 || true
 [ -e /var/mobile/Library/Preferences/com.senko.senkotlsfix.plist ] && \
   chown mobile:mobile /var/mobile/Library/Preferences/com.senko.senkotlsfix.plist && \
   chmod 644 /var/mobile/Library/Preferences/com.senko.senkotlsfix.plist || true
-mkdir -p /usr/lib/senkotlsfix/roots || true
-chown -R root:wheel /usr/lib/senkotlsfix || true
-chmod 755 /usr/lib/senkotlsfix /usr/lib/senkotlsfix/roots || true
-chmod 644 /usr/lib/senkotlsfix/roots/*.pem >/dev/null 2>&1 || true
-chmod 644 /usr/lib/senkotlsfix/cacert.pem >/dev/null 2>&1 || true
+mkdir -p "${TLSFIX_DIR}/roots" || true
+chown -R root:wheel "$TLSFIX_DIR" || true
+chmod 755 "$TLSFIX_DIR" "${TLSFIX_DIR}/roots" || true
+chmod 644 "${TLSFIX_DIR}"/roots/*.pem >/dev/null 2>&1 || true
+chmod 644 "${TLSFIX_DIR}/cacert.pem" >/dev/null 2>&1 || true
+if [ ! -s /var/log/senko-system.log ]; then
+  [ -s /var/log/senkod.log ] && sed 's/^/[senkod] /' /var/log/senkod.log >> /var/log/senko-system.log
+  [ -s /var/log/senkoawgd.log ] && sed 's/^/[awg] /' /var/log/senkoawgd.log >> /var/log/senko-system.log
+fi
+touch /var/log/senko-system.log >/dev/null 2>&1 || true
+chown root:mobile /var/log/senko-system.log >/dev/null 2>&1 || true
+chmod 640 /var/log/senko-system.log >/dev/null 2>&1 || true
 touch /var/log/senkotlsfix.log >/dev/null 2>&1 || true
-chmod 666 /var/log/senkotlsfix.log >/dev/null 2>&1 || true
-# mobile must be able to open the update log
+chown root:mobile /var/log/senkotlsfix.log >/dev/null 2>&1 || true
+chmod 660 /var/log/senkotlsfix.log >/dev/null 2>&1 || true
+# the app runs as mobile and must expose installer failures in its update screen
 touch /tmp/senko-update.log >/dev/null 2>&1 || true
-chmod 666 /tmp/senko-update.log >/dev/null 2>&1 || true
+chown root:mobile /tmp/senko-update.log >/dev/null 2>&1 || true
+chmod 640 /tmp/senko-update.log >/dev/null 2>&1 || true
 
-if [ -d /Applications/Senko.app ]; then
-  chown -R root:wheel /Applications/Senko.app || true
-  chmod 755 /Applications/Senko.app || true
-  chmod 755 /Applications/Senko.app/senko || true
-  su mobile -c uicache >/dev/null 2>&1 || true
+if [ -d "$APP" ]; then
+  chown -R root:wheel "$APP" || true
+  chmod 755 "$APP" || true
+  chmod 755 "$APP/senko" || true
 fi
 
 mkdir -p /var/root/Library/Preferences || true
@@ -159,32 +280,29 @@ fi
 chown root:wheel "$CFG" >/dev/null 2>&1 || true
 chmod 600 "$CFG" >/dev/null 2>&1 || true
 
-# the update helper already stopped the daemon and owns kick.lock
+# the update helper owns kick.lock, so a second restart would race its recovery
 if [ "${SENKO_UPDATE:-0}" != "1" ]; then
-  # give senkod time to remove routing before the forced stop
+  # SIGTERM lets senkod remove routes before launchd starts the replacement
   launchctl unload "$PLIST" >/dev/null 2>&1 || true
   launchctl remove com.senko.senkod >/dev/null 2>&1 || true
-  killall -TERM senkod >/dev/null 2>&1 || true
+  "$KILLALL" -TERM senkod >/dev/null 2>&1 || true
   sleep 1
-  killall -TERM senkod >/dev/null 2>&1 || true
+  "$KILLALL" -TERM senkod >/dev/null 2>&1 || true
   sleep 1
-  killall -9 senkod >/dev/null 2>&1 || true
+  "$KILLALL" -9 senkod >/dev/null 2>&1 || true
   rm -f /var/tmp/senkod.sock /var/tmp/senkod.token
 
-  # load the job for this boot and keep it enabled
+  # -w keeps the daemon enabled after reboot on jailbreaks that persist overrides
   launchctl load -w "$PLIST" >/dev/null 2>&1 || launchctl load "$PLIST" >/dev/null 2>&1 || true
   launchctl start com.senko.senkod >/dev/null 2>&1 || true
 
-  # fall back to the setuid launcher if launchd stays silent
-  if [ -x /usr/bin/senko-kick ]; then
-    /usr/bin/senko-kick >/dev/null 2>&1 || true
-  fi
-
-  if [ -s "$UPDATE_AWG_MARKER" ] && [ -x /usr/bin/senko-kick ]; then
+  if [ -s "$UPDATE_AWG_MARKER" ] && [ -x "$KICK" ]; then
     upgrade_config="$(sed -n '1p' "$UPDATE_AWG_MARKER" 2>/dev/null || true)"
     case "$upgrade_config" in
       /var/mobile/Library/Preferences/Senko/*.conf)
-        [ -r "$upgrade_config" ] && /usr/bin/senko-kick --awg "$upgrade_config" >/dev/null 2>&1 || true
+        if [ -r "$upgrade_config" ]; then
+          ( "$KICK" --awg "$upgrade_config" >/dev/null 2>&1 || true ) </dev/null &
+        fi
         ;;
     esac
     rm -f "$UPDATE_AWG_MARKER" >/dev/null 2>&1 || true
@@ -193,14 +311,14 @@ fi
 
 echo "Senko installed successfully. control socket: /var/tmp/senkod.sock"
 
-# refresh the app icon cache after install
-su mobile -c uicache >/dev/null 2>&1 || uicache >/dev/null 2>&1 || true
+# backgrounding avoids an ios 6 uicache deadlock while the old app is alive
+( "$UICACHE" -p "$APP" >/dev/null 2>&1 || "$UICACHE" -p /Applications/Senko.app >/dev/null 2>&1 || "$UICACHE" >/dev/null 2>&1 || true ) </dev/null &
 
 if [ "${SENKO_SKIP_RESPRING:-0}" = "1" ]; then
   exit 0
 fi
 
-# respring after dpkg marks the package configured
-( sleep 2; killall -9 SpringBoard backboardd >/dev/null 2>&1 || true ) >/dev/null 2>&1 &
+# delaying respring lets dpkg record the configured state first
+( sleep 2; "$KILLALL" -9 SpringBoard backboardd >/dev/null 2>&1 || true ) </dev/null >/dev/null 2>&1 &
 
 exit 0

@@ -1,19 +1,23 @@
 #!/bin/sh
-# no set -e: prerm failures must not leave package half-removed
+# removal must continue after optional jailbreak tools disappear
 
-# senko daemon prerm: stop the daemon before files are removed. tearing down
-# routing is the daemon's own job on SIGTERM (it calls routing_exec_down via
-# its signal handler), so unloading it here also undoes any live ipfw/pf rules.
-
-PLIST=/Library/LaunchDaemons/com.senko.senkod.plist
+if [ -e /var/jb/.procursus_strapped ] || \
+   [ -x /var/jb/basebin/launchctl ] || \
+   [ -x /var/jb/usr/bin/dpkg ]; then
+  JBROOT=/var/jb
+else
+  JBROOT=
+fi
+PLIST=${JBROOT}/Library/LaunchDaemons/com.senko.senkod.plist
+KICK=/var/jb/usr/bin/senko-kick
 VPNICON_STATE=/var/mobile/Library/Preferences/com.senko.vpnicon.state
 AWG_ACTIVE_CONFIG=/var/run/senkoawgd.config
 UPDATE_AWG_MARKER=/var/run/senkoawgd.upgrade
 
 preserve_awg_for_upgrade() {
   [ "$1" = upgrade ] || return 0
-  [ -x /usr/bin/senko-kick ] || return 0
-  status="$(/usr/bin/senko-kick --awg-status 2>/dev/null || true)"
+  [ -x "$KICK" ] || return 0
+  status="$("$KICK" --awg-status 2>/dev/null || true)"
   case "$status" in
     connecting*|connected*) ;;
     *) return 0 ;;
@@ -25,7 +29,7 @@ preserve_awg_for_upgrade() {
       printf '%s\n' "$config" > "$UPDATE_AWG_MARKER"
       ;;
   esac
-  /usr/bin/senko-kick --awg-stop >/dev/null 2>&1 || true
+  "$KICK" --awg-stop >/dev/null 2>&1 || true
 }
 
 if [ "${SENKO_UPDATE:-0}" != "1" ]; then
@@ -38,7 +42,7 @@ if [ "${SENKO_UPDATE:-0}" != "1" ]; then
 fi
 
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
-  # leave the user config in place on plain remove; purge takes it.
+  # plain removal preserves user servers for a later reinstall
   rm -f /var/tmp/senkod.sock /var/tmp/senkod.token >/dev/null 2>&1 || true
   rm -f "$AWG_ACTIVE_CONFIG" "$UPDATE_AWG_MARKER" >/dev/null 2>&1 || true
 fi

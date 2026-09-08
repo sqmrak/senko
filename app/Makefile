@@ -7,6 +7,7 @@ TC      ?= $(if $(SENKO_TC),$(SENKO_TC),$(THEOS)/toolchain/linux/iphone/bin)
 SDK     ?= $(if $(SENKO_SDK_V7),$(SENKO_SDK_V7),$(error set SDK=/path/to/iphoneos.sdk))
 LDID    ?= $(TC)/ldid
 CRT     ?=
+EXTRA_CFLAGS ?=
 
 # set the target triple and arch for another slice
 #   make TRIPLE=arm64-apple-darwin SDK=/path/to/iphoneos-arm64.sdk \
@@ -14,7 +15,7 @@ CRT     ?=
 TRIPLE  ?= arm-apple-darwin11
 CC      := $(TC)/clang -target $(TRIPLE) -B $(TC)
 ARCH    ?= -arch armv7 -miphoneos-version-min=5.0
-CFLAGS  := -fno-objc-arc -fblocks -Wall -Wextra -O2 $(ARCH) -isysroot $(SDK) \
+CFLAGS  := -fno-objc-arc -fblocks -Wall -Wextra -O2 $(EXTRA_CFLAGS) $(ARCH) -isysroot $(SDK) \
            -I. -Itheme -Ithird_party/quirc
 # qr scanning uses raw frames
 # keep av/media weak for old ios
@@ -35,6 +36,7 @@ ICON_SRC := icons/server-placeholder.png
 THEME_SRC := \
 	theme/theme_core.m \
 	theme/theme_table.m \
+	theme/theme_custom.m \
 	theme/theme_ios6.m \
 	theme/theme_ios7.m \
 	theme/theme_ios16.m \
@@ -53,27 +55,31 @@ APP_SRC := \
 	main_vc_tunnel.m \
 	main_vc_import.m \
 	settings_vc.m \
+	theme_edit_vc.m \
 	about_vc.m \
 	logs_vc.m \
 	edit_server_vc.m \
 	edit_awg_vc.m \
 	edit_subscription_vc.m \
+	subscription_info_vc.m \
 	file_import_vc.m \
 	ui_style.m \
 	ui_chrome_shared.m \
 	ui_chrome_icons.m \
 	ui_chrome_status.m \
 	ui_chrome_bar.m \
-	ui_chrome_dome.m \
 	control_client.m \
 	qr_scan.m \
 	server_cell.m \
-	main_layout.m \
+	home_layout.m \
+	server_sheet.m \
 	update_install.m \
 	boykisser_field.m \
 	bubble_field.m \
+	empty_state.m \
 	themes_vc.m \
 	meow.m \
+	../daemon/core/b64.c \
 	$(THEME_SRC)
 
 QUIRC_SRC := $(QUIRC)/quirc.c $(QUIRC)/decode.c $(QUIRC)/identify.c $(QUIRC)/version_db.c
@@ -97,9 +103,13 @@ $(BIN): $(APP_SRC) $(QUIRC_OBJ) $(FLAG_SRC) $(ICON_SRC) control_client.h qr_scan
 		$(LDID) -Sentitlements.plist $(BIN); \
 		mkdir -p $(APP); \
 		cp Info.plist $(APP)/; \
-		cp icons/Icon.png icons/Icon@2x.png icons/sqmrak.jpg icons/about-bg.png icons/boykisser.png icons/meow.caf icons/meow.wav icons/ouch.wav icons/miside-bg.jpg icons/miside-logo.png icons/frutiger-bg.jpg icons/server-placeholder.png \
+		cp icons/Icon.png icons/Icon@2x.png icons/sqmrak.jpg icons/about-bg.png icons/boykisser.png icons/meow.caf icons/meow.wav icons/ouch.wav icons/miside-bg.jpg icons/frutiger-bg.jpg icons/server-placeholder.png \
 		   icons/ios26-bg-light.jpg icons/ios26-bg-dark.jpg \
 		   icons/Default.png icons/Default@2x.png icons/Default-568h@2x.png \
+		   icons/Default-667h@2x.png icons/Default-736h@3x.png \
+		   icons/Default-812h@3x.png icons/Default-896h@2x.png \
+		   icons/Default-896h@3x.png icons/Default-844h@3x.png \
+		   icons/Default-926h@3x.png \
 		   icons/Default-Portrait.png icons/Default-Portrait@2x.png $(APP)/ 2>/dev/null || true; \
 		cp icons/flags/*.png $(APP)/ 2>/dev/null || true; \
 	fi

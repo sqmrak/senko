@@ -1,13 +1,23 @@
 #!/usr/bin/env bash
-# build a reproducible fat package for both runtime architectures
+# one archive prevents users from choosing the wrong jailbreak layout
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-# require tool paths from the build environment
 THEOS="${THEOS:?set THEOS to theos root}"
 TC="${SENKO_TC:-${THEOS}/toolchain/linux/iphone/bin}"
 LIPO="${TC}/lipo"
-OUT="${ROOT}/senko-v1.0.7-stable.deb"
+HOST_AR="${SENKO_HOST_AR:-/usr/bin/ar}"
+PKG_VERSION="$(awk -F': ' '$1 == "Version" { print $2; exit }' "${ROOT}/packaging/DEBIAN/control")"
+PKG_ARCH="$(awk -F': ' '$1 == "Architecture" { print $2; exit }' "${ROOT}/packaging/DEBIAN/control")"
+if [[ ! "${PKG_VERSION}" =~ ^[0-9][0-9A-Za-z.+:~-]*$ ]]; then
+  echo "invalid Debian package version: ${PKG_VERSION:-<empty>}" >&2
+  exit 1
+fi
+if [[ "${PKG_ARCH}" != "all" ]]; then
+  echo "universal package must use Architecture: all" >&2
+  exit 1
+fi
+OUT="${ROOT}/senko-v${PKG_VERSION}.deb"
 # thin armv7 sdk: fat dylib remap is flaky on linux aarch64 hosts
 SDK_V7="${SENKO_SDK_V7:?set SENKO_SDK_V7 to the armv7 sdk}"
 SDK_V64="${SENKO_SDK_V64:?set SENKO_SDK_V64 to the arm64 sdk}"
@@ -16,8 +26,35 @@ OSSL_V7="${SENKO_OSSL_V7:?set SENKO_OSSL_V7 to the armv7 openssl prefix}"
 OSSL_V64="${SENKO_OSSL_V64:?set SENKO_OSSL_V64 to the arm64 openssl prefix}"
 # static mbedtls for the tlsfix hook (no device-side dylib)
 MBED="${SENKO_MBED:?set SENKO_MBED to the mbedtls output directory}"
-STAGE="${ROOT}/packaging"
+GO_CORE_SRC="${SENKO_GO_CORE_SRC:?set SENKO_GO_CORE_SRC to the pinned go core source}"
+GO_BIN="${SENKO_GO:?set SENKO_GO to the Go 1.27.1 executable}"
+STAGE="${ROOT}/.package-stage"
 SLICE="${ROOT}/.build-slices"
+# /var stays writable on rootless and rootful systems, so one payload can serve both
+JBROOT="/var/jb"
+ARM64_ROOT_FLAGS="-DSENKO_ROOTLESS=1"
+ARM64_TLSFIX_INSTALL_NAME="/var/jb/usr/lib/senkotlsfix.dylib"
+ARM64_VPNICON_INSTALL_NAME="/var/jb/usr/lib/senkovpnicon.dylib"
+PAYLOAD="${STAGE}${JBROOT}"
+
+cleanup_build_outputs() {
+  rm -rf "${STAGE}" "${SLICE}" "${ROOT}/app/build" "${ROOT}/daemon/build"
+  rm -f "${ROOT}/senkotlsfix/senkotlsfix.dylib" \
+        "${ROOT}/senkotlsfix/senkotlsfix-armv7.dylib" \
+        "${ROOT}/senkotlsfix/senkotlsfix-arm64.dylib"
+  env PATH="${SENKO_HOST_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}" \
+    make -C "${ROOT}/tests" clean >/dev/null 2>&1 || true
+}
+
+# cleanup on failure too because stale slices can contaminate the next package
+trap cleanup_build_outputs EXIT
+
+PLIST_VERSION="$(sed -n '/<key>CFBundleShortVersionString<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;q;}' "${ROOT}/app/Info.plist")"
+HEADER_VERSION="$(sed -n 's/^#define SENKO_VERSION @"v\([^"]*\)"/\1/p' "${ROOT}/app/app_common.h")"
+if [[ "${PLIST_VERSION}" != "${PKG_VERSION}" || "${HEADER_VERSION}" != "${PKG_VERSION}" ]]; then
+  echo "version mismatch: package=${PKG_VERSION} plist=${PLIST_VERSION} header=${HEADER_VERSION}" >&2
+  exit 1
+fi
 
 make_fat() {
   local out="$1"
@@ -27,17 +64,15 @@ make_fat() {
 
 echo "==> host tests"
 # keep system compiler first so host tests are not built with the ios clang
-make -C "${ROOT}/tests" test CC="${CC:-/usr/bin/cc}"
+HOST_PATH="${SENKO_HOST_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+env PATH="${HOST_PATH}" make -C "${ROOT}/tests" test CC="${CC:-/usr/bin/cc}"
 
 echo "==> fetch tls roots"
 bash "${ROOT}/scripts/fetch_roots.sh"
 bash "${ROOT}/scripts/verify_resources.sh"
 
 echo "==> openssl armv7 (static libs)"
-if [[ ! -f "${OSSL_V7}/lib/libssl.a" || ! -f "${OSSL_V7}/lib/libcrypto.a" ]]; then
-  echo "missing ${OSSL_V7}/lib - build armv7 openssl first" >&2
-  exit 1
-fi
+bash "${ROOT}/scripts/build_openssl_armv7.sh"
 
 echo "==> openssl arm64"
 bash "${ROOT}/scripts/build_openssl_arm64.sh"
@@ -54,6 +89,11 @@ fi
 
 rm -rf "${SLICE}"
 mkdir -p "${SLICE}/armv7" "${SLICE}/arm64"
+
+echo "==> go backend core arm64 (iOS 12+)"
+env SENKO_GO_CORE_SRC="${GO_CORE_SRC}" SENKO_GO="${GO_BIN}" \
+  SENKO_TC="${TC}" SENKO_SDK_V64="${SDK_V64}" \
+  bash "${ROOT}/scripts/build_go_core.sh" "${SLICE}/senko-core"
 
 echo "==> daemon armv7"
 make -C "${ROOT}/daemon" -f Makefile.ios clean \
@@ -76,6 +116,7 @@ make -C "${ROOT}/daemon" -f Makefile.ios \
   THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
   TRIPLE=arm64-apple-darwin SDK="${SDK_V64}" \
   ARCH="-arch arm64 -miphoneos-version-min=7.0" OSSL="${OSSL_V64}" \
+  EXTRA_CFLAGS="${ARM64_ROOT_FLAGS}" \
   IOS_BINDIR=build/ios-arm64 all
 cp "${ROOT}/daemon/build/ios-arm64/senkod" "${SLICE}/arm64/senkod"
 cp "${ROOT}/daemon/build/ios-arm64/senkoctl" "${SLICE}/arm64/senkoctl"
@@ -104,6 +145,7 @@ make -C "${ROOT}/app" \
   THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
   TRIPLE=arm64-apple-darwin SDK="${SDK_V64}" \
   ARCH="-arch arm64 -miphoneos-version-min=7.0" \
+  EXTRA_CFLAGS="${ARM64_ROOT_FLAGS}" \
   OBJDIR=build/obj-arm64 BIN=build/senko-arm64
 cp "${ROOT}/app/build/senko-arm64" "${SLICE}/senko-arm64"
 
@@ -126,6 +168,8 @@ make -C "${ROOT}/senkotlsfix" -f Makefile.ios \
   THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
   TRIPLE=arm64-apple-darwin SDK="${SDK_V64}" \
   ARCH="-arch arm64 -miphoneos-version-min=7.0" \
+  EXTRA_CFLAGS="${ARM64_ROOT_FLAGS}" \
+  INSTALL_NAME="${ARM64_TLSFIX_INSTALL_NAME}" \
   MBED="${MBED}" MBEDLIBS="${MBED}/lib/libmbedtls-arm64.a ${MBED}/lib/libmbedx509-arm64.a ${MBED}/lib/libmbedcrypto-arm64.a" \
   OUT=senkotlsfix-arm64.dylib
 cp "${ROOT}/senkotlsfix/senkotlsfix-arm64.dylib" "${SLICE}/"
@@ -148,13 +192,13 @@ echo "==> senkovpnicon armv7"
 
 echo "==> senkovpnicon arm64"
 "${TC}/clang" -target arm64-apple-darwin -B "${TC}" \
-  -fno-objc-arc -Wall -Wextra -O2 -fPIC \
+  -fno-objc-arc -Wall -Wextra -O2 -fPIC ${ARM64_ROOT_FLAGS} \
   -arch arm64 -miphoneos-version-min=7.0 -isysroot "${SDK_V64}" \
   "${ROOT}/vpnicon/senko_vpnicon.m" \
   -o "${SLICE}/senkovpnicon-arm64.dylib" \
   -dynamiclib \
   -Wl,-no_warn_inits \
-  -install_name /usr/lib/senkovpnicon.dylib \
+  -install_name "${ARM64_VPNICON_INSTALL_NAME}" \
   -framework Foundation -framework UIKit -framework CoreFoundation -lobjc
 "${TC}/ldid" -S "${SLICE}/senkovpnicon-arm64.dylib"
 
@@ -163,54 +207,78 @@ make_fat "${SLICE}/senkovpnicon.dylib" \
 "${TC}/ldid" -S "${SLICE}/senkovpnicon.dylib"
 
 echo "==> stage packaging"
-rm -rf "${STAGE}/usr/bin"
-mkdir -p "${STAGE}/usr/bin" "${STAGE}/usr/lib/senkotlsfix/roots" \
+rm -rf "${STAGE}"
+mkdir -p "${STAGE}/DEBIAN" \
+         "${PAYLOAD}/usr/bin" "${PAYLOAD}/usr/lib/senkotlsfix/roots" \
+         "${PAYLOAD}/usr/lib/senko" \
+         "${PAYLOAD}/usr/share/doc/senko" \
+         "${PAYLOAD}/etc" \
+         "${PAYLOAD}/Library/LaunchDaemons" \
          "${STAGE}/var/mobile/Library/Preferences" \
-         "${STAGE}/Applications"
-rm -rf "${STAGE}/Library/MobileSubstrate"
-cp "${SLICE}/senkotlsfix.dylib" "${STAGE}/usr/lib/senkotlsfix.dylib"
-cp "${SLICE}/senkovpnicon.dylib" "${STAGE}/usr/lib/senkovpnicon.dylib"
-cp "${ROOT}/vpnicon/senkovpnicon.plist" "${STAGE}/usr/lib/senkovpnicon.plist"
+         "${PAYLOAD}/Applications/Senko.app"
+cp "${ROOT}/packaging/DEBIAN/control" "${STAGE}/DEBIAN/control"
+cp "${ROOT}/packaging/DEBIAN/postinst" "${STAGE}/DEBIAN/postinst"
+cp "${ROOT}/packaging/DEBIAN/postrm" "${STAGE}/DEBIAN/postrm"
+cp "${ROOT}/packaging/DEBIAN/prerm" "${STAGE}/DEBIAN/prerm"
+cp "${ROOT}/packaging/var/mobile/Library/Preferences/com.senko.senkotlsfix.plist" \
+   "${STAGE}/var/mobile/Library/Preferences/"
+cp "${ROOT}/packaging/etc/pf.os" "${PAYLOAD}/etc/pf.os"
+cp "${ROOT}/packaging/Library/LaunchDaemons/com.senko.senkod.plist" \
+  "${PAYLOAD}/Library/LaunchDaemons/com.senko.senkod.plist"
+cp "${SLICE}/senkotlsfix.dylib" "${PAYLOAD}/usr/lib/senkotlsfix.dylib"
+cp "${SLICE}/senkovpnicon.dylib" "${PAYLOAD}/usr/lib/senkovpnicon.dylib"
+cp "${ROOT}/vpnicon/senkovpnicon.plist" "${PAYLOAD}/usr/lib/senkovpnicon.plist"
 cp "${ROOT}/senkotlsfix/substrate-filter.plist" \
-   "${STAGE}/usr/lib/senkotlsfix/substrate-filter.plist"
-cp "${ROOT}/senkotlsfix/cacert.pem" "${STAGE}/usr/lib/senkotlsfix/cacert.pem"
-cp "${ROOT}/senkotlsfix/roots/"*.pem "${STAGE}/usr/lib/senkotlsfix/roots/" 2>/dev/null || true
-cp "${SLICE}/senkod" "${STAGE}/usr/bin/senkod"
-cp "${SLICE}/senkoctl" "${STAGE}/usr/bin/senkoctl"
-cp "${SLICE}/senko-kick" "${STAGE}/usr/bin/senko-kick"
-cp "${SLICE}/senkoawgd" "${STAGE}/usr/bin/senkoawgd"
-rm -f "${STAGE}/usr/bin/redsocks-senko"
-rm -rf "${STAGE}/Applications/Senko.app"
-mkdir -p "${STAGE}/Applications/Senko.app"
-cp "${SLICE}/senko" "${STAGE}/Applications/Senko.app/senko"
-cp "${ROOT}/app/Info.plist" "${STAGE}/Applications/Senko.app/"
-cp "${ROOT}/app/icons/"* "${STAGE}/Applications/Senko.app/" 2>/dev/null || true
-cp "${ROOT}/app/icons/flags/"*.png "${STAGE}/Applications/Senko.app/" 2>/dev/null || true
+   "${PAYLOAD}/usr/lib/senkotlsfix/substrate-filter.plist"
+cp "${ROOT}/senkotlsfix/cacert.pem" "${PAYLOAD}/usr/lib/senkotlsfix/cacert.pem"
+cp "${ROOT}/senkotlsfix/roots/"*.pem "${PAYLOAD}/usr/lib/senkotlsfix/roots/" 2>/dev/null || true
+cp "${SLICE}/senkod" "${PAYLOAD}/usr/bin/senkod"
+cp "${SLICE}/senkoctl" "${PAYLOAD}/usr/bin/senkoctl"
+cp "${SLICE}/senko-kick" "${PAYLOAD}/usr/bin/senko-kick"
+cp "${SLICE}/senkoawgd" "${PAYLOAD}/usr/bin/senkoawgd"
+# kept under a private path because /usr/bin/head belongs to coreutils, and a
+# package that claims it is refused outright by dpkg on any system that has it
+if [ -f "${ROOT}/packaging/var/jb/usr/lib/senko/head" ]; then
+  cp "${ROOT}/packaging/var/jb/usr/lib/senko/head" "${PAYLOAD}/usr/lib/senko/head"
+fi
+cp "${SLICE}/senko-core" "${PAYLOAD}/usr/lib/senko-core"
+cp "${ROOT}/packaging/go-core-NOTICE" "${PAYLOAD}/usr/share/doc/senko/"
+cp "${GO_CORE_SRC}/LICENSE" "${PAYLOAD}/usr/share/doc/senko/go-core-LICENSE"
+cp "${SLICE}/senko" "${PAYLOAD}/Applications/Senko.app/senko"
+cp "${ROOT}/app/Info.plist" "${PAYLOAD}/Applications/Senko.app/"
+cp "${ROOT}/app/icons/"* "${PAYLOAD}/Applications/Senko.app/" 2>/dev/null || true
+cp "${ROOT}/app/icons/flags/"*.png "${PAYLOAD}/Applications/Senko.app/" 2>/dev/null || true
 
-# normalize ownership and modes because legacy dpkg rejects builder metadata
-chmod 755 "${STAGE}/usr/bin/senkod" "${STAGE}/usr/bin/senkoctl" "${STAGE}/usr/bin/senkoawgd" \
-          "${STAGE}/Applications/Senko.app" \
-          "${STAGE}/Applications/Senko.app/senko" \
-          "${STAGE}/usr/lib/senkotlsfix.dylib" \
-  "${STAGE}/usr/lib/senkovpnicon.dylib" 2>/dev/null || true
-# mark the helper setuid so the mobile ui can restart senkod
-chown 0:0 "${STAGE}/usr/bin/senko-kick" 2>/dev/null || true
-chmod 4755 "${STAGE}/usr/bin/senko-kick"
-find "${STAGE}/Applications/Senko.app" -type f ! -name senko -exec chmod 644 {} +
-find "${STAGE}/usr/lib/senkotlsfix" -type f -exec chmod 644 {} +
-chmod 644 "${STAGE}/usr/lib/senkovpnicon.plist" 2>/dev/null || true
-chmod 644 "${STAGE}/Library/LaunchDaemons/"*.plist 2>/dev/null || true
+# normalized metadata prevents legacy dpkg from rejecting builder ownership
+chmod 755 "${PAYLOAD}/usr/bin/senkod" "${PAYLOAD}/usr/bin/senkoctl" "${PAYLOAD}/usr/bin/senkoawgd" \
+          "${PAYLOAD}/usr/lib/senko-core" \
+          "${PAYLOAD}/Applications/Senko.app" \
+          "${PAYLOAD}/Applications/Senko.app/senko" \
+          "${PAYLOAD}/usr/lib/senkotlsfix.dylib" \
+          "${PAYLOAD}/usr/lib/senkovpnicon.dylib"
+if [ -f "${PAYLOAD}/usr/lib/senko/head" ]; then
+  chmod 755 "${PAYLOAD}/usr/lib/senko/head"
+fi
+# setuid is required because the sandboxed app cannot signal the root daemon
+chown 0:0 "${PAYLOAD}/usr/bin/senko-kick" 2>/dev/null || true
+chmod 4755 "${PAYLOAD}/usr/bin/senko-kick"
+find "${PAYLOAD}/Applications/Senko.app" -type f ! -name senko -exec chmod 644 {} +
+find "${PAYLOAD}/usr/lib/senkotlsfix" -type f -exec chmod 644 {} +
+chmod 644 "${PAYLOAD}/usr/lib/senkovpnicon.plist"
+chmod 644 "${PAYLOAD}/usr/share/doc/senko/"*
+chmod 644 "${PAYLOAD}/etc/pf.os"
+chmod 644 "${PAYLOAD}/Library/LaunchDaemons/"*.plist
 chmod 644 "${STAGE}/var/mobile/Library/Preferences/"*.plist 2>/dev/null || true
 chmod 755 "${STAGE}/DEBIAN/postinst" "${STAGE}/DEBIAN/postrm" "${STAGE}/DEBIAN/prerm"
 chmod 644 "${STAGE}/DEBIAN/control"
 
 echo "==> verify dual arch"
-for bin in "${STAGE}/usr/bin/senkod" \
-           "${STAGE}/usr/bin/senkoctl" \
-           "${STAGE}/usr/bin/senko-kick" \
-           "${STAGE}/usr/bin/senkoawgd" \
-           "${STAGE}/Applications/Senko.app/senko" \
-           "${STAGE}/usr/lib/senkotlsfix.dylib"; do
+for bin in "${PAYLOAD}/usr/bin/senkod" \
+           "${PAYLOAD}/usr/bin/senkoctl" \
+           "${PAYLOAD}/usr/bin/senko-kick" \
+           "${PAYLOAD}/usr/bin/senkoawgd" \
+           "${PAYLOAD}/Applications/Senko.app/senko" \
+           "${PAYLOAD}/usr/lib/senkotlsfix.dylib"; do
   info="$(file "${bin}")"
   echo "${info}"
   case "${info}" in
@@ -221,11 +289,16 @@ for bin in "${STAGE}/usr/bin/senkod" \
 done
 
 echo "==> verify vpn icon hook"
-file "${STAGE}/usr/lib/senkovpnicon.dylib"
-"${LIPO}" -info "${STAGE}/usr/lib/senkovpnicon.dylib"
+file "${PAYLOAD}/usr/lib/senkovpnicon.dylib"
+"${LIPO}" -info "${PAYLOAD}/usr/lib/senkovpnicon.dylib"
+
+echo "==> verify go backend core"
+file "${PAYLOAD}/usr/lib/senko-core" | grep -q 'Mach-O 64-bit arm64 executable'
+"${TC}/otool" -l "${PAYLOAD}/usr/lib/senko-core" \
+  | grep -A5 LC_BUILD_VERSION | grep -q 'minos 12.0'
 
 echo "==> generate md5sums (data files only, no ./ prefix)"
-# regenerate checksums after modes change and keep paths dpkg-compatible
+# checksums run after chmod so they describe the final payload bytes
 (
   cd "${STAGE}"
   : > DEBIAN/md5sums
@@ -249,8 +322,8 @@ fi
 echo "md5sums ok (${nsums} files)"
 
 echo "==> pack deb (cydia-safe tar/ar)"
-# use legacy tar metadata so iphoneos dpkg reads ownership and headers correctly
-# fixed mtimes keep identical payloads reproducible
+# GNU headers remain readable by the oldest supported device dpkg
+# fixed mtimes make identical payloads reproducible
 cd "${ROOT}"
 rm -f debian-binary control.tar.gz data.tar.gz "${OUT}"
 printf '2.0\n' > debian-binary
@@ -265,20 +338,20 @@ pack_tar() {
 }
 
 (
-  cd packaging/DEBIAN
+  cd "${STAGE}/DEBIAN"
   pack_tar ../../control.tar.gz control md5sums postinst postrm prerm
 )
 (
-  cd packaging
+  cd "${STAGE}"
   pack_tar ../data.tar.gz --exclude=./DEBIAN --exclude=./DEBIAN/* .
 )
 
-# keep the archive member order required by dpkg
+# dpkg requires debian-binary before the control and data members
 rm -f "${OUT}"
-if ar -rcD "${OUT}" debian-binary control.tar.gz data.tar.gz 2>/dev/null; then
+if "${HOST_AR}" -rcD "${OUT}" debian-binary control.tar.gz data.tar.gz 2>/dev/null; then
   :
 else
-  ar -rc "${OUT}" debian-binary control.tar.gz data.tar.gz
+  "${HOST_AR}" -rc "${OUT}" debian-binary control.tar.gz data.tar.gz
 fi
 rm -f debian-binary control.tar.gz data.tar.gz
 
@@ -293,7 +366,6 @@ SHA1="$(sha1sum "${OUT}" | awk '{print $1}')"
 SHA256="$(sha256sum "${OUT}" | awk '{print $1}')"
 FILENAME="$(basename "${OUT}")"
 
-# store release metadata beside the package for repository tooling
 {
   cat "${STAGE}/DEBIAN/control"
   echo "Filename: debs/${FILENAME}"

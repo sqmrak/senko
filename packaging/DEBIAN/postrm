@@ -1,25 +1,74 @@
 #!/bin/sh
-# no set -e
+# cleanup must still run when optional jailbreak tools are already gone
 
-# Senko postrm: clean up runtime + config artifacts.
+PAYLOAD_ROOT=/var/jb
+if [ -e /var/jb/.procursus_strapped ] || \
+   [ -x /var/jb/basebin/launchctl ] || \
+   [ -x /var/jb/usr/bin/dpkg ]; then
+  JBROOT=/var/jb
+else
+  JBROOT=
+fi
+SUBSTRATE_DIR=${JBROOT}/Library/MobileSubstrate/DynamicLibraries
+UICACHE=${JBROOT}/usr/bin/uicache
+[ -x "$UICACHE" ] || UICACHE=/usr/bin/uicache
+
+remove_rootful_link() {
+  target_path=$1
+  expected_path=$2
+  [ -L "$target_path" ] || return 0
+  [ "$(readlink "$target_path" 2>/dev/null)" = "$expected_path" ] || return 0
+  rm -f "$target_path"
+}
+
+# the rootful layout installs a real bundle, so only the copy this package
+# marked is removed; a bundle put there by anything else stays
+remove_rootful_app_bundle() {
+  target_path=/Applications/Senko.app
+  remove_rootful_link "$target_path" "${PAYLOAD_ROOT}/Applications/Senko.app"
+  [ -f "${target_path}/.senko-rootful-copy" ] || return 0
+  rm -rf "$target_path" 2>/dev/null || true
+}
+
+remove_rootful_layout() {
+  [ -z "$JBROOT" ] || return 0
+  for name in senkod senkoctl senko-kick senkoawgd; do
+    remove_rootful_link "/usr/bin/${name}" "${PAYLOAD_ROOT}/usr/bin/${name}"
+  done
+  remove_rootful_link /usr/lib/senkotlsfix.dylib "${PAYLOAD_ROOT}/usr/lib/senkotlsfix.dylib"
+  remove_rootful_link /usr/lib/senkotlsfix "${PAYLOAD_ROOT}/usr/lib/senkotlsfix"
+  remove_rootful_link /usr/lib/senkovpnicon.dylib "${PAYLOAD_ROOT}/usr/lib/senkovpnicon.dylib"
+  remove_rootful_link /usr/lib/senkovpnicon.plist "${PAYLOAD_ROOT}/usr/lib/senkovpnicon.plist"
+  remove_rootful_app_bundle
+  remove_rootful_link /Library/LaunchDaemons/com.senko.senkod.plist \
+    "${PAYLOAD_ROOT}/Library/LaunchDaemons/com.senko.senkod.plist"
+  remove_rootful_link /etc/pf.os "${PAYLOAD_ROOT}/etc/pf.os"
+  # only ever removed when it still points at the shim this package installed
+  remove_rootful_link /usr/bin/head "${PAYLOAD_ROOT}/usr/lib/senko/head"
+}
 
 case "$1" in
   remove|purge)
     rm -f /var/tmp/senkod.sock >/dev/null 2>&1 || true
+    rm -f /var/mobile/Library/Preferences/Senko/import.dat >/dev/null 2>&1 || true
     rm -f /var/run/senko-pf.conf >/dev/null 2>&1 || true
-    rm -f /usr/bin/redsocks-senko /var/run/senko-redsocks.conf >/dev/null 2>&1 || true
-    rm -f /Library/MobileSubstrate/DynamicLibraries/senkovpnicon.dylib \
-          /Library/MobileSubstrate/DynamicLibraries/senkovpnicon.plist \
+    rm -f "${JBROOT}/usr/bin/redsocks-senko" /var/run/senko-redsocks.conf >/dev/null 2>&1 || true
+    rm -f "${SUBSTRATE_DIR}/senkovpnicon.dylib" \
+          "${SUBSTRATE_DIR}/senkovpnicon.plist" \
           /var/mobile/Library/Preferences/com.senko.vpnicon.state >/dev/null 2>&1 || true
-    # Clear uicache on remove
-    su -c uicache mobile >/dev/null 2>&1 || uicache >/dev/null 2>&1 || true
+    # stale icon records survive after SpringBoard loses the bundle path
+    "$UICACHE" >/dev/null 2>&1 || true
+    remove_rootful_layout
     ;;
 esac
 
 if [ "$1" = "purge" ]; then
+  # the device id survives a reinstall on purpose: a panel that counts devices
+  # would burn a slot if the next install handed it a new one
+  rm -f /var/mobile/Library/Preferences/com.senko.hwid >/dev/null 2>&1 || true
   rm -f /var/mobile/Library/Preferences/senko.cfg >/dev/null 2>&1 || true
   rm -f /var/root/Library/Preferences/senko.cfg >/dev/null 2>&1 || true
-  rm -f /var/log/senkod.log >/dev/null 2>&1 || true
+  rm -f /var/log/senkod.log /var/log/senkoawgd.log /var/log/senko-system.log >/dev/null 2>&1 || true
   rm -f /var/log/senko-core.log >/dev/null 2>&1 || true
 fi
 

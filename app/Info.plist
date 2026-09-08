@@ -17,9 +17,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.7-stable</string>
+    <string>2.0.0-stable</string>
 	<key>CFBundleVersion</key>
-	<string>21</string>
+	<string>25</string>
     <key>CFBundleIconFile</key>
     <string>Icon.png</string>
     <key>CFBundleIconFiles</key>
@@ -79,6 +79,66 @@
             <string>Portrait</string>
             <key>UILaunchImageSize</key>
             <string>{320, 568}</string>
+        </dict>
+        <dict>
+            <key>UILaunchImageMinimumOSVersion</key>
+            <string>8.0</string>
+            <key>UILaunchImageName</key>
+            <string>Default-667h</string>
+            <key>UILaunchImageOrientation</key>
+            <string>Portrait</string>
+            <key>UILaunchImageSize</key>
+            <string>{375, 667}</string>
+        </dict>
+        <dict>
+            <key>UILaunchImageMinimumOSVersion</key>
+            <string>8.0</string>
+            <key>UILaunchImageName</key>
+            <string>Default-736h</string>
+            <key>UILaunchImageOrientation</key>
+            <string>Portrait</string>
+            <key>UILaunchImageSize</key>
+            <string>{414, 736}</string>
+        </dict>
+        <dict>
+            <key>UILaunchImageMinimumOSVersion</key>
+            <string>11.0</string>
+            <key>UILaunchImageName</key>
+            <string>Default-812h</string>
+            <key>UILaunchImageOrientation</key>
+            <string>Portrait</string>
+            <key>UILaunchImageSize</key>
+            <string>{375, 812}</string>
+        </dict>
+        <dict>
+            <key>UILaunchImageMinimumOSVersion</key>
+            <string>12.0</string>
+            <key>UILaunchImageName</key>
+            <string>Default-896h</string>
+            <key>UILaunchImageOrientation</key>
+            <string>Portrait</string>
+            <key>UILaunchImageSize</key>
+            <string>{414, 896}</string>
+        </dict>
+        <dict>
+            <key>UILaunchImageMinimumOSVersion</key>
+            <string>14.0</string>
+            <key>UILaunchImageName</key>
+            <string>Default-844h</string>
+            <key>UILaunchImageOrientation</key>
+            <string>Portrait</string>
+            <key>UILaunchImageSize</key>
+            <string>{390, 844}</string>
+        </dict>
+        <dict>
+            <key>UILaunchImageMinimumOSVersion</key>
+            <string>14.0</string>
+            <key>UILaunchImageName</key>
+            <string>Default-926h</string>
+            <key>UILaunchImageOrientation</key>
+            <string>Portrait</string>
+            <key>UILaunchImageSize</key>
+            <string>{428, 926}</string>
         </dict>
         <dict>
             <key>UILaunchImageMinimumOSVersion</key>
