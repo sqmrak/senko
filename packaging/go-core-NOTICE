@@ -1,0 +1,8 @@
+Senko includes an unmodified executable build of XTLS/Xray-core plus the Darwin
+TUN wait fix at commit 2ec1657c03a4c368bfabc31e04df0d2c3f1d50a5.
+
+The covered source is available at:
+https://github.com/XTLS/Xray-core/tree/2ec1657c03a4c368bfabc31e04df0d2c3f1d50a5
+
+This component is distributed under the Mozilla Public License 2.0. Its license
+text is installed beside this notice as go-core-LICENSE.
