@@ -1,6 +1,7 @@
 #define _DEFAULT_SOURCE
 
 #include "routing_exec.h"
+#include "legacy_ios.h"
 #include "core/net_safe.h"
 
 #include <errno.h>
@@ -15,14 +16,15 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <spawn.h>
+#include "../common/senko_paths.h"
 
 extern char **environ;
 
 #define PF_CONF "/var/run/senko-pf.conf"
 #define PF_ERR  "/var/tmp/senko-pf.err"
-#define PF_OS   "/etc/pf.os"
+#define PF_OS   SENKO_JBROOT "/etc/pf.os"
+#define PF_ANCHOR "com.apple/senko"
 
-/* check common jailbreak paths */
 
 static int can_exec(const char *path) {
     return path && access(path, X_OK) == 0;
@@ -46,8 +48,26 @@ static const char *find_path_command(const char *name, char *path, size_t cap) {
     return NULL;
 }
 
-static const char *find_ipfw(void) {
-    static const char *p[] = { "/sbin/ipfw", "/usr/sbin/ipfw", "/bin/ipfw",
+/* an iphone 4S on ios 5.1.1 reboots the moment the tunnel starts: the ipfw fwd
+   ruleset only reaches a loopback listener with net.inet.ip.scopedroute turned
+   off, and that pair panics xnu 11. the application proxy rung needs no kernel
+   firewall, so on ios 5 the tool is reported as absent and c_backend falls
+   through to it instead */
+static int ipfw_usable(void) {
+    static int gate = -1;
+    if (gate >= 0) return gate;
+    gate = senko_is_ios5() ? 0 : 1;
+    if (!gate)
+        fprintf(stderr, "senkod: ios 5 detected, ipfw routing disabled; "
+                        "only the application proxy backend is safe here\n");
+    return gate;
+}
+
+const char *routing_find_ipfw(void) {
+    if (!ipfw_usable()) return NULL;
+    static const char *p[] = { SENKO_JBROOT "/sbin/ipfw", SENKO_JBROOT "/usr/sbin/ipfw",
+                               SENKO_JBROOT "/bin/ipfw", SENKO_USR_BIN "/ipfw",
+                               "/sbin/ipfw", "/usr/sbin/ipfw", "/bin/ipfw",
                                "/usr/bin/ipfw", "/usr/local/sbin/ipfw",
                                "/usr/local/bin/ipfw" };
     const char *found = find_first(p, sizeof p / sizeof p[0]);
@@ -55,8 +75,10 @@ static const char *find_ipfw(void) {
     static char path[256];
     return find_path_command("ipfw", path, sizeof path);
 }
-static const char *find_pfctl(void) {
-    static const char *p[] = { "/sbin/pfctl", "/usr/sbin/pfctl", "/bin/pfctl",
+const char *routing_find_pfctl(void) {
+    static const char *p[] = { SENKO_JBROOT "/sbin/pfctl", SENKO_JBROOT "/usr/sbin/pfctl",
+                               SENKO_JBROOT "/bin/pfctl", SENKO_USR_BIN "/pfctl",
+                               "/sbin/pfctl", "/usr/sbin/pfctl", "/bin/pfctl",
                                "/usr/bin/pfctl", "/usr/local/sbin/pfctl",
                                "/usr/local/bin/pfctl" };
     const char *found = find_first(p, sizeof p / sizeof p[0]);
@@ -65,17 +87,83 @@ static const char *find_pfctl(void) {
     return find_path_command("pfctl", path, sizeof path);
 }
 static const char *find_sysctl(void) {
-    static const char *p[] = { "/sbin/sysctl", "/usr/sbin/sysctl", "/usr/bin/sysctl" };
+    static const char *p[] = { SENKO_JBROOT "/sbin/sysctl", SENKO_JBROOT "/usr/sbin/sysctl",
+                               SENKO_USR_BIN "/sysctl", "/sbin/sysctl", "/usr/sbin/sysctl",
+                               "/usr/bin/sysctl" };
     return find_first(p, sizeof p / sizeof p[0]);
 }
 
-static int run_spawn(const char *bin, char *const argv[]) {
+int routing_spawn(const char *bin, char *const argv[]) {
     pid_t pid = 0;
     int rc = posix_spawn(&pid, bin, NULL, NULL, argv, environ);
     if (rc != 0) return -1;
     int status = 0;
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+/* read a sysctl value into buf; the helper prints one line on stdout */
+static int sysctl_read(const char *sysctl, const char *name,
+                       char *buf, size_t cap) {
+    char *argv[] = { (char *)sysctl, (char *)"-n", (char *)name, NULL };
+    int fds[2];
+    if (pipe(fds) != 0) return -1;
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_adddup2(&fa, fds[1], STDOUT_FILENO);
+    posix_spawn_file_actions_addclose(&fa, fds[0]);
+    posix_spawn_file_actions_addclose(&fa, fds[1]);
+    pid_t pid = 0;
+    int rc = posix_spawn(&pid, sysctl, &fa, NULL, argv, environ);
+    posix_spawn_file_actions_destroy(&fa);
+    close(fds[1]);
+    if (rc != 0) {
+        close(fds[0]);
+        return -1;
+    }
+    ssize_t n;
+    do {
+        n = read(fds[0], buf, cap - 1);
+    } while (n < 0 && errno == EINTR);
+    close(fds[0]);
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    if (n <= 0) return -1;
+    buf[n] = '\0';
+    buf[strcspn(buf, "\r\n ")] = '\0';
+    return buf[0] ? 0 : -1;
+}
+
+int routing_scopedroute_disable(char *prev, size_t cap) {
+    if (!prev || cap == 0) return -1;
+    prev[0] = '\0';
+    const char *sysctl = find_sysctl();
+    if (!sysctl) return -1;
+    if (sysctl_read(sysctl, "net.inet.ip.scopedroute", prev, cap) != 0)
+        return -1;
+    /* already off, so nothing has to be restored later */
+    if (strcmp(prev, "0") == 0) {
+        prev[0] = '\0';
+        return 0;
+    }
+    char val[] = "net.inet.ip.scopedroute=0";
+    char *argv[] = { (char *)sysctl, (char *)"-w", val, NULL };
+    if (routing_spawn(sysctl, argv) != 0) {
+        prev[0] = '\0';
+        return -1;
+    }
+    return 0;
+}
+
+void routing_scopedroute_restore(const char *prev) {
+    if (!prev || !prev[0]) return;
+    const char *sysctl = find_sysctl();
+    if (!sysctl) return;
+    char val[64];
+    if (snprintf(val, sizeof val, "net.inet.ip.scopedroute=%s", prev) >= (int)sizeof val)
+        return;
+    char *argv[] = { (char *)sysctl, (char *)"-w", val, NULL };
+    (void)routing_spawn(sysctl, argv);
 }
 
 static int run_spawn_quiet(const char *bin, char *const argv[]) {
@@ -173,7 +261,7 @@ static int ipfw_q(const char *ipfw, char *const tail[], int tailc) {
     argv[n++] = (char *)"-q";
     for (int i = 0; i < tailc && n < 35; ++i) argv[n++] = tail[i];
     argv[n] = NULL;
-    return run_spawn(ipfw, argv);
+    return routing_spawn(ipfw, argv);
 }
 
 static int write_file(const char *path, const char *buf, size_t len) {
@@ -184,7 +272,6 @@ static int write_file(const char *path, const char *buf, size_t len) {
     return (w == len) ? 0 : -1;
 }
 
-/* probe ports before generating routing rules */
 
 int routing_pick_free_port(int start, int end) {
     if (start <= 0) {
@@ -305,14 +392,14 @@ static size_t collect_ifaces(char ifnames[][32], size_t cap) {
 }
 
 static void clear_ipfw(void) {
-    const char *ipfw = find_ipfw();
+    const char *ipfw = routing_find_ipfw();
     if (!ipfw) return;
     char num[16];
     char del[] = "delete";
     for (int n = 12030; n >= 12000; --n) {
         snprintf(num, sizeof num, "%d", n);
         char *argv[] = { (char *)ipfw, (char *)"-q", del, num, NULL };
-        run_spawn(ipfw, argv);
+        routing_spawn(ipfw, argv);
     }
 }
 
@@ -323,7 +410,7 @@ static int apply_ipfw(const char *ipfw, const char *server_ip,
     if (sysctl) {
         char *argv[] = { (char *)sysctl, (char *)"-w",
                          (char *)"net.inet.ip.fw.enable=1", NULL };
-        run_spawn(sysctl, argv);
+        routing_spawn(sysctl, argv);
     }
     clear_ipfw();
 
@@ -385,9 +472,14 @@ static int apply_ipfw(const char *ipfw, const char *server_ip,
 }
 
 static void clear_pf(void) {
-    const char *pfctl = find_pfctl();
+    const char *pfctl = routing_find_pfctl();
     if (!pfctl) return;
+#if defined(SENKO_ROOTLESS)
+    char *argv[] = { (char *)pfctl, (char *)"-q", (char *)"-a",
+                     (char *)PF_ANCHOR, (char *)"-F", (char *)"all", NULL };
+#else
     char *argv[] = { (char *)pfctl, (char *)"-q", (char *)"-F", (char *)"all", NULL };
+#endif
     run_spawn_quiet(pfctl, argv);
 }
 
@@ -402,12 +494,20 @@ static int apply_pf_mode(const char *pfctl, const char *server_ips,
     if (sysctl) {
         char *argv[] = { (char *)sysctl, (char *)"-w",
                            (char *)"net.inet.ip.forwarding=1", NULL };
-        run_spawn(sysctl, argv);
+        routing_spawn(sysctl, argv);
     }
 
     char conf[8192]; size_t clen = 0;
-    if (routing_pf_conf(server_ips, ifnames, if_count, redir_port, dns_local_port,
-                        mode, conf, sizeof conf, &clen) != ROUTING_OK)
+#if defined(SENKO_ROOTLESS)
+    routing_status_t conf_rc = routing_pf_anchor_conf(
+        server_ips, ifnames, if_count, redir_port, dns_local_port,
+        mode, conf, sizeof conf, &clen);
+#else
+    routing_status_t conf_rc = routing_pf_conf(
+        server_ips, ifnames, if_count, redir_port, dns_local_port,
+        mode, conf, sizeof conf, &clen);
+#endif
+    if (conf_rc != ROUTING_OK)
         return -1;
     if (write_file(PF_CONF, conf, clen) != 0) return -1;
 
@@ -417,7 +517,12 @@ static int apply_pf_mode(const char *pfctl, const char *server_ips,
         char *compat_enargv[] = { (char *)pfctl, (char *)"-q", (char *)"-E", NULL };
         run_spawn_quiet(pfctl, compat_enargv);
     }
+#if defined(SENKO_ROOTLESS)
+    char *lfargv[] = { (char *)pfctl, (char *)"-q", (char *)"-a",
+                       (char *)PF_ANCHOR, (char *)"-f", (char *)PF_CONF, NULL };
+#else
     char *lfargv[] = { (char *)pfctl, (char *)"-q", (char *)"-f", (char *)PF_CONF, NULL };
+#endif
     int rc = run_spawn_pf_capture(pfctl, lfargv);
     if (rc != 0 && detail && detail_cap > 0) {
         read_pf_error(detail, detail_cap);
@@ -428,7 +533,6 @@ static int apply_pf_mode(const char *pfctl, const char *server_ips,
     return rc == 0 ? 0 : -1;
 }
 
-/* forward DNS over TCP through SOCKS */
 
 static int socks5_connect_to_dns(int socks_port, const char *dns_upstream) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -642,7 +746,7 @@ rexec_status_t routing_exec_up(routing_exec_t *st, int socks_port,
         return REXEC_ERR_PORT;
     }
 
-    const char *pfctl = find_pfctl();
+    const char *pfctl = routing_find_pfctl();
     if (pfctl) {
         char ifnames[ROUTING_MAX_IFS][32];
         size_t if_count = collect_ifaces(ifnames, ROUTING_MAX_IFS);
@@ -663,7 +767,6 @@ rexec_status_t routing_exec_up(routing_exec_t *st, int socks_port,
                                   pf_detail, sizeof pf_detail) == 0) {
                     st->mode = ROUTING_MODE_PF;
                     st->redir_port = redir;
-                    st->use_internal_tproxy = 1;
                     st->pf_table_ready = m != ROUTING_PF_COMPAT_RDR;
                     if (start_dns_forwarder(st) != 0) {
                         routing_exec_down(st);
@@ -680,13 +783,16 @@ rexec_status_t routing_exec_up(routing_exec_t *st, int socks_port,
         fprintf(stderr, "senkod: pfctl not found\n");
     }
 
-    const char *ipfw = find_ipfw();
+    const char *ipfw = routing_find_ipfw();
     if (ipfw) {
         if (apply_ipfw(ipfw, server_ip, server_ips, redir, socks_port,
                        st->dns_local_port) == 0) {
             st->mode = ROUTING_MODE_IPFW;
             st->redir_port = redir;
-            st->use_internal_tproxy = 1;
+            if (routing_scopedroute_disable(st->scoped_route_prev,
+                                            sizeof st->scoped_route_prev) != 0)
+                fprintf(stderr, "senkod: scopedroute tweak failed, "
+                                "ipfw fwd may not reach the listener\n");
             if (start_dns_forwarder(st) != 0) {
                 routing_exec_down(st);
                 return REXEC_ERR_SPAWN;
@@ -708,6 +814,7 @@ rexec_status_t routing_exec_up(routing_exec_t *st, int socks_port,
 void routing_exec_down(routing_exec_t *st) {
     if (!st) return;
     stop_dns_forwarder(st);
+    routing_scopedroute_restore(st->scoped_route_prev);
     if (st->mode == ROUTING_MODE_IPFW) clear_ipfw();
     if (st->mode == ROUTING_MODE_PF)   clear_pf();
     if (st->mode == ROUTING_MODE_PF) unlink(PF_CONF);
@@ -718,7 +825,7 @@ void routing_exec_bypass_add_ipv4(routing_exec_t *st, const char *ip) {
     if (!st || !ip || !ip[0] || st->mode == ROUTING_MODE_NONE) return;
 
     if (st->mode == ROUTING_MODE_PF && st->pf_table_ready) {
-        const char *pfctl = find_pfctl();
+        const char *pfctl = routing_find_pfctl();
         if (!pfctl) return;
         char addr[64];
         snprintf(addr, sizeof addr, "%s/32", ip);
@@ -729,9 +836,9 @@ void routing_exec_bypass_add_ipv4(routing_exec_t *st, const char *ip) {
     }
 
     if (st->mode == ROUTING_MODE_IPFW) {
-        const char *ipfw = find_ipfw();
+        const char *ipfw = routing_find_ipfw();
         if (!ipfw || !st->server_ip[0]) return;
-        if (strstr(st->server_ips, ip) != NULL) return;
+        if (net_ip_list_contains(st->server_ips, ip)) return;
         size_t len = strlen(st->server_ips);
         size_t iplen = strlen(ip);
         if (len + iplen + 2 >= sizeof st->server_ips) return;
@@ -740,18 +847,21 @@ void routing_exec_bypass_add_ipv4(routing_exec_t *st, const char *ip) {
             st->server_ips[len] = '\0';
         }
         memcpy(st->server_ips + len, ip, iplen + 1);
+        /* an unnumbered rule lands after the catch-all fwd, where it can never
+           match, and outside the range clear_ipfw sweeps on teardown */
         char rule[256];
-        snprintf(rule, sizeof rule, "allow tcp from me to %s out", ip);
+        snprintf(rule, sizeof rule, "add %d allow tcp from any to %s out",
+                 ROUTING_IPFW_BASE + 1, ip);
         char *argv[36];
         int argc = split_rule_words(rule, argv, 36);
         if (argc <= 0) return;
-        char *full[37];
+        char *full[38];
         int n = 0;
         full[n++] = (char *)ipfw;
-        full[n++] = (char *)"add";
-        for (int i = 0; i < argc && n < 36; ++i) full[n++] = argv[i];
+        full[n++] = (char *)"-q";
+        for (int i = 0; i < argc && n < 37; ++i) full[n++] = argv[i];
         full[n] = NULL;
-        (void)run_spawn(ipfw, full);
+        (void)routing_spawn(ipfw, full);
     }
 }
 

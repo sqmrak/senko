@@ -27,9 +27,9 @@ typedef struct {
     int            dns_bound;
     char           server_ip[64]; /* retain the primary bypass target */
     char           server_ips[4096]; /* retain all pf bypass targets */
+    char           scoped_route_prev[16]; /* restore what the fwd rules needed off */
     pthread_t      dns_thread;
     int            dns_stop;
-    int            use_internal_tproxy; /* keep the redirect listener in-process */
     int            pf_table_ready; /* keep live bypass updates only when rules provide a table */
 } routing_exec_t;
 
@@ -40,6 +40,18 @@ typedef enum {
     REXEC_ERR_PORT      = -4, /* reject when no redirect port is free */
     REXEC_ERR_SPAWN     = -5
 } rexec_status_t;
+
+/* locate the firewall tools once so every ipfw user searches the same paths */
+const char *routing_find_ipfw(void);
+const char *routing_find_pfctl(void);
+
+/* run a helper to completion and return its exit status, -1 when it never ran */
+int routing_spawn(const char *bin, char *const argv[]);
+
+/* scoped routing makes the kernel drop packets that ipfw fwd sends to the
+   loopback listener, so every fwd based mode has to turn it off and restore it */
+int  routing_scopedroute_disable(char *prev, size_t cap);
+void routing_scopedroute_restore(const char *prev);
 
 /* reserve a free tcp port without keeping the probe socket */
 int routing_pick_free_port(int start, int end);

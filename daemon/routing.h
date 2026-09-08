@@ -25,7 +25,6 @@ typedef struct {
     char rule_plain[320];
 } routing_ipfw_rule_t;
 
-/* generate ordered ipfw rules with server and loopback bypasses first */
 routing_status_t routing_ipfw_rules(const char *server_ip,
                                     int redir_port, int socks_port,
                                     int dns_local_port,
@@ -47,12 +46,18 @@ typedef enum {
 #define ROUTING_PF_MODE_COUNT 8
 #define ROUTING_MAX_IFS       8
 
-/* generate a bounded pf ruleset with all resolved server bypasses */
 routing_status_t routing_pf_conf(const char *server_ips,
                                  const char ifnames[][32], size_t if_count,
                                  int redir_port, int dns_local_port,
                                  routing_pf_mode_t mode,
                                  char *buf, size_t cap, size_t *out_len);
+
+/* anchors accept filtering and translation rules, but reject global set options */
+routing_status_t routing_pf_anchor_conf(const char *server_ips,
+                                        const char ifnames[][32], size_t if_count,
+                                        int redir_port, int dns_local_port,
+                                        routing_pf_mode_t mode,
+                                        char *buf, size_t cap, size_t *out_len);
 
 #ifdef __cplusplus
 }

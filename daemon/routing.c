@@ -104,21 +104,23 @@ static void pf_block_triplet(pf_w_t *w, const char *ifn) {
           ifn, ifn, ifn, ifn, ifn);
 }
 
-routing_status_t routing_pf_conf(const char *server_ips,
-                                 const char ifnames[][32], size_t if_count,
-                                 int redir_port, int dns_local_port,
-                                 routing_pf_mode_t mode,
-                                 char *buf, size_t cap, size_t *out_len) {
+static routing_status_t routing_pf_conf_build(const char *server_ips,
+                                              const char ifnames[][32], size_t if_count,
+                                              int redir_port, int dns_local_port,
+                                              routing_pf_mode_t mode, int anchored,
+                                              char *buf, size_t cap, size_t *out_len) {
     if (!server_ips || !*server_ips || !ifnames || if_count == 0 || !buf
         || dns_local_port <= 0)
         return ROUTING_ERR_ARG;
 
     pf_w_t w = { buf, cap, 0, 0 };
 
-    /* ios 7 pf retains idle tcp states long enough to exhaust its small table */
-    pf_ap(&w, "set timeout { tcp.first 30, tcp.opening 30, tcp.established 7200, "
-              "tcp.closing 30, tcp.finwait 30, udp.first 30, udp.single 30, "
-              "udp.multiple 60, icmp.first 10, other.first 30, frag 30 }\n");
+    if (!anchored) {
+        /* ios 7 pf retains idle tcp states long enough to exhaust its small table */
+        pf_ap(&w, "set timeout { tcp.first 30, tcp.opening 30, tcp.established 7200, "
+                  "tcp.closing 30, tcp.finwait 30, udp.first 30, udp.single 30, "
+                  "udp.multiple 60, icmp.first 10, other.first 30, frag 30 }\n");
+    }
 
     switch (mode) {
         case ROUTING_PF_ROUTE_TO_LO0:
@@ -238,4 +240,24 @@ routing_status_t routing_pf_conf(const char *server_ips,
     if (w.err) return ROUTING_ERR_SPACE;
     if (out_len) *out_len = w.pos;
     return ROUTING_OK;
+}
+
+routing_status_t routing_pf_conf(const char *server_ips,
+                                 const char ifnames[][32], size_t if_count,
+                                 int redir_port, int dns_local_port,
+                                 routing_pf_mode_t mode,
+                                 char *buf, size_t cap, size_t *out_len) {
+    return routing_pf_conf_build(server_ips, ifnames, if_count,
+                                 redir_port, dns_local_port, mode, 0,
+                                 buf, cap, out_len);
+}
+
+routing_status_t routing_pf_anchor_conf(const char *server_ips,
+                                        const char ifnames[][32], size_t if_count,
+                                        int redir_port, int dns_local_port,
+                                        routing_pf_mode_t mode,
+                                        char *buf, size_t cap, size_t *out_len) {
+    return routing_pf_conf_build(server_ips, ifnames, if_count,
+                                 redir_port, dns_local_port, mode, 1,
+                                 buf, cap, out_len);
 }

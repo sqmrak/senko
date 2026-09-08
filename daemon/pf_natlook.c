@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <spawn.h>
+#include "../common/senko_paths.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,6 +69,8 @@ static int pf_fd_get(void) {
 
 static const char *find_pfctl(void) {
     static const char *paths[] = {
+        SENKO_JBROOT "/sbin/pfctl", SENKO_JBROOT "/usr/sbin/pfctl",
+        SENKO_JBROOT "/bin/pfctl", SENKO_USR_BIN "/pfctl",
         "/sbin/pfctl", "/usr/sbin/pfctl", "/bin/pfctl", "/usr/bin/pfctl"
     };
     for (size_t i = 0; i < sizeof paths / sizeof paths[0]; ++i)
@@ -254,45 +257,40 @@ int pf_natlook_dest(int accepted_fd, const struct sockaddr_in *clientaddr,
         return -1;
 
     int pffd = pf_fd_get();
-    if (pffd < 0) {
-/* ios 5 ipfw fwd keeps the original destination on the socket */
-        if (local.sin_addr.s_addr != htonl(INADDR_LOOPBACK) &&
-            local.sin_port != htons(redir_port)) {
-            if (!inet_ntop(AF_INET, &local.sin_addr, host, (socklen_t)host_cap))
+    if (pffd >= 0) {
+        struct pfioc_natlook_nl nl;
+        memset(&nl, 0, sizeof nl);
+        put_v4(&nl, &clientaddr->sin_addr, nl.saddr, nl.sxport, clientaddr->sin_port);
+        put_v4(&nl, &local.sin_addr, nl.daddr, nl.dxport, local.sin_port);
+
+        struct pfioc_natlook_nl res;
+        memset(&res, 0, sizeof res);
+        if (natlook_try(pffd, &nl, &res) == 0) {
+            struct in_addr rd;
+            memcpy(&rd, res.rdaddr, sizeof rd);
+            if (!inet_ntop(AF_INET, &rd, host, (socklen_t)host_cap))
                 return -1;
-            *port = ntohs(local.sin_port);
+            *port = (uint16_t)(((uint16_t)res.rdxport[0] << 8) |
+                               (uint16_t)res.rdxport[1]);
             return 0;
         }
-        return -1;
     }
 
-    struct pfioc_natlook_nl nl;
-    memset(&nl, 0, sizeof nl);
-    put_v4(&nl, &clientaddr->sin_addr, nl.saddr, nl.sxport, clientaddr->sin_port);
-    put_v4(&nl, &local.sin_addr, nl.daddr, nl.dxport, local.sin_port);
+    /* the ioctl is missing on some jailbreaks and misses states that pf
+       created through an anchor, so read the state table through pfctl
+       before giving up on the connection */
+    uint16_t client_port = ntohs(clientaddr->sin_port);
+    uint16_t bind_port = redir_port ? redir_port : ntohs(local.sin_port);
+    if (pfctl_state_dest(bind_port, client_port, host, host_cap, port) == 0)
+        return 0;
 
-    struct pfioc_natlook_nl res;
-    memset(&res, 0, sizeof res);
-    if (natlook_try(pffd, &nl, &res) != 0) {
-        uint16_t client_port = ntohs(clientaddr->sin_port);
-        uint16_t bind_port = redir_port ? redir_port : ntohs(local.sin_port);
-        if (pfctl_state_dest(bind_port, client_port, host, host_cap, port) == 0)
-            return 0;
-        char client[64], local_s[64];
-        if (!inet_ntop(AF_INET, &clientaddr->sin_addr, client, sizeof client))
-            snprintf(client, sizeof client, "?");
-        if (!inet_ntop(AF_INET, &local.sin_addr, local_s, sizeof local_s))
-            snprintf(local_s, sizeof local_s, "?");
-        fprintf(stderr, "senkod: natlook failed client=%s:%u local=%s:%u\n",
-                client, (unsigned)client_port,
-                local_s, (unsigned)ntohs(local.sin_port));
-        return -1;
-    }
-
-    struct in_addr rd;
-    memcpy(&rd, res.rdaddr, sizeof rd);
-    if (!inet_ntop(AF_INET, &rd, host, (socklen_t)host_cap))
-        return -1;
-    *port = (uint16_t)(((uint16_t)res.rdxport[0] << 8) | (uint16_t)res.rdxport[1]);
-    return 0;
+    char client[64], local_s[64];
+    if (!inet_ntop(AF_INET, &clientaddr->sin_addr, client, sizeof client))
+        snprintf(client, sizeof client, "?");
+    if (!inet_ntop(AF_INET, &local.sin_addr, local_s, sizeof local_s))
+        snprintf(local_s, sizeof local_s, "?");
+    fprintf(stderr, "senkod: natlook failed client=%s:%u local=%s:%u pf=%s\n",
+            client, (unsigned)client_port, local_s, (unsigned)ntohs(local.sin_port),
+            pffd >= 0 ? "open" : "unavailable");
+    return -1;
 }
