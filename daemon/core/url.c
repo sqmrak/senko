@@ -1,4 +1,5 @@
 #include "url.h"
+#include "../../common/senko_paths.h"
 #include "net_safe.h"
 
 #include <ctype.h>
@@ -23,7 +24,13 @@ url_status_t url_parse(const char *url, url_t *out) {
     }
 
     const char *host_start = p;
-    while (*p && *p != '/' && *p != '?' && *p != ':') ++p;
+    if (*p == '[') {
+        host_start = ++p;
+        while (*p && *p != ']') ++p;
+        if (*p != ']') return URL_ERR_HOST;
+    } else {
+        while (*p && *p != '/' && *p != '?' && *p != ':') ++p;
+    }
 
     size_t hlen = (size_t)(p - host_start);
     if (hlen == 0) return URL_ERR_HOST;
@@ -32,6 +39,7 @@ url_status_t url_parse(const char *url, url_t *out) {
     out->host[hlen] = '\0';
     if (!net_url_host_safe(out->host)) return URL_ERR_UNSAFE;
 
+    if (*p == ']') ++p;
     if (*p == ':') {
         ++p;
         unsigned long port = 0;
@@ -104,7 +112,9 @@ url_status_t url_resolve_redirect(const url_t *base, const char *location,
         }
     }
 
-    n = snprintf(buf, cap, "%s://%s", scheme, base->host);
+    n = strchr(base->host, ':') ?
+        snprintf(buf, cap, "%s://[%s]", scheme, base->host) :
+        snprintf(buf, cap, "%s://%s", scheme, base->host);
     if (n < 0 || (size_t)n >= cap) return URL_ERR_TOOLONG;
     size_t off = (size_t)n;
     if (base->port != (uint16_t)default_port) {
@@ -169,6 +179,48 @@ static int header_valid(const char *header) {
     return 1;
 }
 
+void url_device_hwid(char *out, size_t cap) {
+    if (!out || cap < 33) return;
+    out[0] = '\0';
+    FILE *f = fopen(SENKO_HWID_PATH, "r");
+    if (f) {
+        if (fgets(out, (int)cap, f)) {
+            char *nl = strchr(out, '\n');
+            if (nl) *nl = '\0';
+            nl = strchr(out, '\r');
+            if (nl) *nl = '\0';
+            size_t len = strlen(out);
+            if (len >= 10 && len <= 64) {
+                fclose(f);
+                return;
+            }
+        }
+        fclose(f);
+    }
+    /* generate a persistent 32-char hex id */
+    static const char hex[] = "0123456789abcdef";
+    unsigned char rnd[16];
+    FILE *urand = fopen("/dev/urandom", "rb");
+    if (urand) {
+        if (fread(rnd, 1, sizeof rnd, urand) != sizeof rnd) {
+            memset(rnd, 0x42, sizeof rnd);
+        }
+        fclose(urand);
+    } else {
+        memset(rnd, 0x42, sizeof rnd);
+    }
+    for (size_t i = 0; i < 16; ++i) {
+        out[i * 2] = hex[(rnd[i] >> 4) & 0x0f];
+        out[i * 2 + 1] = hex[rnd[i] & 0x0f];
+    }
+    out[32] = '\0';
+    f = fopen(SENKO_HWID_PATH, "w");
+    if (f) {
+        fprintf(f, "%s\n", out);
+        fclose(f);
+    }
+}
+
 static int header_name_is(const char *header, const char *name) {
     if (!header || !header[0] || !name) return 0;
     const char *colon = strchr(header, ':');
@@ -193,9 +245,13 @@ url_status_t url_build_get_cookie_header(const url_t *u, const char *cookie,
     int custom_ua = header_name_is(hdr, "User-Agent");
     int custom_accept = header_name_is(hdr, "Accept");
     int custom_cookie = header_name_is(hdr, "Cookie");
+    int custom_hwid = header_name_is(hdr, "x-hwid") || header_name_is(hdr, "X-HWID");
     size_t off = 0;
-    int n = snprintf(buf + off, cap - off, "GET %s HTTP/1.0\r\nHost: %s",
-                     u->path, u->host);
+    int n = strchr(u->host, ':') ?
+        snprintf(buf + off, cap - off, "GET %s HTTP/1.0\r\nHost: [%s]",
+                 u->path, u->host) :
+        snprintf(buf + off, cap - off, "GET %s HTTP/1.0\r\nHost: %s",
+                 u->path, u->host);
     if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
     off += (size_t)n;
     if (u->port != default_port) {
@@ -208,7 +264,19 @@ url_status_t url_build_get_cookie_header(const url_t *u, const char *cookie,
     off += (size_t)n;
     if (!custom_ua) {
         /* providers use the client id to select a compatible feed format */
-        n = snprintf(buf + off, cap - off, "User-Agent: Happ/3.13.0\r\n");
+        n = snprintf(buf + off, cap - off, "User-Agent: Happ/3.26.1\r\n");
+        if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
+        off += (size_t)n;
+    }
+    if (!custom_hwid) {
+        char hwid[65];
+        url_device_hwid(hwid, sizeof hwid);
+        n = snprintf(buf + off, cap - off,
+                     "x-hwid: %s\r\n"
+                     "x-device-os: iOS\r\n"
+                     "x-ver-os: 15.0\r\n"
+                     "x-device-model: iPhone10,3\r\n",
+                     hwid);
         if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
         off += (size_t)n;
     }

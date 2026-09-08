@@ -63,6 +63,16 @@ typedef struct {
 
     char    subscription_userinfo[512];
     int     have_subscription_userinfo;
+    char    subscription_description[256];
+    int     have_subscription_description;
+    char    subscription_support_url[512];
+    int     have_subscription_support_url;
+
+/* remnawave device gating: instead of an http error the panel answers with a
+   one entry placeholder profile, so the reason has to come from the headers */
+    int     hwid_rejected;
+    char    announce[512];
+    int     have_announce;
 
     uint8_t *body;
     size_t   body_cap;
@@ -71,10 +81,8 @@ typedef struct {
 
 void http_parser_init(http_parser_t *p, uint8_t *body_buf, size_t body_cap);
 
-/* feed response bytes */
 http_status_t http_parser_feed(http_parser_t *p, const uint8_t *in, size_t len);
 
-/* finish an eof-framed response */
 http_status_t http_parser_eof(http_parser_t *p);
 
 int http_parser_is_redirect(const http_parser_t *p);

@@ -54,7 +54,7 @@ typedef struct {
     char     sid[32];
     char     path[256];
     char     mode[16]; /* preserve xhttp mode for transport selection */
-    char     remark[128];
+    char     remark[256];
 } vl_server_t;
 
 typedef enum {
@@ -68,6 +68,8 @@ typedef enum {
     CFG_ERR_NO_MEMORY = -7
 } cfg_status_t;
 
+int url_percent_decode_ex(const char *src, size_t src_len, char *dst,
+                          size_t cap, int plus_is_space);
 int url_percent_decode(const char *src, size_t src_len, char *dst, size_t cap);
 
 /* keep names stable because the control protocol exposes them */
@@ -79,6 +81,20 @@ cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out);
 int cfg_validate_server(const vl_server_t *s, char *reason, size_t reason_cap);
 
 int cfg_validate_link(const char *uri, char *reason, size_t reason_cap);
+
+/* what a pasted or imported body actually is. the ui needs the distinction to
+   say "unknown content type" instead of "no servers found" */
+typedef enum {
+    CFG_CONTENT_UNKNOWN = 0,
+    CFG_CONTENT_LINKS,      /* one or more scheme://... lines */
+    CFG_CONTENT_BASE64,     /* v2ray style base64 wrapped link list */
+    CFG_CONTENT_XRAY_JSON,  /* xray / v2rayn exported config */
+    CFG_CONTENT_HAPP,       /* happ:// bundle */
+    CFG_CONTENT_CLASH,      /* clash / clash-meta yaml */
+    CFG_CONTENT_SURGE       /* shadowrocket / surge ini */
+} cfg_content_t;
+
+cfg_content_t cfg_content_kind(const char *blob, size_t blob_len);
 
 /* skip malformed entries so one stale node does not hide valid nodes */
 cfg_status_t cfg_parse_subscription(const char *blob, size_t blob_len,

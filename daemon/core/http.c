@@ -139,6 +139,43 @@ static http_status_t consume_line(http_parser_t *p) {
         memcpy(p->subscription_userinfo, v, n);
         p->subscription_userinfo[n] = '\0';
         p->have_subscription_userinfo = 1;
+    } else if (hdr_is(p->line, "profile-title:") ||
+               hdr_is(p->line, "subscription-description:")) {
+        const char *v = strchr(p->line, ':');
+        size_t n;
+        if (!v) return HTTP_ERR_PARSE;
+        v = skip_ws(v + 1);
+        n = strlen(v);
+        if (n >= sizeof p->subscription_description)
+            n = sizeof p->subscription_description - 1;
+        memcpy(p->subscription_description, v, n);
+        p->subscription_description[n] = '\0';
+        p->have_subscription_description = 1;
+    } else if (hdr_is(p->line, "x-hwid-not-supported:") ||
+               hdr_is(p->line, "x-hwid-max-devices-reached:")) {
+        const char *v = strchr(p->line, ':');
+        if (!v) return HTTP_ERR_PARSE;
+        v = skip_ws(v + 1);
+        if (hdr_is(v, "true") || hdr_is(v, "1")) p->hwid_rejected = 1;
+    } else if (hdr_is(p->line, "announce:")) {
+        const char *v = skip_ws(p->line + 9);
+        size_t n = strlen(v);
+        if (n >= sizeof p->announce) n = sizeof p->announce - 1;
+        memcpy(p->announce, v, n);
+        p->announce[n] = '\0';
+        p->have_announce = 1;
+    } else if (hdr_is(p->line, "profile-web-page-url:") ||
+               hdr_is(p->line, "subscription-support-url:")) {
+        const char *v = strchr(p->line, ':');
+        size_t n;
+        if (!v) return HTTP_ERR_PARSE;
+        v = skip_ws(v + 1);
+        n = strlen(v);
+        if (n >= sizeof p->subscription_support_url)
+            n = sizeof p->subscription_support_url - 1;
+        memcpy(p->subscription_support_url, v, n);
+        p->subscription_support_url[n] = '\0';
+        p->have_subscription_support_url = 1;
     }
     return HTTP_NEED_MORE;
 }

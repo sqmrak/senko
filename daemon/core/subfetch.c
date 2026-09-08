@@ -4,11 +4,14 @@
 #include "url.h"
 #include "http.h"
 #include "net_safe.h"
+#include "b64.h"
 
+#include <arpa/inet.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/time.h>
 #include <unistd.h>
 #include <zlib.h>
@@ -53,37 +56,114 @@ static long now_ms(void) {
     return (long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
-static uint64_t userinfo_expire(const char *value) {
-    if (!value) return 0;
+static uint64_t userinfo_value(const char *value, const char *wanted) {
+    if (!value || !wanted) return 0;
     const char *p = value;
+    size_t wanted_len = strlen(wanted);
     while (*p) {
         while (*p == ' ' || *p == ';' || *p == '\t') ++p;
         const char *eq = strchr(p, '=');
         if (!eq) break;
+        /* the value runs to the next ';' or to the end of the header. the end of
+           the header is eq + 1 + strlen(eq + 1); computing it without the +1
+           dropped the last digit of whichever field came last, which turned
+           every expiry timestamp into one decades in the past */
         const char *end = strchr(eq + 1, ';');
-        if (!end) end = eq + strlen(eq + 1);
+        if (!end) end = eq + 1 + strlen(eq + 1);
         size_t key_len = (size_t)(eq - p);
         while (key_len > 0 && (p[key_len - 1] == ' ' || p[key_len - 1] == '\t'))
             key_len--;
-        if (key_len == 6 && memcmp(p, "expire", 6) == 0) {
+        if (key_len == wanted_len && memcmp(p, wanted, wanted_len) == 0) {
+            const char *vs = eq + 1;
+            const char *ve = end;
+            while (vs < ve && (*vs == ' ' || *vs == '\t')) ++vs;
+            /* a panel that pads the last field left a trailing space inside the
+               number, and the whole field was then dropped */
+            while (ve > vs && (ve[-1] == ' ' || ve[-1] == '\t')) --ve;
             char number[32];
-            size_t n = (size_t)(end - eq - 1);
+            size_t n = (size_t)(ve - vs);
             if (n == 0 || n >= sizeof number) return 0;
-            memcpy(number, eq + 1, n);
+            memcpy(number, vs, n);
             number[n] = '\0';
             char *stop = NULL;
             unsigned long long v = strtoull(number, &stop, 10);
-            if (stop == number + n) return (uint64_t)v;
-            return 0;
+            return stop == number + n ? (uint64_t)v : 0;
         }
         p = *end ? end + 1 : end;
     }
     return 0;
 }
 
+/* seconds since the epoch that a subscription can plausibly carry: panels have
+   shipped the expiry in milliseconds, and one shipped days remaining. read
+   literally, both land in 1970 and the list calls a live subscription expired */
+#define SUBFETCH_EXPIRE_MIN 946684800ULL   /* 2000-01-01 */
+#define SUBFETCH_EXPIRE_MAX 4102444800ULL  /* 2100-01-01 */
+
+static uint64_t userinfo_expire(const char *value) {
+    uint64_t v = userinfo_value(value, "expire");
+    if (v >= SUBFETCH_EXPIRE_MIN && v <= SUBFETCH_EXPIRE_MAX) return v;
+    if (v / 1000ULL >= SUBFETCH_EXPIRE_MIN && v / 1000ULL <= SUBFETCH_EXPIRE_MAX)
+        return v / 1000ULL;
+    return 0;
+}
+
+#ifdef SENKO_HOST_TEST
+uint64_t subfetch_userinfo_expire_for_test(const char *value) {
+    return userinfo_expire(value);
+}
+
+uint64_t subfetch_userinfo_value_for_test(const char *value, const char *wanted) {
+    return userinfo_value(value, wanted);
+}
+#endif
+
+static void parser_info(const http_parser_t *hp, subfetch_info_t *info);
+
+#ifdef SENKO_HOST_TEST
+void subfetch_parser_info_for_test(const http_parser_t *hp, subfetch_info_t *info) {
+    parser_info(hp, info);
+}
+#endif
+
+static void copy_metadata_text(const char *raw, char *out, size_t cap) {
+    if (!raw || !out || cap == 0) return;
+    out[0] = '\0';
+    if (strncasecmp(raw, "base64:", 7) == 0) {
+        size_t n = 0;
+        if (b64_decode(raw + 7, strlen(raw + 7),
+                       (unsigned char *)out, cap - 1, &n) == 0 && n > 0 &&
+            memchr(out, '\0', n) == NULL) {
+            out[n] = '\0';
+            return;
+        }
+    }
+    snprintf(out, cap, "%s", raw);
+}
+
 static void parser_info(const http_parser_t *hp, subfetch_info_t *info) {
-    if (!hp || !info || !hp->have_subscription_userinfo) return;
-    info->expire = userinfo_expire(hp->subscription_userinfo);
+    if (!hp || !info) return;
+    if (hp->have_subscription_userinfo) {
+        info->expire = userinfo_expire(hp->subscription_userinfo);
+        info->upload = userinfo_value(hp->subscription_userinfo, "upload");
+        info->download = userinfo_value(hp->subscription_userinfo, "download");
+        info->total = userinfo_value(hp->subscription_userinfo, "total");
+    }
+    if (hp->have_subscription_description)
+        copy_metadata_text(hp->subscription_description,
+                           info->description, sizeof info->description);
+    if (hp->have_subscription_support_url)
+        snprintf(info->support_url, sizeof info->support_url, "%s",
+                 hp->subscription_support_url);
+    if (hp->hwid_rejected) {
+        info->gated = 1;
+        if (hp->have_announce)
+            copy_metadata_text(hp->announce, info->gate_reason,
+                               sizeof info->gate_reason);
+        if (!info->gate_reason[0])
+            snprintf(info->gate_reason, sizeof info->gate_reason,
+                     "the panel refused this device");
+    }
 }
 
 /* wait with a deadline */
@@ -120,6 +200,11 @@ static void cookie_jar_merge(char *jar, size_t cap, const char *add) {
     jar[cur + n] = '\0';
 }
 
+static int same_origin(const url_t *a, const url_t *b) {
+    return a && b && a->is_https == b->is_https && a->port == b->port &&
+           strcasecmp(a->host, b->host) == 0;
+}
+
 /* fetch one url */
 static subfetch_status_t fetch_once(const subfetch_cfg_t *cfg, const url_t *u,
                                     uint8_t *body, size_t body_cap, size_t *body_len,
@@ -129,7 +214,10 @@ static subfetch_status_t fetch_once(const subfetch_cfg_t *cfg, const url_t *u,
     const transport_vt_t *vt = u->is_https ? cfg->tls : cfg->tcp;
     if (!vt) return SUBFETCH_ERR_TRANSPORT; /* tls transport is missing */
 
-    int fd = cfg->dial(cfg->dial_ctx, u->host, u->port);
+    char numeric[INET6_ADDRSTRLEN];
+    if (!net_resolve_public(u->host, u->port, numeric, sizeof numeric))
+        return SUBFETCH_ERR_URL;
+    int fd = cfg->dial(cfg->dial_ctx, numeric, u->port);
     if (fd < 0) return SUBFETCH_ERR_DIAL;
 
     transport_tls_cfg_t tcfg;
@@ -243,6 +331,9 @@ subfetch_status_t subfetch_get_info(const subfetch_cfg_t *cfg, const char *url,
     if (ul + 1 > sizeof current) return SUBFETCH_ERR_URL;
     memcpy(current, url, ul + 1);
 
+    url_t origin;
+    if (url_parse(current, &origin) != URL_OK) return SUBFETCH_ERR_URL;
+
 /* carry cookies across redirects */
     char cookie_jar[512];
     cookie_jar[0] = '\0';
@@ -250,12 +341,11 @@ subfetch_status_t subfetch_get_info(const subfetch_cfg_t *cfg, const char *url,
     for (int hop = 0; hop <= max_redir; ++hop) {
         url_t u;
         if (url_parse(current, &u) != URL_OK) return SUBFETCH_ERR_URL;
-/* reject local addresses */
-        if (!net_ipv4_host_allowed(u.host)) return SUBFETCH_ERR_URL;
-
+        subfetch_cfg_t hop_cfg = *cfg;
+        if (!same_origin(&origin, &u)) hop_cfg.request_header = NULL;
         char redir[HTTP_MAX_LOCATION];
         redir[0] = '\0';
-        subfetch_status_t r = fetch_once(cfg, &u, body_buf, body_cap, body_len,
+        subfetch_status_t r = fetch_once(&hop_cfg, &u, body_buf, body_cap, body_len,
                                          redir, sizeof redir, deadline,
                                          cookie_jar, sizeof cookie_jar, info);
         if (r == SUBFETCH_OK) {
@@ -272,6 +362,11 @@ subfetch_status_t subfetch_get_info(const subfetch_cfg_t *cfg, const char *url,
         }
         size_t rl = strlen(redir);
         if (rl + 1 > sizeof current) return SUBFETCH_ERR_REDIRECT;
+        url_t next;
+        if (url_parse(redir, &next) != URL_OK || (u.is_https && !next.is_https))
+            return SUBFETCH_ERR_REDIRECT;
+/* cookies are never forwarded to a different scheme, host, or port */
+        if (!same_origin(&u, &next)) cookie_jar[0] = '\0';
 /* reject a redirect that cannot progress */
         if (strcmp(redir, current) == 0 && !cookie_jar[0])
             return SUBFETCH_ERR_REDIRECT;

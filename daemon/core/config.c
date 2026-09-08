@@ -1,12 +1,12 @@
 #include "config.h"
 #include "b64.h"
 #include "happ.h"
+#include "profiles.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* small helpers */
 
 static int is_hex(char c) {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
@@ -28,7 +28,8 @@ static int copy_span(const char *s, const char *e, char *dst, size_t cap) {
 }
 
 static int copy_query_value(const char *v, size_t vlen, char *dst, size_t cap) {
-    return url_percent_decode(v, vlen, dst, cap) >= 0 ? 0 : -1;
+/* query parameter values are the one place where '+' encodes a space */
+    return url_percent_decode_ex(v, vlen, dst, cap, 1) >= 0 ? 0 : -1;
 }
 
 const char *vl_sec_name(vl_sec_t s) {
@@ -223,7 +224,8 @@ int cfg_validate_link(const char *uri, char *reason, size_t reason_cap) {
     return cfg_validate_server(&s, reason, reason_cap);
 }
 
-int url_percent_decode(const char *src, size_t src_len, char *dst, size_t cap) {
+int url_percent_decode_ex(const char *src, size_t src_len, char *dst,
+                          size_t cap, int plus_is_space) {
     size_t o = 0;
     for (size_t i = 0; i < src_len; ++i) {
         char c = src[i];
@@ -234,8 +236,8 @@ int url_percent_decode(const char *src, size_t src_len, char *dst, size_t cap) {
             if (o + 1 >= cap) return -1;
             dst[o++] = (char)((hi << 4) | lo);
             i += 2;
-        } else if (c == '+') {
-/* '+' only means space in queries, so decoding it here is safe */
+        } else if (c == '+' && plus_is_space) {
+/* '+' means space only inside a query, never in fragments or bodies */
             if (o + 1 >= cap) return -1;
             dst[o++] = ' ';
         } else {
@@ -246,6 +248,35 @@ int url_percent_decode(const char *src, size_t src_len, char *dst, size_t cap) {
     if (o >= cap) return -1;
     dst[o] = '\0';
     return (int)o;
+}
+
+int url_percent_decode(const char *src, size_t src_len, char *dst, size_t cap) {
+    return url_percent_decode_ex(src, src_len, dst, cap, 0);
+}
+
+/* panel templates prepend a long shared banner to every node name, so clipping
+   a name at a byte boundary can leave every server in a feed reading the same.
+   decode into a wide scratch first, then step back to a codepoint boundary so a
+   name that still has to be shortened stays valid utf-8 for the control line */
+static void copy_remark(const char *src, size_t src_len, char *dst, size_t cap) {
+    char wide[1024];
+    size_t n;
+
+    if (!dst || cap == 0) return;
+    dst[0] = '\0';
+    if (url_percent_decode(src, src_len, wide, sizeof wide) < 0) {
+        n = src_len < sizeof wide - 1 ? src_len : sizeof wide - 1;
+        memcpy(wide, src, n);
+        wide[n] = '\0';
+    }
+
+    n = strlen(wide);
+    if (n >= cap) {
+        n = cap - 1;
+        while (n > 0 && ((unsigned char)wide[n] & 0xC0) == 0x80) --n;
+    }
+    memcpy(dst, wide, n);
+    dst[n] = '\0';
 }
 
 static void assign_kv(vl_server_t *s,
@@ -352,10 +383,8 @@ cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out) {
         const char *p, *end, *nl;
         if (happ_unwrap(uri, plain, sizeof plain) != 0)
             return CFG_ERR_SCHEME;
-/* single link */
         if (cfg_parse_link(plain, out) == CFG_OK)
             return CFG_OK;
-/* multi-line body: first valid link */
         p = plain;
         end = plain + strlen(plain);
         while (p < end) {
@@ -407,11 +436,22 @@ cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out) {
             if (copy_span(p, at, out->uuid, sizeof out->uuid) != 0) return CFG_ERR_TOO_LONG;
         } else {
             const char *colon = memchr(p, ':', (size_t)(at - p));
+            char encoded_user[sizeof out->user];
+            char encoded_pass[sizeof out->pass];
             if (colon) {
-                if (copy_span(p, colon, out->user, sizeof out->user) != 0) return CFG_ERR_TOO_LONG;
-                if (copy_span(colon + 1, at, out->pass, sizeof out->pass) != 0) return CFG_ERR_TOO_LONG;
+                if (copy_span(p, colon, encoded_user, sizeof encoded_user) != 0 ||
+                    copy_span(colon + 1, at, encoded_pass, sizeof encoded_pass) != 0)
+                    return CFG_ERR_TOO_LONG;
+                if (url_percent_decode(encoded_user, strlen(encoded_user), out->user,
+                                       sizeof out->user) < 0 ||
+                    url_percent_decode(encoded_pass, strlen(encoded_pass), out->pass,
+                                       sizeof out->pass) < 0)
+                    return CFG_ERR_TOO_LONG;
             } else {
-                if (copy_span(p, at, out->user, sizeof out->user) != 0) return CFG_ERR_TOO_LONG;
+                if (copy_span(p, at, encoded_user, sizeof encoded_user) != 0 ||
+                    url_percent_decode(encoded_user, strlen(encoded_user), out->user,
+                                       sizeof out->user) < 0)
+                    return CFG_ERR_TOO_LONG;
             }
         }
         p = at + 1;
@@ -475,9 +515,7 @@ cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out) {
     if (out->security == VL_SEC_REALITY && out->net == VL_NET_UNKNOWN)
         out->net = VL_NET_TCP;
 
-    if (frag) {
-        url_percent_decode(frag + 1, strlen(frag + 1), out->remark, sizeof out->remark);
-    }
+    if (frag) copy_remark(frag + 1, strlen(frag + 1), out->remark, sizeof out->remark);
 
     return CFG_OK;
 }
@@ -600,7 +638,6 @@ static int count_proxy_outbounds(const cJSON *outbounds) {
     return n;
 }
 
-/* map one xray outbound object into vl_server_t; return 0 on accept */
 static int xray_outbound_to_server(const cJSON *ob, const char *remarks,
                                    int multi_proxy, vl_server_t *s) {
     const cJSON *proto, *settings, *stream, *vnext, *user, *netj, *secj;
@@ -753,7 +790,6 @@ static void xray_collect_outbounds(const cJSON *outbounds, const char *remarks,
     }
 }
 
-/* accept: [ { remarks, outbounds: [...] } */
 static int parse_xray_json(const char *blob, size_t blob_len,
                            vl_server_t *out, size_t max, size_t *count) {
     cJSON *root;
@@ -766,7 +802,7 @@ static int parse_xray_json(const char *blob, size_t blob_len,
         const cJSON *item;
         cJSON_ArrayForEach(item, root) {
             const cJSON *outbounds;
-            char remarks[128];
+            char remarks[256];
             if (*count >= max) break;
             if (!cJSON_IsObject(item)) continue;
             remarks[0] = '\0';
@@ -777,7 +813,7 @@ static int parse_xray_json(const char *blob, size_t blob_len,
         }
     } else if (cJSON_IsObject(root)) {
         const cJSON *outbounds = cJSON_GetObjectItemCaseSensitive(root, "outbounds");
-        char remarks[128];
+        char remarks[256];
         remarks[0] = '\0';
         (void)jstr_copy(root, "remarks", remarks, sizeof remarks);
         if (cJSON_IsArray(outbounds))
@@ -788,15 +824,39 @@ static int parse_xray_json(const char *blob, size_t blob_len,
     return 0;
 }
 
+static int looks_like_happ(const char *b, size_t n) {
+    return n >= 7 && (strncmp(b, "happ://", 7) == 0 || strncmp(b, "HAPP://", 7) == 0);
+}
+
+cfg_content_t cfg_content_kind(const char *blob, size_t blob_len) {
+    if (!blob || blob_len == 0) return CFG_CONTENT_UNKNOWN;
+    if (looks_like_happ(blob, blob_len)) return CFG_CONTENT_HAPP;
+    if (looks_like_json(blob, blob_len)) return CFG_CONTENT_XRAY_JSON;
+    if (profiles_looks_like_clash(blob, blob_len)) return CFG_CONTENT_CLASH;
+    if (profiles_looks_like_surge(blob, blob_len)) return CFG_CONTENT_SURGE;
+    if (looks_like_links(blob, blob_len)) return CFG_CONTENT_LINKS;
+
+    size_t cap = b64_decoded_maxlen(blob_len);
+    if (cap == 0 || cap > (size_t)(2 * 1024 * 1024)) return CFG_CONTENT_UNKNOWN;
+    unsigned char *scratch = (unsigned char *)malloc(cap);
+    if (!scratch) return CFG_CONTENT_UNKNOWN;
+    size_t dec_len = 0;
+    cfg_content_t kind = CFG_CONTENT_UNKNOWN;
+    if (b64_decode(blob, blob_len, scratch, cap, &dec_len) == 0 && dec_len > 0 &&
+        (looks_like_json((const char *)scratch, dec_len) ||
+         looks_like_links((const char *)scratch, dec_len)))
+        kind = CFG_CONTENT_BASE64;
+    free(scratch);
+    return kind;
+}
+
 cfg_status_t cfg_parse_subscription(const char *blob, size_t blob_len,
                                     vl_server_t *out, size_t max_servers,
                                     size_t *out_count) {
     if (!blob || !out || !out_count || max_servers == 0) return CFG_ERR_BAD_ARG;
     *out_count = 0;
 
-/* whole-blob happ deep link (export as single line) */
-    if (blob_len >= 7 &&
-        (strncmp(blob, "happ://", 7) == 0 || strncmp(blob, "HAPP://", 7) == 0)) {
+    if (looks_like_happ(blob, blob_len)) {
         char plain[16384];
         char tmp[8192];
         size_t n = blob_len < sizeof tmp - 1 ? blob_len : sizeof tmp - 1;
@@ -809,11 +869,22 @@ cfg_status_t cfg_parse_subscription(const char *blob, size_t blob_len,
         return CFG_ERR_SCHEME;
     }
 
-/* json first: bodies contain https:// dns urls that would trip link detection */
+/* JSON must win because DNS URLs inside it look like standalone server links */
     if (looks_like_json(blob, blob_len)) {
         if (parse_xray_json(blob, blob_len, out, max_servers, out_count) == 0)
             return CFG_OK;
-/* fall through if the payload only looked like json */
+    }
+
+/* the foreign client profiles are checked before the link scan because a clash
+   document embeds urls in its dns and rule sections */
+    if (profiles_looks_like_clash(blob, blob_len)) {
+        *out_count = profiles_parse_clash(blob, blob_len, out, max_servers);
+        return CFG_OK;
+    }
+
+    if (profiles_looks_like_surge(blob, blob_len)) {
+        *out_count = profiles_parse_surge(blob, blob_len, out, max_servers);
+        return CFG_OK;
     }
 
     if (looks_like_links(blob, blob_len)) {
@@ -833,6 +904,18 @@ cfg_status_t cfg_parse_subscription(const char *blob, size_t blob_len,
     }
     if (looks_like_json((const char *)scratch, dec_len)) {
         (void)parse_xray_json((const char *)scratch, dec_len, out, max_servers, out_count);
+        free(scratch);
+        return CFG_OK;
+    }
+    if (profiles_looks_like_clash((const char *)scratch, dec_len)) {
+        *out_count = profiles_parse_clash((const char *)scratch, dec_len,
+                                          out, max_servers);
+        free(scratch);
+        return CFG_OK;
+    }
+    if (profiles_looks_like_surge((const char *)scratch, dec_len)) {
+        *out_count = profiles_parse_surge((const char *)scratch, dec_len,
+                                          out, max_servers);
         free(scratch);
         return CFG_OK;
     }

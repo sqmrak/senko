@@ -10,10 +10,8 @@
 extern "C" {
 #endif
 
-/* pass dialing in from the caller */
 typedef int (*subfetch_dial_fn)(void *ctx, const char *host, uint16_t port);
 
-/* pump the daemon loop during fetch */
 typedef void (*subfetch_pump_fn)(void *ctx);
 
 typedef enum {
@@ -40,9 +38,17 @@ typedef struct {
 
 typedef struct {
     uint64_t expire;
+    uint64_t upload;
+    uint64_t download;
+    uint64_t total;
+    char description[256];
+    char support_url[512];
+/* set when the panel answered with a device gated placeholder profile instead
+   of the real node list; gate_reason carries the panel's own wording */
+    int  gated;
+    char gate_reason[256];
 } subfetch_info_t;
 
-/* fetch a body with a timeout */
 subfetch_status_t subfetch_get(const subfetch_cfg_t *cfg, const char *url,
                                uint8_t *body_buf, size_t body_cap,
                                size_t *body_len, int timeout_ms);
@@ -54,6 +60,18 @@ subfetch_status_t subfetch_get_info(const subfetch_cfg_t *cfg, const char *url,
 
 #ifdef __cplusplus
 }
+#endif
+
+#ifdef SENKO_HOST_TEST
+/* the userinfo header parser is worth pinning: an off by one here silently
+   turns a valid expiry into a date in the past */
+uint64_t subfetch_userinfo_expire_for_test(const char *value);
+uint64_t subfetch_userinfo_value_for_test(const char *value, const char *wanted);
+
+/* device gating is decided from response headers alone, so the whole decision
+   is reachable from a fixture without a socket */
+#include "http.h"
+void subfetch_parser_info_for_test(const http_parser_t *hp, subfetch_info_t *info);
 #endif
 
 #endif /* subfetch_h */

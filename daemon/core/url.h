@@ -35,6 +35,10 @@ url_status_t url_resolve_redirect(const url_t *base, const char *location,
 url_status_t url_build_get(const url_t *u, char *buf, size_t cap, size_t *out_len);
 url_status_t url_build_get_cookie(const url_t *u, const char *cookie,
                                   char *buf, size_t cap, size_t *out_len);
+/* the stable per-device id sent as x-hwid; generated and stored on first use.
+   out needs at least 33 bytes */
+void url_device_hwid(char *out, size_t cap);
+
 url_status_t url_build_get_cookie_header(const url_t *u, const char *cookie,
                                          const char *request_header,
                                          char *buf, size_t cap, size_t *out_len);

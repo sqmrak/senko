@@ -14,6 +14,17 @@ int main(void) {
     vl_server_t s;
     char reason[128];
 
+/* '+' is only a space inside query values, never in the remark fragment */
+    ok("parse plus remark",
+       cfg_parse_link("vless://11111111-1111-4111-8111-111111111111@1.2.3.4:443?security=tls&type=tcp#C+++Node",
+                      &s) == CFG_OK);
+    ok("remark keeps plus", strcmp(s.remark, "C+++Node") == 0);
+
+    ok("parse plus path",
+       cfg_parse_link("vless://11111111-1111-4111-8111-111111111111@1.2.3.4:443?security=tls&type=ws&path=%2Fws%2Bv2&host=cdn.example#ws",
+                      &s) == CFG_OK);
+    ok("path keeps encoded plus", strcmp(s.path, "/ws+v2") == 0);
+
     ok("parse raw reality",
        cfg_parse_link("vless://11111111-1111-4111-8111-111111111111@example.com:443?security=reality&type=raw&flow=xtls-rprx-vision&pbk=abc&sid=00#raw",
                       &s) == CFG_OK);
@@ -81,6 +92,39 @@ int main(void) {
                       &s) == CFG_OK &&
        !cfg_validate_server(&s, reason, sizeof reason) &&
        strcmp(reason, "unsupported tls flow") == 0);
+
+    {
+/* a panel that prefixes every node with the same banner used to hand back a
+   list of identically named servers once the name was clipped */
+        static const char *const banner =
+            "top%20vpn%20%F0%9F%94%9D%20%7C%20%D0%BF%D0%BE%D0%B4%D0%BF%D0%B8%D1%81"
+            "%D0%BA%D0%B0%20%D0%B0%D0%BA%D1%82%D0%B8%D0%B2%D0%BD%D0%B0%20%D0%B4%D0"
+            "%BE%2008.09.2026%20%7C%20%D0%BE%D1%81%D1%82%D0%B0%D0%BB%D0%BE%D1%81%D1"
+            "%8C%20940%20%D0%93%D0%91%20%7C%20";
+        char link_a[1024], link_b[1024];
+        vl_server_t a, b;
+        snprintf(link_a, sizeof link_a,
+                 "vless://11111111-1111-4111-8111-111111111111@a.example.com:443"
+                 "?security=tls&type=tcp#%s%s", banner, "NL-1");
+        snprintf(link_b, sizeof link_b,
+                 "vless://11111111-1111-4111-8111-111111111111@b.example.com:443"
+                 "?security=tls&type=tcp#%s%s", banner, "DE-2");
+        ok("long shared banner keeps names distinct",
+           cfg_parse_link(link_a, &a) == CFG_OK &&
+           cfg_parse_link(link_b, &b) == CFG_OK &&
+           strcmp(a.remark, b.remark) != 0);
+
+        char link_long[2048];
+        int off = snprintf(link_long, sizeof link_long,
+                           "vless://11111111-1111-4111-8111-111111111111@c.example.com:443"
+                           "?security=tls&type=tcp#");
+        for (int i = 0; i < 200 && off < (int)sizeof link_long - 8; ++i)
+            off += snprintf(link_long + off, sizeof link_long - (size_t)off, "%%D0%%AF");
+        ok("an over long name is cut on a codepoint boundary",
+           cfg_parse_link(link_long, &a) == CFG_OK &&
+           strlen(a.remark) % 2 == 0 &&
+           ((unsigned char)a.remark[strlen(a.remark) - 1] & 0xC0) == 0x80);
+    }
 
     if (g_fail) {
         fprintf(stderr, "%d check(s) failed\n", g_fail);

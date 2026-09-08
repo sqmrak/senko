@@ -1,5 +1,7 @@
 #include "url.h"
+#include "net_safe.h"
 
+#include <arpa/inet.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -35,8 +37,9 @@ int main(void) {
     failed += check(url_build_get_cookie_header(&u, NULL, NULL,
                                                 req, sizeof req, &n) == URL_OK &&
                    strstr(req, "Authorization:") == NULL &&
-                   strstr(req, "User-Agent: Happ/3.13.0\r\n") != NULL,
-                   "happ-compatible default user agent");
+                   strstr(req, "User-Agent: Happ/3.26.1\r\n") != NULL &&
+                   strstr(req, "x-hwid:") != NULL,
+                   "happ-compatible default user agent and hwid");
 
     char redirect[1024];
     failed += check(url_resolve_redirect(&u, "/sub/token/",
@@ -47,6 +50,22 @@ int main(void) {
                                          redirect, sizeof redirect) == URL_OK &&
                    strcmp(redirect, "https://sub.example/feed?format=base64") == 0,
                    "resolve query redirect");
+    failed += check(url_parse("https://[2606:4700:4700::1111]:8443/feed", &u) == URL_OK &&
+                    strcmp(u.host, "2606:4700:4700::1111") == 0 && u.port == 8443,
+                    "parse ipv6 url");
+    failed += check(url_build_get(&u, req, sizeof req, &n) == URL_OK &&
+                    strstr(req, "Host: [2606:4700:4700::1111]:8443") != NULL,
+                    "build ipv6 host header");
+    struct sockaddr_in private4;
+    memset(&private4, 0, sizeof private4);
+    private4.sin_family = AF_INET;
+    inet_pton(AF_INET, "100.64.0.1", &private4.sin_addr);
+    failed += check(!net_addr_allowed((struct sockaddr *)&private4), "reject cgnat");
+    struct sockaddr_in6 private6;
+    memset(&private6, 0, sizeof private6);
+    private6.sin6_family = AF_INET6;
+    inet_pton(AF_INET6, "::ffff:127.0.0.1", &private6.sin6_addr);
+    failed += check(!net_addr_allowed((struct sockaddr *)&private6), "reject mapped loopback");
 
     if (failed) return 1;
     puts("all url header checks passed");
