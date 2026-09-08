@@ -14,24 +14,37 @@
     [_statusWashHost release];
     _statusWashHost = nil;
     [_misidePattern release];
-    [_misideLogo release];
     [_frutigerBg release];
     [_ios26Bg release];
+    _actionSheet.delegate = nil;
     [_actionSheet release];
     [_ctl release];
     [_servers release];
     [_subs release];
     [_sectionOrder release];
     [_sections release];
+    [_rowName release];
     [_collapsedSubs release];
     [_state release];
     [_lastErr release];
     [_lastAlertErr release];
     [_serverStatus release];
     [_pingingSubs release];
+    [_pingQueue release];
+    [_pingMode release];
     [_pendingUpdatePath release];
+    [_pendingInsecureURL release];
     [_sectionDragSnapshot removeFromSuperview];
     [_sectionDragSnapshot release];
+    [_uptimeTimer invalidate];
+    _uptimeTimer = nil;
+    [_sheet removeFromSuperview];
+    [_sheet release];
+    [NSObject cancelPreviousPerformRequestsWithTarget:_emptyState];
+    [_emptyState removeFromSuperview];
+    [_emptyState release];
+    [_deviceHWID release];
+    [_revealedRows release];
     [super dealloc];
 }
 
@@ -47,67 +60,19 @@
     [self syncIos26Decor];
     [self syncBubbleField];
     [self layoutWallpaperStack];
-    UILabel *title = (UILabel *)[self.view viewWithTag:8001];
-    if ([title isKindOfClass:[UILabel class]]) {
-        BOOL isPad = ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad);
-        CGFloat H = self.view.bounds.size.height;
-        BOOL compact = (!isPad && H <= 568.0f);
-        CGFloat titleSize = isPad ? 28.0f : (compact ? 22.0f : 26.0f);
-        if (SenkoThemeIsIos16()) {
-            title.font = SenkoFontTitle(titleSize);
-            title.textColor = kInk;
-            title.shadowColor = nil;
-            title.shadowOffset = CGSizeZero;
-        } else if (SenkoThemeIsFlat()) {
-            title.font = [UIFont fontWithName:@"HelveticaNeue-Light" size:isPad ? 26.0f : (compact ? 19.0f : 22.0f)]
-                ?: [UIFont systemFontOfSize:isPad ? 26.0f : (compact ? 19.0f : 22.0f)];
-            SenkoStyleAccentLabel(title);
-        } else {
-            title.font = [UIFont boldSystemFontOfSize:isPad ? 26.0f : (compact ? 19.0f : 22.0f)];
-            SenkoStyleAccentLabel(title);
-        }
-    }
-    UIButton *gear = (UIButton *)[self.view viewWithTag:8002];
-    if ([gear isKindOfClass:[UIButton class]])
-        [gear setImage:TintedIconNamed(@"icon-settings.png", 22, kAccentBlue)
-              forState:UIControlStateNormal];
-    UIButton *refresh = (UIButton *)[self.view viewWithTag:8003];
-    if ([refresh isKindOfClass:[UIButton class]])
-        [refresh setImage:TintedIconNamed(@"icon-refresh.png", 22, kAccentBlue)
-                 forState:UIControlStateNormal];
-    UIButton *plus = (UIButton *)[self.view viewWithTag:8004];
-    if ([plus isKindOfClass:[UIButton class]])
-        SenkoStylePaperGlyph(plus);
-    if (_pingAllBtn)
-        StyleGlossyCapsule(_pingAllBtn, kAccentBlue, kAccentBlueLo);
-    if (_connectBtn) {
-        BOOL active = [self isTunnelActive];
-        StyleDomeColors(_connectBtn,
-                        active ? kConnOn : kIdleGrey,
-                        active ? kConnOnLo : kIdleGreyLo);
-    }
+    [self styleHeaderTitle:_ui.title];
+    [_sheet dismiss];
+    SenkoHomeStyleChrome(&_ui);
     if (_statusLabel) {
-        if (SenkoThemeIsIos16())
-            SenkoStyleIos16StatusPill(_statusLabel);
-        else if (SenkoThemeIsFlat()) {
-            _statusLabel.backgroundColor = SenkoThemeIsLight()
-                ? [UIColor colorWithRed:0.94 green:0.95 blue:0.98 alpha:0.80]
-                : [UIColor colorWithRed:0.16 green:0.18 blue:0.24 alpha:0.80];
-            _statusLabel.layer.borderWidth = 0;
-            _statusLabel.layer.borderColor = [UIColor clearColor].CGColor;
-            _statusLabel.layer.cornerRadius = 8;
-        } else {
-            _statusLabel.backgroundColor = kCellLo;
-            _statusLabel.layer.borderWidth = 0;
-            _statusLabel.layer.borderColor = [UIColor clearColor].CGColor;
-            _statusLabel.layer.cornerRadius = 8;
-        }
+        _statusLabel.backgroundColor = [UIColor clearColor];
+        _statusLabel.layer.borderWidth = 0;
+        _statusLabel.layer.cornerRadius = 0;
         [self applyState];
     }
     [self styleListWell];
     if (_table) {
         _table.backgroundColor = [UIColor clearColor];
-        _table.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
+        _table.separatorStyle = UITableViewCellSeparatorStyleNone;
         _table.separatorColor = SenkoThemeIsLight()
             ? [UIColor colorWithWhite:0 alpha:0.12f]
             : [UIColor colorWithWhite:1 alpha:0.16f];
@@ -115,13 +80,13 @@
             _table.backgroundView = nil;
     }
     [_table reloadData];
+    [_emptyState applyTheme];
     [self.view setNeedsLayout];
     [self layoutMainChrome];
 }
 
-/* list tray */
 - (void)styleListWell {
-    UIView *well = [self.view viewWithTag:9001];
+    UIView *well = [self.view viewWithTag:SenkoHomeTagWell];
     if (!well) return;
     if (SenkoThemeIsIos16()) {
         SenkoStyleIos16ListWell(well);
@@ -139,31 +104,61 @@
         layer.hidden = NO;
         CAGradientLayer *wg = (CAGradientLayer *)layer;
         if (SenkoThemeIsBoykisser()) {
-            UIColor *veil = [UIColor colorWithRed:1.0 green:0.94 blue:0.97 alpha:0.35];
+/* the veil lifts the list off the wallpaper, so it follows the ground it sits
+   on instead of washing a dark screen white */
+            UIColor *veil = SenkoThemeIsLight()
+                ? [UIColor colorWithRed:1.00 green:0.94 blue:0.97 alpha:0.35]
+                : [UIColor colorWithRed:0.09 green:0.05 blue:0.075 alpha:0.32];
             wg.colors = [NSArray arrayWithObjects:(id)veil.CGColor, (id)veil.CGColor, nil];
         } else if (SenkoThemeIsFrutigeraero()) {
-/* use a soft glass tray */
             UIColor *veil = [UIColor colorWithWhite:1 alpha:0.28];
             wg.colors = [NSArray arrayWithObjects:(id)veil.CGColor, (id)veil.CGColor, nil];
         } else if (SenkoThemeIsIos26()) {
-/* let the wallpaper show through */
             wg.colors = [NSArray arrayWithObjects:
                          (id)[UIColor clearColor].CGColor,
                          (id)[UIColor clearColor].CGColor, nil];
             wg.hidden = YES;
         } else if (SenkoThemeIsMiside()) {
-/* keep the pattern visible */
             wg.colors = [NSArray arrayWithObjects:
                          (id)[UIColor clearColor].CGColor,
                          (id)[UIColor clearColor].CGColor, nil];
             wg.hidden = YES;
         } else {
-/* let cells and plates carry chrome */
             wg.colors = [NSArray arrayWithObjects:(id)kBG.CGColor, (id)kBGBot.CGColor, nil];
         }
     }
 }
 
+
+/* the wordmark reads from the leading edge in a geometric bold; each theme only
+   picks the size and the ink */
+- (void)styleHeaderTitle:(UILabel *)title {
+    if (![title isKindOfClass:[UILabel class]]) return;
+    BOOL pad = ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad);
+    BOOL compact = (!pad && SenkoViewBounds(self.view).size.height <= 568.0f);
+    CGFloat size = pad ? 28.0f : (compact ? 22.0f : 25.0f);
+    title.textAlignment = NSTextAlignmentLeft;
+    title.backgroundColor = [UIColor clearColor];
+    title.shadowColor = nil;
+    title.shadowOffset = CGSizeZero;
+    title.font = SenkoFontDisplay(size);
+    title.textColor = kInk;
+}
+
+- (UIButton *)makeHeaderButton:(SEL)action tag:(NSInteger)tag {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+    b.tag = tag;
+    [b addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    [b addTarget:self action:@selector(chromeButtonDown:)
+        forControlEvents:UIControlEventTouchDown];
+    [b addTarget:self action:@selector(chromeButtonUp:)
+        forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside |
+                         UIControlEventTouchCancel];
+    return b;
+}
+
+- (void)chromeButtonDown:(UIView *)v { SenkoPressPop(v, YES); }
+- (void)chromeButtonUp:(UIView *)v { SenkoPressPop(v, NO); }
 
 - (void)loadView {
     UIView *v = [[[UIView alloc] initWithFrame:[[UIScreen mainScreen] bounds]] autorelease];
@@ -188,7 +183,8 @@
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
-/* restart overlays after a modal */
+    [self applyState];
+    [self syncUptimeTicker];
     [self syncBoykisserField];
     [self syncBubbleField];
     [_boyField setPaused:NO];
@@ -197,19 +193,22 @@
 
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
+    /* the ticker holds a strong reference to this controller, so it must not
+       outlive the screen being on top */
+    [_uptimeTimer invalidate];
+    _uptimeTimer = nil;
+    [_sheet dismiss];
     [_boyField setPaused:YES];
     [_bubbleField setPaused:YES];
     (void)animated;
 }
 
-/* scroll only changes geometry */
 - (void)layoutMainChromeGeometry {
-    BOOL active = [self isTunnelActive];
-    UIColor *top = active ? kConnOn : kIdleGrey;
-    UIColor *bot = active ? kConnOnLo : kIdleGreyLo;
-    SenkoLayoutMainContent(self.view, _bgGrad, _table, _pingAllBtn, _statusLabel,
-                           _connectBtn, top, bot, _listHeaderProgress);
+    SenkoHomeLayout(self.view, &_ui, _listHeaderProgress);
     [self layoutStatusGlow];
+    if (_emptyState && !_emptyState.hidden &&
+        !CGRectEqualToRect(_emptyState.frame, _table.frame))
+        _emptyState.frame = _table.frame;
     if (_boyField && !CGSizeEqualToSize(_boyField.bounds.size, self.view.bounds.size))
         _boyField.frame = self.view.bounds;
     if (_bubbleField && !CGSizeEqualToSize(_bubbleField.bounds.size, self.view.bounds.size))
@@ -226,7 +225,6 @@
     NSString *key = [self backgroundStatusKey];
     BOOL sizeChanged = !CGSizeEqualToSize(sz, _laidChromeSize);
     BOOL statusChanged = !(_laidStatusKey && [key isEqualToString:_laidStatusKey]);
-/* rebuild wallpaper on size or status change */
     if (sizeChanged || statusChanged) {
         _laidChromeSize = sz;
         [_laidStatusKey release];
@@ -241,8 +239,6 @@
         else
             [self layoutWallpaperStack];
     }
-    if (SenkoThemeIsIos16() && _statusLabel)
-        SenkoStyleIos16StatusPill(_statusLabel);
 }
 
 - (void)viewDidLayoutSubviews {
@@ -261,19 +257,8 @@
     (void)io;
     [self.view setNeedsLayout];
     [self.view layoutIfNeeded];
-/* restyle connect after rotation */
-    if (_connectBtn) {
-        CGAffineTransform t = _connectBtn.transform;
-        _connectBtn.transform = CGAffineTransformIdentity;
-        _connectBtn.bounds = CGRectMake(0, 0, 128, 128);
-        BOOL active = [self isTunnelActive];
-        ApplyGlossyDome(_connectBtn,
-                        active ? kConnOn : kIdleGrey,
-                        active ? kConnOnLo : kIdleGreyLo);
-        [_connectBtn bringSubviewToFront:_connectBtn.titleLabel];
-        _connectBtn.transform = t;
-    }
     [self layoutMainChrome];
+    [_revealedRows removeAllObjects];
     if (_boyField && SenkoThemeIsBoykisser())
         [self syncBoykisserField];
     [_table reloadData];
@@ -284,6 +269,7 @@
     _ctl = [[SenkoControl alloc] initWithSocketPath:SENKO_SOCK];
     _selectedSrvIdx = -1;
     _menuSubIdx = -1;
+    _subscriptionMutationBusy = NO;
     _selectedBackend = [[NSUserDefaults standardUserDefaults] integerForKey:SENKO_SELECTED_BACKEND_KEY];
     if (_selectedBackend != SenkoBackendAmneziaWG)
         _selectedBackend = SenkoBackendServer;
@@ -297,165 +283,114 @@
     _subs = [[NSMutableArray alloc] init];
     _collapsedSubs = [[NSMutableSet alloc] init];
     _listHeaderProgress = 0.0f;
-    _headerSnapAnimating = NO;
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(themeDidChange:)
                                                  name:SenkoThemeDidChangeNotification
                                                object:nil];
+    /* core animation drops layer animations when the app is backgrounded, so
+       the connecting pulse has to be reinstalled on the way back */
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(applyState)
+                                                 name:UIApplicationDidBecomeActiveNotification
+                                               object:nil];
 
-    CGRect b = self.view.bounds;
-    CGFloat topOffset = GetTopOffset();
-    BOOL pad = ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad);
-    BOOL compact = (!pad && b.size.height <= 568.0f); /* small iphone layout */
-/* keep the title below the status bar */
-    CGFloat headerY = (pad ? 16.0f : (compact ? 14.0f : 12.0f)) + topOffset;
-    CGFloat headerH = pad ? 42.0f : (compact ? 28.0f : 34.0f);
-    CGFloat headerButtonSide = pad ? 46.0f : (compact ? 32.0f : 38.0f);
-    CGFloat headerButtonY = headerY + (headerH - headerButtonSide) / 2.0f;
-    CGFloat headerIcon = pad ? 26.0f : (compact ? 20.0f : 22.0f);
-    CGFloat headerPad = pad ? 16.0f : (compact ? 8.0f : 10.0f);
-    CGFloat titleSize = pad ? 26.0f : (compact ? 19.0f : 22.0f);
+    _revealedRows = [[NSMutableSet alloc] init];
 
-    UILabel *title = [[[UILabel alloc] initWithFrame:CGRectMake(0, headerY, b.size.width, headerH)] autorelease];
-    title.tag = 8001;
+    UILabel *title = [[[UILabel alloc] initWithFrame:CGRectZero] autorelease];
+    title.tag = SenkoHomeTagTitle;
     title.text = @"Senko";
-    title.textAlignment = NSTextAlignmentCenter;
-    title.backgroundColor = [UIColor clearColor];
-    if (SenkoThemeIsIos16()) {
-        CGFloat ios16Title = pad ? 28.0f : (compact ? 22.0f : 26.0f);
-        title.font = SenkoFontTitle(ios16Title);
-        title.textColor = kInk;
-        title.shadowColor = nil;
-        title.shadowOffset = CGSizeZero;
-    } else if (SenkoThemeIsFlat()) {
-        title.font = [UIFont fontWithName:@"HelveticaNeue-Light" size:titleSize]
-            ?: [UIFont systemFontOfSize:titleSize];
-        SenkoStyleAccentLabel(title);
-    } else {
-        title.font = [UIFont boldSystemFontOfSize:titleSize];
-        SenkoStyleAccentLabel(title);
-    }
-    title.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [self styleHeaderTitle:title];
     [self.view addSubview:title];
 
-    UIImage *gearImg = TintedIconNamed(@"icon-settings.png", headerIcon, kAccentBlue);
-    UIImage *refreshImg = TintedIconNamed(@"icon-refresh.png", headerIcon, kAccentBlue);
-
-/* use icon buttons without plates */
-    UIButton *gear = [UIButton buttonWithType:UIButtonTypeCustom];
-    gear.tag = 8002;
-    gear.frame = CGRectMake(headerPad, headerButtonY, headerButtonSide, headerButtonSide);
-    if (gearImg) [gear setImage:gearImg forState:UIControlStateNormal];
-    gear.imageView.contentMode = UIViewContentModeScaleAspectFit;
-    gear.imageEdgeInsets = UIEdgeInsetsMake(6, 6, 6, 6);
-    [gear addTarget:self action:@selector(settingsPressed) forControlEvents:UIControlEventTouchUpInside];
-    gear.autoresizingMask = UIViewAutoresizingFlexibleRightMargin;
-    [self.view addSubview:gear];
-
-    _pingAllBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    _pingAllBtn.frame = CGRectMake(12, 210 + topOffset, 96, 30);
-    [_pingAllBtn setTitle:@"Ping All" forState:UIControlStateNormal];
-    _pingAllBtn.autoresizingMask = UIViewAutoresizingFlexibleRightMargin;
-    [_pingAllBtn addTarget:self action:@selector(pingPressed) forControlEvents:UIControlEventTouchUpInside];
-/* style once before scrolling */
-    StyleGlossyCapsule(_pingAllBtn, kAccentBlue, kAccentBlueLo);
-    [self.view addSubview:_pingAllBtn];
-
-    CGFloat headerGap = 8;
-    CGFloat plusX = b.size.width - headerPad - headerButtonSide;
-    CGFloat refreshX = plusX - headerGap - headerButtonSide;
-
-    UIButton *refresh = [UIButton buttonWithType:UIButtonTypeCustom];
-    refresh.tag = 8003;
-    refresh.frame = CGRectMake(refreshX, headerButtonY, headerButtonSide, headerButtonSide);
-    if (refreshImg) [refresh setImage:refreshImg forState:UIControlStateNormal];
-    refresh.imageView.contentMode = UIViewContentModeScaleAspectFit;
-    refresh.imageEdgeInsets = UIEdgeInsetsMake(6, 6, 6, 6);
-    [refresh addTarget:self action:@selector(refreshPressed) forControlEvents:UIControlEventTouchUpInside];
-    refresh.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+    UIButton *refresh = [self makeHeaderButton:@selector(refreshPressed)
+                                            tag:SenkoHomeTagRefresh];
     [self.view addSubview:refresh];
-
-    UIButton *plus = [UIButton buttonWithType:UIButtonTypeCustom];
-    plus.frame = CGRectMake(plusX, headerButtonY, headerButtonSide, headerButtonSide);
-    [plus setTitle:@"+" forState:UIControlStateNormal];
-    plus.titleLabel.font = [UIFont boldSystemFontOfSize:(compact ? 24.0f : (pad ? 30.0f : 28.0f))];
-    plus.titleEdgeInsets = UIEdgeInsetsMake(-2, 0, 2, 0);
-/* keep plus as an accent title */
-    SenkoStylePaperGlyph(plus);
-    plus.tag = 8004;
-    [plus addTarget:self action:@selector(addPressed) forControlEvents:UIControlEventTouchUpInside];
-    plus.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+    UIButton *gear = [self makeHeaderButton:@selector(settingsPressed)
+                                         tag:SenkoHomeTagGear];
+    [self.view addSubview:gear];
+    UIButton *plus = [self makeHeaderButton:@selector(addPressed)
+                                         tag:SenkoHomeTagPlus];
     [self.view addSubview:plus];
 
-    CGFloat d = 128;
+    _statusCard = SenkoHomeBuildStatusCard(self.view);
+
     _connectBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    _connectBtn.tag = 8005; /* layout finds connect by tag */
-    _connectBtn.frame = CGRectMake((b.size.width - d) / 2, 68 + topOffset, d, d);
-    _connectBtn.titleLabel.font = [UIFont boldSystemFontOfSize:20];
-    [_connectBtn setTitle:@"OFF" forState:UIControlStateNormal];
-/* let layout own the frame and transform */
-    _connectBtn.autoresizingMask = UIViewAutoresizingNone;
-    [_connectBtn addTarget:self action:@selector(togglePressed) forControlEvents:UIControlEventTouchUpInside];
-    _btnBody = ApplyGlossyDome(_connectBtn, kIdleGrey, kIdleGreyLo);
-    [_connectBtn bringSubviewToFront:_connectBtn.titleLabel];
-    [self.view addSubview:_connectBtn];
+    _connectBtn.tag = SenkoHomeTagConnect;
+    _connectBtn.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
+    _connectBtn.contentVerticalAlignment = UIControlContentVerticalAlignmentCenter;
+    _connectBtn.titleLabel.textAlignment = NSTextAlignmentCenter;
+    [_connectBtn addTarget:self action:@selector(togglePressed)
+          forControlEvents:UIControlEventTouchUpInside];
+    [_connectBtn addTarget:self action:@selector(chromeButtonDown:)
+          forControlEvents:UIControlEventTouchDown];
+    [_connectBtn addTarget:self action:@selector(chromeButtonUp:)
+          forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside |
+                           UIControlEventTouchCancel];
+    [_statusCard addSubview:_connectBtn];
 
-    _statusLabel = [[[UILabel alloc] initWithFrame:CGRectMake(116, 210 + topOffset, b.size.width - 128, 30)] autorelease];
-    _statusLabel.textAlignment = NSTextAlignmentCenter;
+    _pingAllBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    _pingAllBtn.accessibilityLabel = SenkoLocalizedText(@"Check servers");
+    [_pingAllBtn addTarget:self action:@selector(pingPressed)
+          forControlEvents:UIControlEventTouchUpInside];
+    [_pingAllBtn addTarget:self action:@selector(chromeButtonDown:)
+          forControlEvents:UIControlEventTouchDown];
+    [_pingAllBtn addTarget:self action:@selector(chromeButtonUp:)
+          forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside |
+                           UIControlEventTouchCancel];
+    [_statusCard addSubview:_pingAllBtn];
+
+    /* the detail line is the same label the rest of the app writes progress
+       into, so every SetStatusDefault caller keeps working unchanged */
+    _statusLabel = [[[UILabel alloc] initWithFrame:CGRectZero] autorelease];
+    _statusLabel.backgroundColor = [UIColor clearColor];
+    _statusLabel.numberOfLines = 2;
+    _statusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    _statusLabel.adjustsFontSizeToFitWidth = YES;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    _statusLabel.minimumFontSize = 10.0f;
+#pragma clang diagnostic pop
     SetStatusDefault(_statusLabel, @"idle");
-    if (SenkoThemeIsIos16()) {
-        SenkoStyleIos16StatusPill(_statusLabel);
-    } else if (SenkoThemeIsFlat()) {
-        _statusLabel.backgroundColor = SenkoThemeIsLight()
-            ? [UIColor colorWithRed:0.94 green:0.95 blue:0.98 alpha:0.80]
-            : [UIColor colorWithRed:0.16 green:0.18 blue:0.24 alpha:0.80];
-        _statusLabel.layer.borderColor = [UIColor clearColor].CGColor;
-        _statusLabel.layer.cornerRadius = 8;
-        _statusLabel.layer.masksToBounds = YES;
-        _statusLabel.layer.borderWidth = 0;
-    } else {
-        _statusLabel.backgroundColor = kCellLo;
-        _statusLabel.layer.borderColor = [UIColor clearColor].CGColor;
-        _statusLabel.layer.cornerRadius = 8;
-        _statusLabel.layer.masksToBounds = YES;
-        _statusLabel.layer.borderWidth = 0;
-    }
-    _statusLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [self.view addSubview:_statusLabel];
+    [_statusCard addSubview:_statusLabel];
 
-/* list tray */
-    UIView *well = [[[UIView alloc] initWithFrame:CGRectMake(0, 242 + topOffset,
-                                                             b.size.width,
-                                                             b.size.height - 248 - topOffset)] autorelease];
-    well.tag = 9001;
-    well.layer.cornerRadius = 0;
+    _ui.title = title;
+    _ui.gear = gear;
+    _ui.refresh = refresh;
+    _ui.plus = plus;
+    _ui.card = _statusCard;
+    _ui.connect = _connectBtn;
+    _ui.check = _pingAllBtn;
+    _ui.detail = _statusLabel;
+    _ui.background = _bgGrad;
+    SenkoHomeStyleChrome(&_ui);
+    SenkoHomeApplyStatus(&_ui, @"idle", SenkoLocalizedText(@"Disconnected"), NO);
+
+    UIView *well = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
+    well.tag = SenkoHomeTagWell;
     well.layer.masksToBounds = YES;
-    well.layer.borderWidth = 0;
-    well.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     CAGradientLayer *wellG = [CAGradientLayer layer];
     wellG.name = @"wellGrad";
-    wellG.frame = well.bounds;
     [well.layer insertSublayer:wellG atIndex:0];
     [self.view addSubview:well];
+    _ui.well = well;
     [self styleListWell];
 
-    CGRect tf = CGRectMake(0, 248 + topOffset, b.size.width, b.size.height - 248 - topOffset);
-    _table = [[[UITableView alloc] initWithFrame:tf style:UITableViewStylePlain] autorelease];
+    BOOL pad = ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad);
+    _table = [[[UITableView alloc] initWithFrame:CGRectZero
+                                            style:UITableViewStylePlain] autorelease];
     _table.dataSource = self;
     _table.delegate = self;
     _table.backgroundColor = [UIColor clearColor];
     if ([_table respondsToSelector:@selector(setBackgroundView:)])
         _table.backgroundView = nil;
-    _table.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
+    _table.separatorStyle = UITableViewCellSeparatorStyleNone;
     _table.separatorColor = SenkoThemeIsLight()
         ? [UIColor colorWithWhite:0 alpha:0.12f]
         : [UIColor colorWithWhite:1 alpha:0.16f];
-    _table.rowHeight = pad ? 100.0f : 88.0f;
+    _table.rowHeight = pad ? 100.0f : 92.0f;
     _table.sectionHeaderHeight = pad ? 60.0f : 52.0f;
-/* use fixed row heights */
     _table.delaysContentTouches = NO;
     _table.canCancelContentTouches = YES;
-/* reduce gpu work while scrolling */
     _table.showsVerticalScrollIndicator = YES;
     if ([_table respondsToSelector:@selector(setEstimatedRowHeight:)])
         ((void (*)(id, SEL, CGFloat))objc_msgSend)(_table, @selector(setEstimatedRowHeight:), 0.0f);
@@ -463,28 +398,39 @@
         ((void (*)(id, SEL, CGFloat))objc_msgSend)(_table, @selector(setEstimatedSectionHeaderHeight:), 0.0f);
     if ([_table respondsToSelector:@selector(setSectionHeaderTopPadding:)])
         ((void (*)(id, SEL, CGFloat))objc_msgSend)(_table, @selector(setSectionHeaderTopPadding:), 0.0f);
-    _table.autoresizingMask = UIViewAutoresizingFlexibleHeight |
-                              UIViewAutoresizingFlexibleLeftMargin |
-                              UIViewAutoresizingFlexibleRightMargin;
     UILongPressGestureRecognizer *rowDrag = [[[UILongPressGestureRecognizer alloc]
                                               initWithTarget:self action:@selector(rowLongPressed:)] autorelease];
     rowDrag.minimumPressDuration = 0.55;
     [_table addGestureRecognizer:rowDrag];
     [self.view addSubview:_table];
+    _ui.table = _table;
+
+    _emptyState = [[SenkoEmptyStateView alloc] initWithFrame:CGRectZero];
+    _emptyState.hidden = YES;
+    [_emptyState->pasteButton addTarget:self action:@selector(emptyStatePastePressed)
+                       forControlEvents:UIControlEventTouchUpInside];
+    [_emptyState->scanButton addTarget:self action:@selector(emptyStateScanPressed)
+                      forControlEvents:UIControlEventTouchUpInside];
+    [_emptyState->hwidTap addTarget:self action:@selector(emptyStateCopyHWID)
+                   forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:_emptyState];
+    /* the list scrolls under the card now, so the card has to sit above it */
+    [self bringMainChromeToFront];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
+    /* the sort order lives in defaults and can change while settings are up */
+    [self rebuildSections];
+    [_table reloadData];
     [self ensureDaemonThenRefresh];
 }
 
-/* restart a dead senkod */
 - (void)ensureDaemonThenRefresh {
-    /* skip the probe while connected */
+    /* probing during a live tunnel can overwrite its status with stale state */
     BOOL quiet = [self isTunnelActive];
     [_ctl ensureDaemon:^(BOOL up, NSString *detail) {
         if (!up) {
-/* keep the live strip during refresh */
             if (quiet) {
                 [self refresh];
                 return;
@@ -495,7 +441,7 @@
             [self applyState];
             return;
         }
-        /* an already running daemon returns no detail, so clear the probe text */
+        /* an already-running daemon has no startup detail to show */
         if (!quiet && detail && [detail length])
             SetStatusRefresh(_statusLabel, detail);
         else if (!quiet)
@@ -506,11 +452,7 @@
 
 
 - (void)settingsPressed {
-    if (_actionSheet) {
-        [_actionSheet dismissWithClickedButtonIndex:_actionSheet.cancelButtonIndex animated:YES];
-        [_actionSheet release];
-        _actionSheet = nil;
-    }
+    [self dismissCurrentActionSheetAnimated:YES];
     SettingsVC *s = [[[SettingsVC alloc] init] autorelease];
     UINavigationController *nav = [[[UINavigationController alloc]
                                     initWithRootViewController:s] autorelease];

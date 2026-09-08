@@ -8,6 +8,9 @@ static BOOL SenkoCellRegional(unichar c) {
     return c >= 0xDDE6 && c <= 0xDDFF;
 }
 
+static NSString *SenkoCellFlagCode(NSString *flag);
+static NSString *SenkoCellRemark(NSString *raw);
+
 static NSString *SenkoCellFlag(NSString *raw) {
     if (![raw length]) return nil;
     NSString *text = [raw stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
@@ -22,6 +25,14 @@ static NSString *SenkoCellFlag(NSString *raw) {
             return [text substringWithRange:NSMakeRange(i, 4)];
     }
     return nil;
+}
+
+NSString *SenkoServerFlagCode(NSString *remark) {
+    return SenkoCellFlagCode(SenkoCellFlag(remark));
+}
+
+NSString *SenkoServerDisplayName(NSString *remark) {
+    return SenkoCellRemark(remark);
 }
 
 static NSString *SenkoCellFlagCode(NSString *flag) {
@@ -137,9 +148,13 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
         _title = [[UILabel alloc] initWithFrame:CGRectZero];
         _title.backgroundColor = [UIColor clearColor];
         _title.font = SenkoThemeIsIos16()
-            ? SenkoFontBody(16, YES)
-            : [UIFont boldSystemFontOfSize:16];
+            ? SenkoFontBody(15, YES)
+            : [UIFont boldSystemFontOfSize:14];
         SenkoStyleInkLabel(_title);
+        _title.numberOfLines = 1;
+        _title.lineBreakMode = NSLineBreakByClipping;
+        _title.adjustsFontSizeToFitWidth = YES;
+        _title.minimumFontSize = 10.0f;
         [_plate addSubview:_title];
 
         _detail = [[UILabel alloc] initWithFrame:CGRectZero];
@@ -147,8 +162,22 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
         _detail.font = SenkoThemeIsIos16()
             ? SenkoFontBody(12, NO)
             : [UIFont systemFontOfSize:12];
+        _detail.lineBreakMode = NSLineBreakByClipping;
+        _detail.adjustsFontSizeToFitWidth = YES;
+        _detail.minimumFontSize = 8.0f;
         SenkoStyleMutedLabel(_detail);
         [_plate addSubview:_detail];
+
+        _transport = [[UILabel alloc] initWithFrame:CGRectZero];
+        _transport.backgroundColor = [UIColor clearColor];
+        _transport.font = SenkoThemeIsIos16()
+            ? SenkoFontBody(11, YES)
+            : [UIFont boldSystemFontOfSize:11];
+        _transport.lineBreakMode = NSLineBreakByClipping;
+        _transport.adjustsFontSizeToFitWidth = YES;
+        _transport.minimumFontSize = 8.0f;
+        SenkoStyleMutedLabel(_transport);
+        [_plate addSubview:_transport];
 
         _unsupported = [[UILabel alloc] initWithFrame:CGRectZero];
         _unsupported.backgroundColor = [UIColor clearColor];
@@ -164,8 +193,22 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
         _ping.backgroundColor = [UIColor clearColor];
         _ping.textAlignment = NSTextAlignmentRight;
         _ping.font = [UIFont boldSystemFontOfSize:13];
+        _ping.lineBreakMode = NSLineBreakByClipping;
+        _ping.adjustsFontSizeToFitWidth = YES;
+        _ping.minimumFontSize = 9.0f;
         SenkoStyleAccentLabel(_ping);
         [_plate addSubview:_ping];
+
+        _chevron = [[UIImageView alloc] initWithFrame:CGRectZero];
+        _chevron.contentMode = UIViewContentModeScaleAspectFit;
+        _chevron.userInteractionEnabled = NO;
+        _chevron.alpha = 0.45f;
+        [_plate addSubview:_chevron];
+
+        _pingButton = [[UIButton alloc] initWithFrame:CGRectZero];
+        _pingButton.backgroundColor = [UIColor clearColor];
+        _pingButton.accessibilityLabel = SenkoLocalizedText(@"Check ping");
+        [_plate addSubview:_pingButton];
 
         _picked = NO;
         _plateSized = NO;
@@ -178,20 +221,26 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
     [_accent release];
     [_title release];
     [_detail release];
+    [_transport release];
     [_unsupported release];
     [_ping release];
+    [_pingButton release];
     [_serverIcon release];
+    [_chevron release];
     [super dealloc];
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGRect bounds = self.contentView.bounds;
-    CGFloat pad = SenkoThemeIsIos16() ? 12.0f : 8.0f;
-    CGFloat vpad = SenkoThemeIsIos16() ? 4.0f : 6.0f;
+    CGFloat pad = SenkoThemeIsIos16() ? 10.0f : 7.0f;
+    CGFloat vpad = 3.0f;
     CGRect plate = CGRectInset(bounds, pad, vpad);
-    BOOL sizeChanged = !_plateSized || !CGRectEqualToRect(_plate.frame, plate);
-    _plate.frame = plate;
+    BOOL sizeChanged = !_plateSized || !CGSizeEqualToSize(_plate.bounds.size, plate.size);
+    /* the press pop and the row reveal both leave a transform on the plate, and
+       writing a frame through one of those folds the animation into the layout */
+    _plate.bounds = CGRectMake(0, 0, plate.size.width, plate.size.height);
+    _plate.center = CGPointMake(CGRectGetMidX(plate), CGRectGetMidY(plate));
     CGFloat cr = SenkoThemeCardRadius();
     SenkoBeginSilentLayers();
     if (sizeChanged) {
@@ -202,227 +251,139 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
         _plateSized = YES;
     }
     SenkoEndSilentLayers();
-    _accent.frame = CGRectMake(10, 10, SenkoThemeIsIos16() ? 4 : 6, _plate.bounds.size.height - 20);
+    _accent.frame = CGRectMake(9, 8, SenkoThemeIsIos16() ? 3 : 4,
+                               MAX(8.0f, _plate.bounds.size.height - 16));
     _accent.layer.cornerRadius = SenkoThemeIsIos16() ? 2 : 3;
-    CGFloat iconSize = SenkoThemeIsIos16() ? 40.0f : 38.0f;
+    CGFloat iconSize = SenkoThemeIsIos16() ? 34.0f : 32.0f;
     CGFloat iconY = floorf((_plate.bounds.size.height - iconSize) * 0.5f);
-    _serverIcon.frame = CGRectMake(20.0f, iconY, iconSize, iconSize);
+    _serverIcon.frame = CGRectMake(18.0f, iconY, iconSize, iconSize);
     _serverIcon.layer.cornerRadius = SenkoThemeIsIos16() ? 9.0f : 8.0f;
     _serverIcon.layer.masksToBounds = YES;
     _serverIcon.layer.borderColor = (SenkoThemeIsLight()
         ? [UIColor colorWithWhite:0 alpha:0.16f]
         : [UIColor colorWithWhite:1 alpha:0.20f]).CGColor;
-    CGFloat textX = 68.0f;
-    CGFloat textW = _plate.bounds.size.width - textX - 94.0f;
-    CGFloat detailW = _plate.bounds.size.width - textX - 12.0f;
+    CGFloat plateW = _plate.bounds.size.width;
+    CGFloat plateH = _plate.bounds.size.height;
+    CGFloat textX = 58.0f;
+    /* the right cluster is chevron, then reading, then bars, and the title has
+       to stop before all three or it overprints them on a 320pt screen */
+    /* reading then chevron, both centred on the row so the pair reads as one
+       control */
+    CGFloat rowMid = floorf(plateH * 0.5f);
+    CGFloat chevronW = 9.0f;
+    CGFloat chevronH = 14.0f;
+    CGFloat chevronX = plateW - 16.0f - chevronW;
+    _chevron.frame = CGRectMake(chevronX, rowMid - chevronH * 0.5f, chevronW, chevronH);
+    CGFloat pingW = 62.0f;
+    CGFloat pingH = 20.0f;
+    CGFloat pingX = chevronX - 8.0f - pingW;
+    _ping.frame = CGRectMake(pingX, rowMid - pingH * 0.5f, pingW, pingH);
+    _pingButton.frame = CGRectMake(pingX - 6.0f, rowMid - 15.0f,
+                                   chevronX - pingX + 6.0f, 30.0f);
+    CGFloat textW = pingX - textX - 8.0f;
+    CGFloat detailW = chevronX - textX - 10.0f;
     if (textW < 42.0f) textW = 42.0f;
     if (detailW < 42.0f) detailW = 42.0f;
-    _title.frame = CGRectMake(textX, 8, textW, 23);
-    _detail.frame = CGRectMake(textX, 38, detailW, 20);
-    _unsupported.frame = CGRectMake(textX, 57, detailW, 18);
-    _ping.frame = CGRectMake(_plate.bounds.size.width - 86, 8, 72, 24);
+    _title.frame = CGRectMake(textX, 2, textW, 22);
+    _detail.frame = CGRectMake(textX, 24, detailW, 14);
+    _transport.frame = CGRectMake(textX, 38, detailW, 13);
+    _unsupported.frame = CGRectMake(textX, 51, detailW, 11);
 }
 
 - (void)applyPicked:(BOOL)picked {
     _picked = picked;
-    UIColor *top;
-    UIColor *bottom;
 /* take one theme snapshot while the cell is being restyled */
     BOOL flat = SenkoThemeIsFlat();
     BOOL boy = SenkoThemeIsBoykisser();
     BOOL light = SenkoThemeIsLight();
     BOOL ios26 = SenkoThemeIsIos26();
     BOOL ios16 = SenkoThemeIsIos16() && !ios26;
-    BOOL miside = SenkoThemeIsMiside();
     BOOL frutiger = SenkoThemeIsFrutigeraero();
-    if (picked && miside) {
-        top = [UIColor colorWithRed:0.28 green:0.12 blue:0.32 alpha:1.0];
-        bottom = [UIColor colorWithRed:0.16 green:0.06 blue:0.20 alpha:1.0];
-    } else if (picked && boy) {
-        top = [UIColor colorWithRed:1.00 green:0.78 blue:0.88 alpha:1.0];
-        bottom = [UIColor colorWithRed:1.00 green:0.62 blue:0.80 alpha:1.0];
-    } else if (picked && frutiger) {
-        top = [UIColor colorWithRed:0.72 green:0.92 blue:1.00 alpha:1.0];
-        bottom = [UIColor colorWithRed:0.42 green:0.78 blue:0.96 alpha:1.0];
-    } else if (picked && ios26 && light) {
-        top = [UIColor colorWithWhite:1.0 alpha:0.78];
-        bottom = [UIColor colorWithWhite:1.0 alpha:0.52];
-    } else if (picked && ios26) {
-        top = [UIColor colorWithWhite:1.0 alpha:0.22];
-        bottom = [UIColor colorWithWhite:1.0 alpha:0.10];
-    } else if (picked && ios16 && light) {
-        top = [UIColor colorWithRed:0.88 green:0.93 blue:1.00 alpha:1.0];
-        bottom = [UIColor colorWithRed:0.80 green:0.88 blue:1.00 alpha:1.0];
-    } else if (picked && ios16) {
-        top = [UIColor colorWithRed:0.10 green:0.18 blue:0.32 alpha:1.0];
-        bottom = [UIColor colorWithRed:0.06 green:0.12 blue:0.24 alpha:1.0];
-    } else if (picked && flat && light) {
-        top = [UIColor colorWithRed:0.90 green:0.94 blue:1.00 alpha:1.0];
-        bottom = [UIColor colorWithRed:0.82 green:0.90 blue:1.00 alpha:1.0];
-    } else if (picked && flat) {
-        top = [UIColor colorWithRed:0.10 green:0.22 blue:0.40 alpha:1.0];
-        bottom = [UIColor colorWithRed:0.06 green:0.14 blue:0.28 alpha:1.0];
-    } else if (picked && light) {
-/* cream select on white paper */
-        top = [UIColor colorWithRed:1.000 green:0.920 blue:0.780 alpha:1.0];
-        bottom = [UIColor colorWithRed:1.000 green:0.780 blue:0.480 alpha:1.0];
-    } else if (picked) {
-        top = [UIColor colorWithRed:0.55 green:0.32 blue:0.10 alpha:1.0];
-        bottom = [UIColor colorWithRed:0.28 green:0.14 blue:0.04 alpha:1.0];
-    } else {
-        top = kCellHi;
-        bottom = kCellLo;
-    }
+
+/* the plate keeps the theme's own card colour in every state: selection is one
+   restrained outline, so nothing here may depend on picked */
     SenkoBeginSilentLayers();
     _plate.layer.shadowOpacity = 0.0f;
     _plate.layer.shadowRadius = 0;
     _plate.layer.shadowPath = nil;
     _plate.layer.masksToBounds = YES;
-    _plateGrad.colors = [NSArray arrayWithObjects:(id)top.CGColor, (id)bottom.CGColor, nil];
-    if (picked && (flat || boy || frutiger)) {
-        _plate.layer.borderWidth = 0.5f;
-        _plate.layer.borderColor = kAccentBlue.CGColor;
-    } else if (picked && light) {
-        _plate.layer.borderWidth = 0.5f;
-        _plate.layer.borderColor =
-            [UIColor colorWithRed:0.95 green:0.55 blue:0.18 alpha:0.70].CGColor;
-        _plate.layer.masksToBounds = YES;
-        _plate.layer.shadowOpacity = 0.0f;
-    } else if (picked) {
-        _plate.layer.borderWidth = 0.5f;
-        _plate.layer.borderColor =
-            [UIColor colorWithRed:1.0 green:0.55 blue:0.12 alpha:0.65].CGColor;
-        _plate.layer.masksToBounds = NO;
-        _plate.layer.shadowOpacity = 0.22f;
-        _plate.layer.shadowRadius = 1.5f;
-        _plate.layer.shadowOffset = CGSizeMake(0, 1);
-        _plate.layer.shadowColor = [UIColor blackColor].CGColor;
-    } else if (boy) {
+    _plateGrad.colors = [NSArray arrayWithObjects:
+        (id)kCellHi.CGColor, (id)kCellLo.CGColor, nil];
+
+    if (boy) {
         _plate.layer.borderWidth = 0.5f;
         _plate.layer.borderColor =
             [UIColor colorWithRed:1.0 green:0.55 blue:0.75 alpha:0.35].CGColor;
-        SenkoRemoveFrost(_plate);
     } else if (frutiger) {
         _plate.layer.borderWidth = 0.5f;
         _plate.layer.borderColor =
             [UIColor colorWithRed:0.20 green:0.75 blue:0.95 alpha:0.40].CGColor;
-        SenkoRemoveFrost(_plate);
     } else if (flat) {
-        _plate.layer.borderWidth = ios16 ? 0 : 0.5f;
+        _plate.layer.borderWidth = ios16 ? 0.0f : 0.5f;
         _plate.layer.borderColor = light
             ? [UIColor colorWithRed:0.70 green:0.74 blue:0.82 alpha:0.50].CGColor
             : [UIColor colorWithWhite:1 alpha:0.12].CGColor;
+    } else {
+        _plate.layer.borderWidth = 0.5f;
+        _plate.layer.borderColor = light
+            ? [UIColor colorWithWhite:0 alpha:0.10].CGColor
+            : [UIColor colorWithWhite:1 alpha:0.08].CGColor;
+    }
+    SenkoRemoveFrost(_plate);
+
+    if (ios26) {
+/* glass is an alpha gradient only; a frost uiview per cell would overdraw the
+   wallpaper once per visible row */
+        _plateGrad.colors = light
+            ? [NSArray arrayWithObjects:
+                (id)[UIColor colorWithWhite:1.0 alpha:0.36].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.14].CGColor, nil]
+            : [NSArray arrayWithObjects:
+                (id)[UIColor colorWithWhite:1.0 alpha:0.18].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.06].CGColor, nil];
         _plate.backgroundColor = [UIColor clearColor];
-    } else if (light) {
+        _plate.opaque = NO;
+        _plateGrad.opaque = NO;
         _plate.layer.borderWidth = 0.5f;
-        _plate.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.10].CGColor;
-        SenkoRemoveFrost(_plate);
-    } else {
-        _plate.layer.borderWidth = 0.5f;
-        _plate.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.08].CGColor;
-        SenkoRemoveFrost(_plate);
+        _plate.layer.borderColor = light
+            ? [UIColor colorWithWhite:1 alpha:0.70].CGColor
+            : [UIColor colorWithWhite:1 alpha:0.26].CGColor;
+        _plate.layer.masksToBounds = NO;
+        _plate.layer.shadowColor = [UIColor colorWithWhite:0 alpha:1].CGColor;
+        _plate.layer.shadowOpacity = light ? 0.10f : 0.28f;
+        _plate.layer.shadowRadius = 6.0f;
+        _plate.layer.shadowOffset = CGSizeMake(0, 3);
+        if (_plate.bounds.size.width > 1.0f)
+            _plate.layer.shadowPath = [UIBezierPath
+                bezierPathWithRoundedRect:_plate.bounds
+                             cornerRadius:SenkoThemeCardRadius()].CGPath;
+        _plateGrad.masksToBounds = YES;
+    } else if (ios16) {
+        _plateGrad.colors = light
+            ? [NSArray arrayWithObjects:
+                (id)[UIColor colorWithWhite:1.0 alpha:0.94].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.88].CGColor, nil]
+            : [NSArray arrayWithObjects:
+                (id)[UIColor colorWithWhite:1.0 alpha:0.14].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.08].CGColor, nil];
+        _plate.layer.borderWidth = 0.0f;
+        _plate.layer.masksToBounds = NO;
+        _plate.layer.shadowColor = [UIColor blackColor].CGColor;
+        _plate.layer.shadowOpacity = light ? 0.12f : 0.35f;
+        _plate.layer.shadowRadius = 8.0f;
+        _plate.layer.shadowOffset = CGSizeMake(0, 3);
+        if (_plate.bounds.size.width > 1.0f)
+            _plate.layer.shadowPath = [UIBezierPath
+                bezierPathWithRoundedRect:_plate.bounds
+                             cornerRadius:SenkoThemeCardRadius()].CGPath;
+    } else if (flat) {
+        _plate.backgroundColor = [UIColor clearColor];
     }
-    if (flat) {
-        SenkoRemoveFrost(_plate);
-        if (ios26) {
-/* glass = alpha gradient only; no frost uiview per cell (n times overdraw) */
-            if (picked && light) {
-                _plateGrad.colors = [NSArray arrayWithObjects:
-                    (id)[UIColor colorWithWhite:1.0 alpha:0.48].CGColor,
-                    (id)[UIColor colorWithWhite:1.0 alpha:0.22].CGColor, nil];
-            } else if (picked) {
-                _plateGrad.colors = [NSArray arrayWithObjects:
-                    (id)[UIColor colorWithWhite:1.0 alpha:0.22].CGColor,
-                    (id)[UIColor colorWithWhite:1.0 alpha:0.08].CGColor, nil];
-            } else if (light) {
-                _plateGrad.colors = [NSArray arrayWithObjects:
-                    (id)[UIColor colorWithWhite:1.0 alpha:0.36].CGColor,
-                    (id)[UIColor colorWithWhite:1.0 alpha:0.14].CGColor, nil];
-            } else {
-                _plateGrad.colors = [NSArray arrayWithObjects:
-                    (id)[UIColor colorWithWhite:1.0 alpha:0.18].CGColor,
-                    (id)[UIColor colorWithWhite:1.0 alpha:0.06].CGColor, nil];
-            }
-            _plate.backgroundColor = [UIColor clearColor];
-            _plate.opaque = NO;
-            _plateGrad.opaque = NO;
-            _plate.layer.borderWidth = 0.5f;
-            _plate.layer.borderColor = light
-                ? [UIColor colorWithWhite:1 alpha:0.70].CGColor
-                : [UIColor colorWithWhite:1 alpha:0.26].CGColor;
-/* soft contact shadow; tight radius is cheaper on armv7 */
-            _plate.layer.masksToBounds = NO;
-            _plate.layer.shadowColor = [UIColor colorWithWhite:0 alpha:1].CGColor;
-            _plate.layer.shadowOpacity = light ? 0.10f : 0.28f;
-            _plate.layer.shadowRadius = 6.0f;
-            _plate.layer.shadowOffset = CGSizeMake(0, 3);
-            if (_plate.bounds.size.width > 1.0f) {
-                UIBezierPath *sp = [UIBezierPath bezierPathWithRoundedRect:_plate.bounds
-                                                              cornerRadius:SenkoThemeCardRadius()];
-                _plate.layer.shadowPath = sp.CGPath;
-            }
-            _plateGrad.masksToBounds = YES;
-/* no frost install on list cells */
-        } else if (ios16) {
-            if (picked && light) {
-                _plateGrad.colors = [NSArray arrayWithObjects:
-                    (id)[UIColor colorWithRed:0.86 green:0.92 blue:1.00 alpha:0.96].CGColor,
-                    (id)[UIColor colorWithRed:0.78 green:0.88 blue:1.00 alpha:0.94].CGColor, nil];
-            } else if (picked) {
-                _plateGrad.colors = [NSArray arrayWithObjects:
-                    (id)[UIColor colorWithRed:0.16 green:0.24 blue:0.42 alpha:0.95].CGColor,
-                    (id)[UIColor colorWithRed:0.10 green:0.14 blue:0.28 alpha:0.95].CGColor, nil];
-            } else if (light) {
-                _plateGrad.colors = [NSArray arrayWithObjects:
-                    (id)[UIColor colorWithWhite:1.0 alpha:0.94].CGColor,
-                    (id)[UIColor colorWithWhite:1.0 alpha:0.88].CGColor, nil];
-            } else {
-                _plateGrad.colors = [NSArray arrayWithObjects:
-                    (id)[UIColor colorWithWhite:1.0 alpha:0.14].CGColor,
-                    (id)[UIColor colorWithWhite:1.0 alpha:0.08].CGColor, nil];
-            }
-            _plate.layer.borderWidth = 0;
-            _plate.layer.borderColor = [UIColor clearColor].CGColor;
-            _plate.layer.masksToBounds = NO;
-            _plate.layer.shadowColor = [UIColor blackColor].CGColor;
-            _plate.layer.shadowOpacity = light ? 0.12f : 0.35f;
-            _plate.layer.shadowRadius = 8.0f;
-            _plate.layer.shadowOffset = CGSizeMake(0, 3);
-/* shadowpath only when bounds known; skip zero rects */
-            if (_plate.bounds.size.width > 1.0f) {
-                UIBezierPath *sp = [UIBezierPath bezierPathWithRoundedRect:_plate.bounds
-                                                              cornerRadius:SenkoThemeCardRadius()];
-                _plate.layer.shadowPath = sp.CGPath;
-            }
-            _plateGrad.masksToBounds = YES;
-        } else if (picked && light) {
-            _plateGrad.colors = [NSArray arrayWithObjects:
-                (id)[UIColor colorWithRed:0.86 green:0.91 blue:1.00 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.78 green:0.86 blue:0.98 alpha:1.0].CGColor, nil];
-        } else if (picked) {
-            _plateGrad.colors = [NSArray arrayWithObjects:
-                (id)[UIColor colorWithRed:0.12 green:0.22 blue:0.40 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.08 green:0.14 blue:0.28 alpha:1.0].CGColor, nil];
-        } else if (light) {
-            _plateGrad.colors = [NSArray arrayWithObjects:
-                (id)[UIColor colorWithRed:0.97 green:0.97 blue:0.98 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.93 green:0.94 blue:0.96 alpha:1.0].CGColor, nil];
-        } else {
-            _plateGrad.colors = [NSArray arrayWithObjects:
-                (id)[UIColor colorWithRed:0.16 green:0.17 blue:0.20 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.12 green:0.13 blue:0.16 alpha:1.0].CGColor, nil];
-        }
-    } else {
-        SenkoRemoveFrost(_plate);
-    }
+
     if (picked) {
-        UIColor *edge = (flat || frutiger)
-            ? kAccentBlue
-            : (boy
-               ? [UIColor colorWithRed:1.0 green:0.30 blue:0.64 alpha:1.0]
-               : [UIColor colorWithRed:1.0 green:0.55 blue:0.12 alpha:1.0]);
-        _plate.layer.borderWidth = 1.0f;
-        _plate.layer.borderColor = edge.CGColor;
+/* selection stays quiet: keep the theme card and outline it in the accent */
+        _plate.layer.borderWidth = 0.75f;
+        _plate.layer.borderColor = [kAccentBlue colorWithAlphaComponent:0.58f].CGColor;
     }
 /* only rasterize glass themes; classic cards scroll cheaper without offscreen bitmaps */
     _plate.layer.shouldRasterize = ios16 || ios26;
@@ -431,26 +392,32 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
     SenkoEndSilentLayers();
 }
 
-- (void)styleLabelsForPicked:(BOOL)picked {
-/* cream text only on dark select plates */
-    BOOL darkPlate = picked && !SenkoThemeIsFlat() && !SenkoThemeIsBoykisser()
-                     && !SenkoThemeIsLight();
-    if (darkPlate) {
-        SenkoStyleInkOnDark(_title);
-        SenkoStyleMutedOnDark(_detail);
-    } else {
-        SenkoStyleInkLabel(_title);
-        SenkoStyleMutedLabel(_detail);
-    }
+/* the plate carries the theme's own card colour in every state, so the labels
+   always take the theme ink; the on-dark variants belonged to the selected
+   plate that no longer turns dark */
+- (void)styleLabels {
+    SenkoStyleInkLabel(_title);
+    SenkoStyleMutedLabel(_detail);
+    SenkoStyleMutedLabel(_transport);
+}
+
+- (void)revealAtIndex:(NSUInteger)index {
+    SenkoRevealView(_plate, index);
+}
+
+- (void)setHighlighted:(BOOL)highlighted animated:(BOOL)animated {
+    [super setHighlighted:highlighted animated:animated];
+    SenkoPressPop(_plate, highlighted);
 }
 
 - (void)configureWithServer:(SenkoServer *)server
                       picked:(BOOL)picked
                    hideLinks:(BOOL)hideLinks
-                     pingVal:(NSNumber *)ping {
+                     pingVal:(NSNumber *)ping
+                 displayName:(NSString *)displayName {
     [self applyPicked:picked];
 /* restyle each bind; reuse may outlive theme switch */
-    [self styleLabelsForPicked:picked];
+    [self styleLabels];
     _accent.backgroundColor = server->supported
         ? kAccentBlue
         : [UIColor colorWithRed:0.92 green:0.16 blue:0.12 alpha:1.0];
@@ -460,10 +427,12 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
         ? UIViewContentModeScaleAspectFill : UIViewContentModeScaleAspectFit;
     _serverIcon.backgroundColor = hasFlag
         ? [UIColor clearColor] : [UIColor colorWithWhite:1.0f alpha:0.94f];
-    _title.text = [server->remark length]
-        ? SenkoCellRemark(server->remark) : ServerEndpointLabel(server, hideLinks);
-    _detail.text = [NSString stringWithFormat:@"%@      %@",
-                    ServerProtocolLabel(server), ServerEndpointLabel(server, hideLinks)];
+    NSString *title = [displayName length] ? displayName
+        : ([server->remark length] ? SenkoCellRemark(server->remark)
+                                   : ServerEndpointLabel(server, hideLinks));
+    _title.text = title;
+    _detail.text = ServerEndpointLabel(server, hideLinks);
+    _transport.text = ServerProtocolLabel(server);
     _unsupported.hidden = server->supported;
     if (!server->supported) {
         _unsupported.textColor = SenkoThemeIsLight()
@@ -471,20 +440,19 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
             : [UIColor colorWithRed:1.0 green:0.45 blue:0.36 alpha:1.0];
     }
 
-    BOOL darkPlate = picked && !SenkoThemeIsFlat() && !SenkoThemeIsBoykisser()
-                     && !SenkoThemeIsLight();
+    _chevron.image = SenkoIconChevron(14.0f, kInkMuted);
+    _chevron.hidden = NO;
     if (!ping) {
         _ping.text = picked ? @"   " : @"";
-        if (darkPlate)
-            SenkoStyleAccentOnDark(_ping);
-        else SenkoStyleAccentLabel(_ping);
+        SenkoStyleAccentLabel(_ping);
     } else if ([ping intValue] >= 0) {
         _ping.text = [NSString stringWithFormat:@"%d ms", [ping intValue]];
-        if (darkPlate)
-            SenkoStyleAccentOnDark(_ping);
-        else SenkoStyleAccentLabel(_ping);
+        SenkoStyleAccentLabel(_ping);
+    } else if ([ping intValue] == -3) {
+        _ping.text = SenkoLocalizedText(@"checking");
+        SenkoStyleAccentLabel(_ping);
     } else {
-        _ping.text = @"timeout";
+        _ping.text = SenkoLocalizedText(@"failed");
         _ping.textColor = SenkoThemeIsLight()
             ? [UIColor colorWithRed:0.72 green:0.10 blue:0.08 alpha:1.0]
             : [UIColor colorWithRed:1.0 green:0.45 blue:0.36 alpha:1.0];
@@ -493,23 +461,42 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
     }
 }
 
+- (void)setPingTarget:(id)target action:(SEL)action serverIndex:(int)serverIndex {
+    [_pingButton removeTarget:nil action:NULL forControlEvents:UIControlEventTouchUpInside];
+    _pingButton.tag = serverIndex;
+    _pingButton.hidden = !target || !action || serverIndex < 0;
+    if (!_pingButton.hidden) {
+        NSString *shown = [_ping.text stringByTrimmingCharactersInSet:
+                           [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        [_pingButton setImage:[shown length] ? nil : GaugeIcon(18.0f, kAccentBlue)
+                      forState:UIControlStateNormal];
+        _pingButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentRight;
+        _pingButton.imageEdgeInsets = UIEdgeInsetsMake(0, 0, 0, 12.0f);
+        [_pingButton addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
+    } else {
+        [_pingButton setImage:nil forState:UIControlStateNormal];
+    }
+}
+
 - (void)configureWithTitle:(NSString *)title
                      detail:(NSString *)detail
                      picked:(BOOL)picked
                      status:(NSString *)status {
     [self applyPicked:picked];
-    [self styleLabelsForPicked:picked];
+    [self styleLabels];
     _accent.backgroundColor = kAccentBlue;
     _serverIcon.image = [UIImage imageNamed:@"server-placeholder.png"];
     _serverIcon.contentMode = UIViewContentModeScaleAspectFit;
     _serverIcon.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.94f];
     _title.text = title;
     _detail.text = detail;
+    _transport.text = nil;
     _unsupported.hidden = YES;
     _ping.text = status ? status : (picked ? @"   " : @"");
-    if (picked && !SenkoThemeIsFlat() && !SenkoThemeIsBoykisser() && !SenkoThemeIsLight())
-        SenkoStyleAccentOnDark(_ping);
-    else SenkoStyleAccentLabel(_ping);
+    /* the amneziawg row has no per-server card of its own */
+    _chevron.hidden = YES;
+    [self setPingTarget:nil action:NULL serverIndex:-1];
+    SenkoStyleAccentLabel(_ping);
 }
 
 - (void)prepareForReuse {
@@ -517,7 +504,13 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
 /* keep layers; only clear text on reuse */
     _title.text = nil;
     _detail.text = nil;
+    _transport.text = nil;
     _ping.text = nil;
+    _plate.transform = CGAffineTransformIdentity;
+    /* a row can be recycled mid entrance, so its lift has to be cleared or the
+       next binding inherits the offset */
+    self.contentView.transform = CGAffineTransformIdentity;
+    self.contentView.alpha = 1.0f;
     _serverIcon.image = [UIImage imageNamed:@"server-placeholder.png"];
     _serverIcon.contentMode = UIViewContentModeScaleAspectFit;
     _serverIcon.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.94f];

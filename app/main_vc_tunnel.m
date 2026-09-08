@@ -5,6 +5,79 @@
 
 @implementation MainVC (Tunnel)
 
+/* the headline names the state, the detail line under it keeps carrying the
+   daemon's own wording, so a failure still shows its exact reason */
+- (NSString *)stateHeadline {
+    if ([_state isEqualToString:@"connecting"])
+        return SenkoLocalizedText(@"Connecting");
+    if ([_state isEqualToString:@"connected"])
+        return SenkoLocalizedText(@"Connected");
+    return SenkoLocalizedText(@"Disconnected");
+}
+
+/* the detail line answers "which server, how fast" while the headline answers
+   "what is the tunnel doing", so the two never repeat each other */
+/* h:mm:ss once past an hour, m:ss below, which is what a session actually
+   reads like on this screen */
+static NSString *SenkoFormatUptime(long seconds) {
+    if (seconds <= 0) return nil;
+    long h = seconds / 3600;
+    long m = (seconds % 3600) / 60;
+    long s = seconds % 60;
+    if (h > 0)
+        return [NSString stringWithFormat:@"%ld:%02ld:%02ld", h, m, s];
+    return [NSString stringWithFormat:@"%ld:%02ld", m, s];
+}
+
+/* the label ticks once a second while a tunnel is up and stops otherwise, so an
+   idle screen schedules nothing */
+- (void)syncUptimeTicker {
+    BOOL wanted = [_state isEqualToString:@"connected"] && _tunnelUptime > 0;
+    if (wanted == (_uptimeTimer != nil)) return;
+    if (!wanted) {
+        [_uptimeTimer invalidate];
+        _uptimeTimer = nil;
+        return;
+    }
+    _uptimeTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
+                                                    target:self
+                                                  selector:@selector(uptimeTick)
+                                                  userInfo:nil
+                                                   repeats:YES];
+}
+
+- (void)uptimeTick {
+    if (![_state isEqualToString:@"connected"]) {
+        [self syncUptimeTicker];
+        return;
+    }
+    SetStatusDefault(_statusLabel, [self selectionSummary]);
+}
+
+- (NSString *)selectionSummary {
+    if (_selectedBackend == SenkoBackendAmneziaWG)
+        return SenkoLocalizedText(@"AmneziaWG profile");
+    SenkoServer *picked = nil;
+    for (SenkoServer *s in _servers) {
+        if (s->index == _selectedSrvIdx) { picked = s; break; }
+    }
+    if (!picked) return SenkoLocalizedText(@"No server selected");
+    NSString *name = [picked->remark length]
+        ? SenkoServerDisplayName(picked->remark)
+        : (picked->host ? picked->host : @"server");
+    NSMutableString *line = [NSMutableString stringWithString:name];
+    NSNumber *ms = [_serverStatus objectForKey:[NSNumber numberWithInt:picked->index]];
+    if (ms && [ms intValue] >= 0)
+        [line appendFormat:@" · %d ms", [ms intValue]];
+    if ([_state isEqualToString:@"connected"] && _tunnelUptime > 0) {
+        long elapsed = _tunnelUptime +
+            (long)(CACurrentMediaTime() - _tunnelUptimeAt);
+        NSString *age = SenkoFormatUptime(elapsed);
+        if (age) [line appendFormat:@" · %@", age];
+    }
+    return line;
+}
+
 - (void)applyState {
     BOOL connecting = [_state isEqualToString:@"connecting"];
     BOOL connected = [_state isEqualToString:@"connected"];
@@ -13,38 +86,20 @@
         [NSObject cancelPreviousPerformRequestsWithTarget:self
                                                  selector:@selector(refresh)
                                                    object:nil];
-/* recolor connect and keep its transform */
-    if (_connectBtn) {
-        CGAffineTransform t = _connectBtn.transform;
-        _connectBtn.transform = CGAffineTransformIdentity;
-        StyleDomeColors(_connectBtn,
-                        active ? kConnOn : kIdleGrey,
-                        active ? kConnOnLo : kIdleGreyLo);
-        [_connectBtn bringSubviewToFront:_connectBtn.titleLabel];
-        _connectBtn.transform = t;
-        [_connectBtn setTitle:(connected ? @"ON" : (connecting ? @"..." : @"OFF"))
-                     forState:UIControlStateNormal];
-    }
+    SenkoHomeApplyStatus(&_ui, _state, [self stateHeadline], YES);
 
-/* show live state before the last error */
-    NSString *strip = nil;
-    if (connecting) {
-        strip = @"connecting...";
-    } else if (connected) {
+    if (connected)
         [self setLastErr:nil];
-        strip = @"connected";
-    } else if (_lastErr && [_lastErr length]) {
-        strip = _lastErr;
-    } else if ([_state isEqualToString:@"error"]) {
-        strip = @"idle";
+    else if ([_state isEqualToString:@"error"]) {
         [_state release];
         _state = [@"idle" copy];
-    } else {
-        strip = _state ? [_state lowercaseString] : @"idle";
     }
-    SetStatusDefault(_statusLabel, strip);
+    /* a failure is announced by the alert that setLastErr raises; repeating it
+       as body text next to the button is what crowded the card */
+    SetStatusDefault(_statusLabel, [self selectionSummary]);
+    [self syncUptimeTicker];
+    (void)active;
 
-/* update the wallpaper wash */
     [self applyBackgroundForCurrentState:YES];
 
     if (_busy)
@@ -52,7 +107,6 @@
     [self applyServerListLock];
 }
 
-/* clear the vpn glyph after tunnel failure */
 static void senkoClearVpnIcon(void) {
     const char *path = "/var/mobile/Library/Preferences/com.senko.vpnicon.state";
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -75,7 +129,7 @@ static void senkoClearVpnIcon(void) {
             [self setLastErr:nil];
         [self applyState];
         [self setToggleBusy:NO];
-/* pull status after a stuck connect */
+/* a delayed pull resolves helpers that exit without delivering a callback */
         [self refresh];
     }];
 }
@@ -89,7 +143,7 @@ static void senkoClearVpnIcon(void) {
     [_ctl awgStatus:^(NSString *status) {
         NSString *s = [status stringByTrimmingCharactersInSet:
                        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-/* ignore a dead awg profile */
+/* stale awg state must not make a stopped helper appear connected */
         BOOL awgLive = [s isEqualToString:@"connecting"] ||
                        [s isEqualToString:@"connected"];
         if (awgLive) {
@@ -138,7 +192,12 @@ static void senkoClearVpnIcon(void) {
         if (_selectedSrvIdx < 0)
             [self syncSelectionFromDaemon];
         if (_selectedSrvIdx < 0) {
-            SetStatusDefault(_statusLabel, @"pick a server first");
+/* the user asked for this by tapping connect, so the alert has to show even
+   when the same message was raised a moment ago */
+            [_lastAlertErr release];
+            _lastAlertErr = nil;
+            [self setLastErr:@"no configuration is selected"];
+            [self applyState];
             [self setToggleBusy:NO];
             return;
         }
@@ -176,7 +235,7 @@ static void senkoClearVpnIcon(void) {
                     }
                 }
             }
-/* tear down a missing or stuck reply */
+/* missing replies leave routing active unless the timeout tears it down */
             BOOL stuckConnecting = finalState &&
                 [finalState isEqualToString:@"connecting"] && !errReason;
             if (!reply || stuckConnecting) {
@@ -196,7 +255,6 @@ static void senkoClearVpnIcon(void) {
                 [_state isEqualToString:@"idle"])
                 senkoClearVpnIcon();
             [self applyState];
-/* keep catalog data out of the status strip */
             [_ctl listCatalog:^(NSArray *servers, NSArray *subs, NSArray *order) {
                 if (servers) [self applyCatalog:servers subs:subs order:order];
                 [self setToggleBusy:NO];
@@ -384,23 +442,74 @@ static void senkoClearVpnIcon(void) {
     }
 }
 
-- (void)showAWGMenu {
-    if (_actionSheet) {
-        [_actionSheet dismissWithClickedButtonIndex:_actionSheet.cancelButtonIndex animated:NO];
-        [_actionSheet release];
-        _actionSheet = nil;
+- (BOOL)hasManualServers {
+    for (SenkoServer *sv in _servers)
+        if (sv->group < 0) return YES;
+    return NO;
+}
+
+/* the manual group owns the saved amneziawg profile and the single step that
+   empties the group, so both live in one flat sheet */
+- (void)showManualMenu {
+    [self dismissCurrentActionSheetAnimated:NO];
+    BOOL canClear = [self hasManualServers];
+    BOOL hasAWG = [self hasAWGProfile];
+    if (!canClear && !hasAWG) return;
+    UIActionSheet *as = nil;
+    if (hasAWG) {
+        as = [[UIActionSheet alloc]
+              initWithTitle:SenkoLocalizedText(@"Manual")
+              delegate:self
+              cancelButtonTitle:SenkoLocalizedText(@"Cancel")
+              destructiveButtonTitle:canClear ? SenkoLocalizedText(@"Delete all servers") : nil
+              otherButtonTitles:SenkoLocalizedText(@"AmneziaWG: refresh"),
+                                SenkoLocalizedText(@"AmneziaWG: check ping"),
+                                SenkoLocalizedText(@"AmneziaWG: edit details"),
+                                SenkoLocalizedText(@"AmneziaWG: remove profile"), nil];
+    } else {
+        as = [[UIActionSheet alloc]
+              initWithTitle:SenkoLocalizedText(@"Manual")
+              delegate:self
+              cancelButtonTitle:SenkoLocalizedText(@"Cancel")
+              destructiveButtonTitle:SenkoLocalizedText(@"Delete all servers")
+              otherButtonTitles:nil];
     }
-    UIActionSheet *as = [[UIActionSheet alloc]
-                         initWithTitle:SenkoLocalizedText(@"AmneziaWG")
-                         delegate:self
-                         cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-                         destructiveButtonTitle:SenkoLocalizedText(@"Remove")
-                         otherButtonTitles:SenkoLocalizedText(@"Refresh now"),
-                                           SenkoLocalizedText(@"Check ping"),
-                                           SenkoLocalizedText(@"Edit details"), nil];
-    as.tag = 41;
+    as.tag = 42;
     _actionSheet = as;
     [as showInView:self.view];
+}
+
+- (void)confirmClearManual {
+    UIAlertView *av = [[[UIAlertView alloc]
+        initWithTitle:SenkoLocalizedText(@"Delete all servers")
+              message:SenkoLocalizedText(@"Every server in the Manual group is removed. Subscriptions are not touched.")
+             delegate:self
+    cancelButtonTitle:SenkoLocalizedText(@"Cancel")
+    otherButtonTitles:SenkoLocalizedText(@"Delete"), nil] autorelease];
+    av.tag = 5;
+    [av show];
+}
+
+- (void)clearManualServers {
+    if ([self isListMutationLocked]) {
+        SetStatusDefault(_statusLabel, @"disconnect to remove");
+        return;
+    }
+    _checkGeneration++;
+    SetStatusRefresh(_statusLabel, @"removing manual servers...");
+    [_ctl clearManualServers:^(NSString *reply) {
+        NSString *clean = [reply stringByTrimmingCharactersInSet:
+                           [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (![clean length] || [clean hasPrefix:@"ERR"]) {
+            [self setLastErr:[clean hasPrefix:@"ERR "]
+                             ? [clean substringFromIndex:4]
+                             : @"daemon offline: cannot remove"];
+            [self applyState];
+        } else {
+            SetStatusRefresh(_statusLabel, @"manual servers removed");
+        }
+        [self refresh];
+    }];
 }
 
 

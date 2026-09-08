@@ -4,23 +4,38 @@
 
 - (void)addPressed {
     if (self.presentedViewController) return;
-    if (_actionSheet) {
-        [_actionSheet dismissWithClickedButtonIndex:_actionSheet.cancelButtonIndex animated:YES];
-        [_actionSheet release];
-        _actionSheet = nil;
-    }
+    [self dismissCurrentActionSheetAnimated:YES];
+/* one entry per source, not per format: the daemon parser decides what the
+   content is, so there is no reason to make the user classify it first */
     UIActionSheet *sheet = [[[UIActionSheet alloc]
         initWithTitle:SenkoLocalizedText(@"Add")
              delegate:self
         cancelButtonTitle:SenkoLocalizedText(@"Cancel")
         destructiveButtonTitle:nil
-        otherButtonTitles:SenkoLocalizedText(@"Paste link"),
-                          SenkoLocalizedText(@"Scan QR"),
-                          SenkoLocalizedText(@"Subscription"),
-                          SenkoLocalizedText(@"Type link"),
-                          SenkoLocalizedText(@"Import file"), nil] autorelease];
+        otherButtonTitles:SenkoLocalizedText(@"Add subscription"),
+                          SenkoLocalizedText(@"Paste from clipboard"),
+                          SenkoLocalizedText(@"QR code"),
+                          SenkoLocalizedText(@"Import from file"), nil] autorelease];
     _actionSheet = [sheet retain];
     [sheet showInView:self.view];
+}
+
+- (void)pasteFromClipboard {
+    NSString *s = [[UIPasteboard generalPasteboard] string];
+    if ([s length]) [self importText:s];
+    else {
+        [self setLastErr:@"the clipboard is empty"];
+        [self applyState];
+    }
+}
+
+- (void)dismissCurrentActionSheetAnimated:(BOOL)animated {
+    UIActionSheet *sheet = _actionSheet;
+    if (!sheet) return;
+    _actionSheet = nil;
+    sheet.delegate = nil;
+    [sheet dismissWithClickedButtonIndex:sheet.cancelButtonIndex animated:animated];
+    [sheet release];
 }
 
 - (void)actionSheet:(UIActionSheet *)sheet didDismissWithButtonIndex:(NSInteger)idx {
@@ -152,20 +167,36 @@
 - (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)idx {
     if (idx == sheet.cancelButtonIndex) return;
     NSInteger first = sheet.firstOtherButtonIndex;
-    if (sheet.tag == 41) {
-        if (idx == first) {
+    if (sheet.tag == 42) {
+        if (idx == sheet.destructiveButtonIndex) {
+            [self confirmClearManual];
+        } else if (idx == first) {
             [self awgRefreshTapped:nil];
         } else if (idx == first + 1) {
             [self awgPingTapped:nil];
         } else if (idx == first + 2) {
             [self editAWGProfile];
-        } else if (idx == sheet.destructiveButtonIndex) {
+        } else if (idx == first + 3) {
             [self removeSavedAWGProfile];
         }
         return;
     }
-    if (sheet.tag == 40) {
-        int sub = _menuSubIdx;
+    if (sheet.tag >= 500000 && sheet.tag < 600000) {
+        NSArray *modes = [NSArray arrayWithObjects:@"tcp", @"proxy", @"tunnel", @"handshake", nil];
+        NSInteger choice = idx - first;
+        if (choice >= 0 && choice < (NSInteger)[modes count]) {
+            [_pingMode release];
+            _pingMode = [[modes objectAtIndex:choice] copy];
+            [self pingServersInSub:(int)(sheet.tag - 500000)];
+        }
+        return;
+    }
+    if (sheet.tag >= 400000 && sheet.tag < 500000) {
+        int sub = (int)(sheet.tag - 400000);
+        if (![self subscriptionByIndex:sub]) {
+            SetStatusDefault(_statusLabel, @"subscription not found");
+            return;
+        }
         if (idx == first) {
             SetStatusRefresh(_statusLabel, @"refreshing subscription...");
             [_ctl refreshSubIndex:sub reply:^(NSString *reply) {
@@ -177,33 +208,65 @@
                 [self refresh];
             }];
         } else if (idx == first + 1) {
-            [self pingServersInSub:sub];
+            UIActionSheet *checks = [[[UIActionSheet alloc]
+                initWithTitle:SenkoLocalizedText(@"Check type") delegate:self
+                cancelButtonTitle:SenkoLocalizedText(@"Cancel") destructiveButtonTitle:nil
+                otherButtonTitles:SenkoLocalizedText(@"TCP port only"),
+                                  SenkoLocalizedText(@"Through current local proxy"),
+                                  SenkoLocalizedText(@"Current tunnel internet access"),
+                                  SenkoLocalizedText(@"Full profile check"), nil] autorelease];
+            checks.tag = 500000 + sub;
+            [checks showInView:self.view];
         } else if (idx == first + 2) {
+            SenkoSub *entry = [self subscriptionByIndex:sub];
+            if (entry) {
+                SubscriptionInfoVC *info = [[[SubscriptionInfoVC alloc]
+                    initWithSubscription:entry] autorelease];
+                UINavigationController *nav = [[[UINavigationController alloc]
+                    initWithRootViewController:info] autorelease];
+                [self presentViewController:nav animated:YES completion:nil];
+            }
+        } else if (idx == first + 3) {
             [self editSubscriptionIndex:sub];
         } else if (idx == sheet.destructiveButtonIndex) {
-            if ([self isServerSelectionLocked]) {
+            if ([self isListMutationLocked]) {
                 SetStatusDefault(_statusLabel, @"disconnect to remove");
                 return;
             }
+            _subscriptionMutationBusy = YES;
+            _checkGeneration++;
+            NSSet *pinging = [_pingingSubs copy];
+            [_pingingSubs removeAllObjects];
+            [self updateSubscriptionPingButtons:pinging];
+            [pinging release];
+            [_pingQueue release];
+            _pingQueue = nil;
+            _pingPending = 0;
+            [self applyServerListLock];
+            SetStatusRefresh(_statusLabel, @"removing subscription...");
             [_ctl deleteSubIndex:sub reply:^(NSString *reply) {
-                (void)reply;
+                _subscriptionMutationBusy = NO;
+                [self applyServerListLock];
+                if (!reply || [reply hasPrefix:@"ERR"]) {
+                    [self setLastErr:reply ? [reply stringByTrimmingCharactersInSet:
+                         [NSCharacterSet whitespaceAndNewlineCharacterSet]]
+                                             : @"daemon offline: cannot remove subscription"];
+                    [self applyState];
+                } else {
+                    SetStatusRefresh(_statusLabel, @"subscription removed");
+                }
                 [self refresh];
-                SetStatusRefresh(_statusLabel, @"subscription removed");
             }];
         }
         return;
     }
     if (idx == first) {
-        NSString *s = [[UIPasteboard generalPasteboard] string];
-        if ([s length]) [self importText:s];
-        else SetStatusDefault(_statusLabel, @"clipboard empty");
-    } else if (idx == first + 1) {
-        [self openScanner];
-    } else if (idx == first + 2) {
         [self promptSubscription];
+    } else if (idx == first + 1) {
+        [self pasteFromClipboard];
+    } else if (idx == first + 2) {
+        [self openScanner];
     } else if (idx == first + 3) {
-        [self promptManualLink];
-    } else if (idx == first + 4) {
         [self promptImportFile];
     }
 }
@@ -250,8 +313,68 @@
     }];
 }
 
+/* one line and a scheme senko can dial: the single-link path keeps its precise
+   per-link error text instead of the bulk import summary */
+static BOOL SenkoLooksLikeSingleServerLink(NSString *s) {
+    if ([s rangeOfString:@"\n"].location != NSNotFound) return NO;
+    if ([s hasPrefix:@"vless://"] || [s hasPrefix:@"socks5://"]) return YES;
+    if (![s hasPrefix:@"http://"] && ![s hasPrefix:@"https://"]) return NO;
+    NSURL *u = [NSURL URLWithString:s];
+    if (!u) return NO;
+    if ([u user] || [u password]) return YES;
+    if ([u fragment] != nil) return YES;
+    return [u port] != nil &&
+           ([[u path] length] == 0 || [[u path] isEqualToString:@"/"]);
+}
+
+static BOOL SenkoLooksLikeSubscriptionURL(NSString *s) {
+    return [s rangeOfString:@"\n"].location == NSNotFound &&
+           ([s hasPrefix:@"http://"] || [s hasPrefix:@"https://"]);
+}
+
+/* everything the app cannot classify from one line goes to the daemon, which
+   owns the parsers for base64 feeds, xray json, clash yaml and surge profiles */
+- (void)importContentData:(NSData *)data {
+    if (![data length]) {
+        [self setLastErr:@"unknown content type"];
+        [self applyState];
+        return;
+    }
+    SetStatusDefault(_statusLabel, @"reading content...");
+    [_ctl ensureDaemon:^(BOOL up, NSString *detail) {
+        if (!up) {
+            [self setLastErr:detail ? detail : @"daemon offline: cannot import"];
+            [self applyState];
+            return;
+        }
+        [_ctl importContent:data reply:^(NSString *reply) {
+            NSString *clean = [reply stringByTrimmingCharactersInSet:
+                               [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (![clean length]) {
+                [self setLastErr:@"daemon offline: cannot import"];
+                [self applyState];
+                return;
+            }
+            if ([clean hasPrefix:@"OK "]) {
+                [self setLastErr:nil];
+                SetStatusRefresh(_statusLabel, [clean substringFromIndex:3]);
+                [self refresh];
+                return;
+            }
+            [self setLastErr:[clean hasPrefix:@"ERR "]
+                             ? [clean substringFromIndex:4] : clean];
+            [self applyState];
+        }];
+    }];
+}
+
 - (void)importText:(NSString *)s {
     s = [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (![s length]) {
+        [self setLastErr:@"unknown content type"];
+        [self applyState];
+        return;
+    }
     if ([self isNativeAWGText:s]) {
         [self importAWGText:s];
         return;
@@ -261,27 +384,35 @@
         [self applyState];
         return;
     }
-    BOOL isServer = [s hasPrefix:@"vless://"] || [s hasPrefix:@"socks5://"];
-    if (!isServer && ([s hasPrefix:@"http://"] || [s hasPrefix:@"https://"])) {
-        NSURL *u = [NSURL URLWithString:s];
-        if (u) {
-            BOOL hasCreds = [u user] || [u password];
-            BOOL hasFragment = [u fragment] != nil;
-            BOOL hasPortNoPath = [u port] && ([[u path] length] == 0 || [[u path] isEqualToString:@"/"]);
-            if (hasCreds || hasFragment || hasPortNoPath) {
-                isServer = YES;
-            }
-        }
-    }
 
-    if (isServer) {
+    if (SenkoLooksLikeSingleServerLink(s)) {
         [self addServerLink:s];
-    } else if ([s hasPrefix:@"http://"] || [s hasPrefix:@"https://"]) {
-        [self addSubscriptionURL:s name:[self nameFromURL:s]];
-    } else {
-        SetStatusDefault(_statusLabel, @"not a valid server or subscription link");
+        return;
     }
-}- (void)addServerLink:(NSString *)link {
+    if (SenkoLooksLikeSubscriptionURL(s)) {
+        if ([s hasPrefix:@"http://"])
+            [self confirmInsecureSubscriptionURL:s];
+        else
+            [self addSubscriptionURL:s name:[self nameFromURL:s]];
+        return;
+    }
+    [self importContentData:[s dataUsingEncoding:NSUTF8StringEncoding]];
+}
+
+- (void)confirmInsecureSubscriptionURL:(NSString *)url {
+    if (![url length]) return;
+    [_pendingInsecureURL release];
+    _pendingInsecureURL = [url copy];
+    UIAlertView *alert = [[[UIAlertView alloc]
+        initWithTitle:SenkoLocalizedText(@"Unencrypted subscription")
+              message:SenkoLocalizedText(@"This URL sends the subscription without TLS. Import it only if you trust this network and provider.")
+             delegate:self cancelButtonTitle:SenkoLocalizedText(@"Cancel")
+     otherButtonTitles:SenkoLocalizedText(@"Import"), nil] autorelease];
+    alert.tag = 4;
+    [alert show];
+}
+
+- (void)addServerLink:(NSString *)link {
     [_ctl ensureDaemon:^(BOOL up, NSString *detail) {
         if (!up) {
             [self setLastErr:detail ? detail : @"daemon offline: cannot add"];
@@ -319,62 +450,35 @@
         [av show];
         return;
     }
-    NSError *err = nil;
-    NSString *body = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:&err];
-    if (!body) {
-        SetStatusDefault(_statusLabel, @"file import failed");
-        return;
-    }
-    BOOL awg = [self isNativeAWGText:body];
-    if (awg) {
-        [self importAWGText:body];
-        return;
-    }
-    if ([body rangeOfString:@"vpn://"].location != NSNotFound) {
-        [self setLastErr:@"Amnezia VPN bundle detected. Import a native AmneziaWG .conf file"];
+    NSData *body = [NSData dataWithContentsOfFile:path];
+    if (![body length]) {
+        [self setLastErr:@"the file is empty or could not be read"];
         [self applyState];
         return;
     }
-    NSArray *lines = [body componentsSeparatedByCharactersInSet:
-                      [NSCharacterSet newlineCharacterSet]];
-    NSMutableArray *links = [NSMutableArray array];
-    for (NSString *line in lines) {
-        NSString *s = [line stringByTrimmingCharactersInSet:
-                       [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        if ([s length] == 0 || [s hasPrefix:@"#"]) continue;
-        if ([s hasPrefix:@"vless://"] || [s hasPrefix:@"socks5://"] ||
-            [s hasPrefix:@"http://"] || [s hasPrefix:@"https://"])
-            [links addObject:s];
-    }
-    if ([links count] == 0) {
-        SetStatusDefault(_statusLabel, @"no links in file");
-        return;
-    }
-
-    __block int left = (int)[links count];
-    __block int okCount = 0;
-    SetStatusDefault(_statusLabel, [NSString stringWithFormat:@"importing %d link(s)...", left]);
-    for (NSString *link in links) {
-        BOOL isServer = [link hasPrefix:@"vless://"] || [link hasPrefix:@"socks5://"];
-        if (!isServer && ([link hasPrefix:@"http://"] || [link hasPrefix:@"https://"])) {
-            NSURL *u = [NSURL URLWithString:link];
-            isServer = ([u user] || [u password] || [u fragment] != nil || [u port]) ? YES : NO;
+/* the text tests only make sense on a decodable file; a clash yaml or an xray
+   json is text too, and the daemon parser sorts those out */
+    NSString *text = [[[NSString alloc] initWithData:body
+                                            encoding:NSUTF8StringEncoding] autorelease];
+    if ([text length]) {
+        if ([self isNativeAWGText:text]) {
+            [self importAWGText:text];
+            return;
         }
-        if (isServer) {
-            [_ctl addServerLink:link reply:^(NSString *reply) {
-                if ([reply hasPrefix:@"OK"]) okCount++;
-                left--;
-                if (left == 0) {
-                    SetStatusDefault(_statusLabel, [NSString stringWithFormat:@"imported %d link(s)", okCount]);
-                    [self refresh];
-                }
-            }];
-        } else {
-            [self addSubscriptionURL:link name:[self nameFromURL:link]];
-            left--;
-            if (left == 0) [self refresh];
+        if ([text rangeOfString:@"vpn://"].location != NSNotFound) {
+            [self setLastErr:@"Amnezia VPN bundle detected. Import a native AmneziaWG .conf file"];
+            [self applyState];
+            return;
+        }
+        NSString *trimmed = [text stringByTrimmingCharactersInSet:
+                             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (SenkoLooksLikeSubscriptionURL(trimmed) &&
+            !SenkoLooksLikeSingleServerLink(trimmed)) {
+            [self importText:trimmed];
+            return;
         }
     }
+    [self importContentData:body];
 }
 
 - (void)addSubscriptionURL:(NSString *)url name:(NSString *)name {
@@ -441,20 +545,62 @@
     return [h length] ? h : @"subscription";
 }
 
-- (void)promptManualLink {
-    UIAlertView *av = [[[UIAlertView alloc] initWithTitle:@"Add server"
-                                                   message:@"paste a link here"
-                                                  delegate:self
-                                         cancelButtonTitle:@"Cancel"
-                                         otherButtonTitles:@"Add", nil] autorelease];
-    av.alertViewStyle = UIAlertViewStylePlainTextInput;
-    av.tag = 1;
-    [av show];
+/* uialertview became a uialertcontroller shim in ios 9, and the shim never
+   brings up the edit menu over its own text field, so a link could not be
+   pasted into either prompt. the real controller is used where it exists */
+- (BOOL)promptTextWithTitle:(NSString *)title
+                    message:(NSString *)message
+                   keyboard:(UIKeyboardType)keyboard
+                    handler:(void (^)(NSString *text))handler {
+    Class controllerCls = NSClassFromString(@"UIAlertController");
+    Class actionCls = NSClassFromString(@"UIAlertAction");
+    if (!controllerCls || !actionCls) return NO;
+    SEL make = @selector(alertControllerWithTitle:message:preferredStyle:);
+    SEL addField = @selector(addTextFieldWithConfigurationHandler:);
+    SEL makeAction = @selector(actionWithTitle:style:handler:);
+    if (![controllerCls respondsToSelector:make] ||
+        ![actionCls respondsToSelector:makeAction])
+        return NO;
+/* __block keeps the controller out of the action block's retain set, which
+   would otherwise hold the alert alive after it is dismissed */
+    __block id alert = ((id (*)(id, SEL, id, id, NSInteger))objc_msgSend)
+        (controllerCls, make, title, message, 1 /* UIAlertControllerStyleAlert */);
+    if (!alert || ![alert respondsToSelector:addField]) return NO;
+    ((void (*)(id, SEL, id))objc_msgSend)(alert, addField, ^(UITextField *field) {
+        field.keyboardType = keyboard;
+        field.autocorrectionType = UITextAutocorrectionTypeNo;
+        field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        field.clearButtonMode = UITextFieldViewModeWhileEditing;
+    });
+    id cancel = ((id (*)(id, SEL, id, NSInteger, id))objc_msgSend)
+        (actionCls, makeAction, SenkoLocalizedText(@"Cancel"),
+         1 /* UIAlertActionStyleCancel */, nil);
+    id confirm = ((id (*)(id, SEL, id, NSInteger, id))objc_msgSend)
+        (actionCls, makeAction, SenkoLocalizedText(@"Add"), 0, ^(id action) {
+            (void)action;
+            NSArray *fields = ((id (*)(id, SEL))objc_msgSend)(alert, @selector(textFields));
+            UITextField *field = [fields count] ? [fields objectAtIndex:0] : nil;
+            NSString *text = field.text ? field.text : @"";
+            if ([text length] && handler) handler(text);
+        });
+    if (!cancel || !confirm) return NO;
+    ((void (*)(id, SEL, id))objc_msgSend)(alert, @selector(addAction:), cancel);
+    ((void (*)(id, SEL, id))objc_msgSend)(alert, @selector(addAction:), confirm);
+    [self presentViewController:alert animated:YES completion:nil];
+    return YES;
 }
 
 - (void)promptSubscription {
+    NSCharacterSet *ws = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    if ([self promptTextWithTitle:@"Subscription"
+                          message:@"paste a subscription URL or a server link"
+                         keyboard:UIKeyboardTypeURL
+                          handler:^(NSString *text) {
+            [self importText:[text stringByTrimmingCharactersInSet:ws]];
+        }])
+        return;
     UIAlertView *av = [[[UIAlertView alloc] initWithTitle:@"Subscription"
-                                                   message:@"paste a subscription URL"
+                                                   message:@"paste a subscription URL or a server link"
                                                   delegate:self
                                          cancelButtonTitle:@"Cancel"
                                          otherButtonTitles:@"Add", nil] autorelease];
@@ -502,12 +648,23 @@
         [self presentUpdateForPath:path];
         return;
     }
+    if (av.tag == 5) {
+        [self clearManualServers];
+        return;
+    }
+    if (av.tag == 4) {
+        NSString *url = [[_pendingInsecureURL retain] autorelease];
+        [_pendingInsecureURL release];
+        _pendingInsecureURL = nil;
+        if (idx != av.cancelButtonIndex && [url length])
+            [self addSubscriptionURL:url name:[self nameFromURL:url]];
+        return;
+    }
+    if (av.tag != 2) return;
     NSString *text = [[av textFieldAtIndex:0] text];
     if ([text length] == 0) return;
-    if (av.tag == 2) [self addSubscriptionURL:
-        [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]
-                                         name:[self nameFromURL:text]];
-    else [self importText:text];
+    [self importText:[text stringByTrimmingCharactersInSet:
+                      [NSCharacterSet whitespaceAndNewlineCharacterSet]]];
 }
 
 - (void)openScanner {

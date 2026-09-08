@@ -176,11 +176,43 @@ static NSString *SenkoSubscriptionExpiry(unsigned long long expire) {
     if (!expire) return nil;
     NSDate *date = [NSDate dateWithTimeIntervalSince1970:(NSTimeInterval)expire];
     if ([date timeIntervalSinceNow] <= 0.0)
-        return @"expired";
+        return SenkoLanguageIsRussian() ? @"истекла" : @"expired";
     NSDateFormatter *fmt = [[[NSDateFormatter alloc] init] autorelease];
-    fmt.locale = [[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"] autorelease];
-    fmt.dateFormat = @"'until' yyyy-MM-dd HH:mm";
+    fmt.locale = [[[NSLocale alloc] initWithLocaleIdentifier:
+        SenkoLanguageIsRussian() ? @"ru_RU" : @"en_US"] autorelease];
+    fmt.dateFormat = SenkoLanguageIsRussian() ? @"'до' dd.MM.yy" : @"'until' MM/dd/yy";
     return [fmt stringFromDate:date];
+}
+
+static NSString *SenkoSubscriptionBytes(unsigned long long value) {
+    double amount = (double)value;
+    NSArray *units = SenkoLanguageIsRussian()
+        ? [NSArray arrayWithObjects:@"Б", @"КБ", @"МБ", @"ГБ", @"ТБ", nil]
+        : [NSArray arrayWithObjects:@"B", @"KB", @"MB", @"GB", @"TB", nil];
+    NSUInteger unit = 0;
+    while (amount >= 1024.0 && unit + 1 < [units count]) {
+        amount /= 1024.0;
+        unit++;
+    }
+    NSString *number = [NSString stringWithFormat:(amount >= 10.0 || unit == 0)
+        ? @"%.0f" : @"%.1f", amount];
+    if (SenkoLanguageIsRussian())
+        number = [number stringByReplacingOccurrencesOfString:@"." withString:@","];
+    return [NSString stringWithFormat:@"%@ %@", number, [units objectAtIndex:unit]];
+}
+
+static NSString *SenkoSubscriptionUsage(SenkoSub *sub) {
+    if (!sub || (!sub->total && !sub->upload && !sub->download)) return nil;
+    unsigned long long used = sub->upload + sub->download;
+    if (sub->total) {
+        unsigned long long left = sub->total > used ? sub->total - used : 0;
+        return SenkoLanguageIsRussian()
+            ? [NSString stringWithFormat:@"осталось %@", SenkoSubscriptionBytes(left)]
+            : [NSString stringWithFormat:@"%@ left", SenkoSubscriptionBytes(left)];
+    }
+    return SenkoLanguageIsRussian()
+        ? [NSString stringWithFormat:@"исп. %@", SenkoSubscriptionBytes(used)]
+        : [NSString stringWithFormat:@"%@ used", SenkoSubscriptionBytes(used)];
 }
 
 static UIImage *SenkoSectionSnapshot(UIView *view) {
@@ -206,6 +238,76 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
 }
 
 @implementation MainVC (List)
+
+/* panel feeds put the same banner in front of every node name and a row label
+   only has room for the first few words, so a whole section can read as one
+   server. the shared opening is dropped for display, and names that are still
+   equal afterwards are numbered in list order */
+static NSString *SenkoSharedNameHead(NSArray *names) {
+    if ([names count] < 2) return nil;
+    NSString *first = [names objectAtIndex:0];
+    NSUInteger common = [first length];
+    for (NSString *name in names) {
+        NSUInteger i = 0;
+        while (i < common && i < [name length] &&
+               [name characterAtIndex:i] == [first characterAtIndex:i]) ++i;
+        common = i;
+        if (common == 0) return nil;
+    }
+/* end the cut on a separator so a country or a number is never halved */
+    NSCharacterSet *seps = [NSCharacterSet characterSetWithCharactersInString:@" |\u00b7-\u2014:/,"];
+    NSUInteger cut = 0;
+    for (NSUInteger i = 0; i < common; ++i) {
+        if ([seps characterIsMember:[first characterAtIndex:i]]) cut = i + 1;
+    }
+    if (cut < 8) return nil;
+    return [first substringToIndex:cut];
+}
+
+- (void)rebuildRowNames {
+    NSMutableDictionary *names = [NSMutableDictionary dictionary];
+    for (NSDictionary *sec in _sections) {
+        NSArray *rows = [sec objectForKey:@"rows"];
+        NSMutableArray *raw = [NSMutableArray array];
+        for (SenkoServer *sv in rows) {
+            NSString *name = SenkoServerDisplayName(sv->remark);
+            [raw addObject:name ? name : @""];
+        }
+        NSString *head = SenkoSharedNameHead(raw);
+        NSMutableArray *shown = [NSMutableArray array];
+        for (NSString *name in raw) {
+            NSString *out = name;
+            if ([head length] && [name length] > [head length]) {
+                out = [[name substringFromIndex:[head length]]
+                       stringByTrimmingCharactersInSet:
+                           [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                if (![out length]) out = name;
+            }
+            [shown addObject:out];
+        }
+
+        NSMutableDictionary *counts = [NSMutableDictionary dictionary];
+        for (NSString *name in shown) {
+            if (![name length]) continue;
+            NSNumber *seen = [counts objectForKey:name];
+            [counts setObject:[NSNumber numberWithInt:[seen intValue] + 1] forKey:name];
+        }
+        NSMutableDictionary *used = [NSMutableDictionary dictionary];
+        NSUInteger i = 0;
+        for (SenkoServer *sv in rows) {
+            NSString *name = [shown objectAtIndex:i++];
+            if (![name length]) continue;
+            if ([[counts objectForKey:name] intValue] > 1) {
+                int ordinal = [[used objectForKey:name] intValue] + 1;
+                [used setObject:[NSNumber numberWithInt:ordinal] forKey:name];
+                name = [NSString stringWithFormat:@"%@ (%d)", name, ordinal];
+            }
+            [names setObject:name forKey:[NSNumber numberWithInt:sv->index]];
+        }
+    }
+    [_rowName release];
+    _rowName = [names retain];
+}
 
 - (void)applyCatalog:(NSArray *)servers subs:(NSArray *)subs order:(NSArray *)order {
 /* keep chrome geometry after reload */
@@ -242,7 +344,41 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
     [self layoutMainChrome];
 }
 
+/* servers without a reading sort last: an unmeasured row is not fast, it is
+   unknown, and burying it keeps the top of the list meaningful */
+static int SenkoSortRank(NSNumber *ms) {
+    if (!ms) return 1;
+    int v = [ms intValue];
+    return v >= 0 ? 0 : 2;
+}
+
+- (NSArray *)sortedRows:(NSArray *)rows {
+    SenkoServerSort mode = (SenkoServerSort)
+        [[NSUserDefaults standardUserDefaults] integerForKey:SENKO_SERVER_SORT_KEY];
+    if (mode != SenkoSortName && mode != SenkoSortPing) return rows;
+    NSMutableArray *out = [NSMutableArray arrayWithArray:rows];
+    NSDictionary *status = _serverStatus;
+    [out sortUsingComparator:^NSComparisonResult(SenkoServer *a, SenkoServer *b) {
+        NSString *na = SenkoServerDisplayName(a->remark);
+        NSString *nb = SenkoServerDisplayName(b->remark);
+        if (![na length]) na = a->host ? a->host : @"";
+        if (![nb length]) nb = b->host ? b->host : @"";
+        if (mode == SenkoSortPing) {
+            NSNumber *pa = [status objectForKey:[NSNumber numberWithInt:a->index]];
+            NSNumber *pb = [status objectForKey:[NSNumber numberWithInt:b->index]];
+            int ra = SenkoSortRank(pa), rb = SenkoSortRank(pb);
+            if (ra != rb) return ra < rb ? NSOrderedAscending : NSOrderedDescending;
+            if (ra == 0 && [pa intValue] != [pb intValue])
+                return [pa intValue] < [pb intValue]
+                    ? NSOrderedAscending : NSOrderedDescending;
+        }
+        return [na compare:nb options:NSCaseInsensitiveSearch];
+    }];
+    return out;
+}
+
 - (void)rebuildSections {
+    [_revealedRows removeAllObjects];
     NSMutableArray *secs = [NSMutableArray array];
     NSMutableArray *manual = [NSMutableArray array];
     NSMutableDictionary *bySub = [NSMutableDictionary dictionary];
@@ -282,7 +418,7 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
             [secs addObject:[NSDictionary dictionaryWithObjectsAndKeys:
                              @"Manual", @"title",
                              key, @"subIdx",
-                             manual, @"rows", nil]];
+                             [self sortedRows:manual], @"rows", nil]];
             [seen addObject:key];
             continue;
         }
@@ -296,14 +432,15 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
         NSString *title = SenkoSubscriptionTitle(rawTitle, &flag);
         if (![flag length]) flag = [flagBySub objectForKey:key];
         NSString *expiry = SenkoSubscriptionExpiry(sub->expire);
-        NSString *meta = expiry
-            ? [NSString stringWithFormat:@"%lu server%@  %@", (unsigned long)[rows count],
-               [rows count] == 1 ? @"" : @"s", expiry]
-            : [NSString stringWithFormat:@"%lu server%@", (unsigned long)[rows count],
-               [rows count] == 1 ? @"" : @"s"];
+        NSString *usage = SenkoSubscriptionUsage(sub);
+        NSMutableArray *parts = [NSMutableArray array];
+        if (usage) [parts addObject:usage];
+        if (expiry) [parts addObject:expiry];
+        NSString *meta = [parts componentsJoinedByString:@"  •  "];
         [secs addObject:[NSDictionary dictionaryWithObjectsAndKeys:
                          title, @"title", flag ? flag : @"", @"flag",
-                         meta, @"meta", key, @"subIdx", rows, @"rows", nil]];
+                         meta, @"meta", key, @"subIdx",
+                         [self sortedRows:rows], @"rows", nil]];
         [seen addObject:key];
     }
 
@@ -312,7 +449,7 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
         if (![seen containsObject:manualKey])
             [secs insertObject:[NSDictionary dictionaryWithObjectsAndKeys:
                                @"Manual", @"title", manualKey, @"subIdx",
-                               manual, @"rows", nil] atIndex:0];
+                               [self sortedRows:manual], @"rows", nil] atIndex:0];
     }
     for (SenkoSub *sub in _subs) {
         NSNumber *key = [NSNumber numberWithInt:sub->index];
@@ -325,19 +462,20 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
         NSString *title = SenkoSubscriptionTitle(rawTitle, &flag);
         if (![flag length]) flag = [flagBySub objectForKey:key];
         NSString *expiry = SenkoSubscriptionExpiry(sub->expire);
-        NSString *meta = expiry
-            ? [NSString stringWithFormat:@"%lu server%@  %@", (unsigned long)[rows count],
-               [rows count] == 1 ? @"" : @"s", expiry]
-            : [NSString stringWithFormat:@"%lu server%@", (unsigned long)[rows count],
-               [rows count] == 1 ? @"" : @"s"];
+        NSString *usage = SenkoSubscriptionUsage(sub);
+        NSMutableArray *parts = [NSMutableArray array];
+        if (usage) [parts addObject:usage];
+        if (expiry) [parts addObject:expiry];
+        NSString *meta = [parts componentsJoinedByString:@"  •  "];
         [secs addObject:[NSDictionary dictionaryWithObjectsAndKeys:
                          title, @"title", flag ? flag : @"", @"flag", meta, @"meta",
-                         key, @"subIdx", rows, @"rows", nil]];
+                         key, @"subIdx", [self sortedRows:rows], @"rows", nil]];
         [_sectionOrder addObject:key];
     }
 
     [_sections release];
     _sections = [secs retain];
+    [self rebuildRowNames];
 
     NSMutableSet *valid = [NSMutableSet set];
     for (NSDictionary *sec in _sections) {
@@ -345,32 +483,53 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
         if (subIdx >= 0) [valid addObject:[NSNumber numberWithInt:subIdx]];
     }
     [_collapsedSubs intersectSet:valid];
+    [self syncEmptyState];
 }
 
-- (void)setListHeaderProgress:(CGFloat)progress animated:(BOOL)animated {
+/* the list is empty when nothing at all is configured: not a single manual
+   server, no subscription server, and no saved amneziawg profile */
+- (void)syncEmptyState {
+    if (!_emptyState) return;
+    BOOL empty = ([_servers count] == 0) && ![self hasAWGProfile];
+    _emptyState.hidden = !empty;
+    if (!empty) return;
+
+    _emptyState.frame = _table.frame;
+    [self.view bringSubviewToFront:_emptyState];
+    [self bringMainChromeToFront];
+    [_emptyState setHWID:_deviceHWID];
+    if ([_deviceHWID length]) return;
+/* the daemon owns the id it actually sends, so the ui asks for it instead of
+   inventing a second one */
+    [_ctl deviceHWID:^(NSString *hwid) {
+        if (![hwid length]) return;
+        [_deviceHWID release];
+        _deviceHWID = [hwid copy];
+        [_emptyState setHWID:_deviceHWID];
+    }];
+}
+
+- (void)emptyStatePastePressed {
+    [self pasteFromClipboard];
+}
+
+- (void)emptyStateScanPressed {
+    [self openScanner];
+}
+
+- (void)emptyStateCopyHWID {
+    if (![_deviceHWID length]) return;
+    [[UIPasteboard generalPasteboard] setString:_deviceHWID];
+    [_emptyState flashCopiedNotice];
+}
+
+- (void)setListHeaderProgress:(CGFloat)progress {
     if (progress < 0.0f) progress = 0.0f;
     if (progress > 1.0f) progress = 1.0f;
-/* skip tiny scroll changes */
-    if (fabsf((float)(_listHeaderProgress - progress)) < 0.08f) return;
-    if (!animated) {
-        _listHeaderProgress = progress;
-        [self layoutMainChromeGeometry];
-        return;
-    }
-    _headerSnapAnimating = YES;
-    [UIView animateWithDuration:0.18
-                          delay:0
-                        options:UIViewAnimationOptionBeginFromCurrentState |
-                                UIViewAnimationOptionAllowUserInteraction |
-                                UIViewAnimationOptionCurveEaseOut
-                     animations:^{
-                         _listHeaderProgress = progress;
-                         [self layoutMainChromeGeometry];
-                     }
-                     completion:^(BOOL finished) {
-                         (void)finished;
-                         _headerSnapAnimating = NO;
-                     }];
+/* a whole layout pass for a sub pixel change is not worth running */
+    if (fabsf((float)(_listHeaderProgress - progress)) < 0.004f) return;
+    _listHeaderProgress = progress;
+    [self layoutMainChromeGeometry];
 }
 
 - (SenkoServer *)serverAtIndexPath:(NSIndexPath *)ip {
@@ -496,8 +655,12 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
         vlessState = nil;
         awgState = nil;
     };
-    [_ctl statusState:^(NSString *state) {
+    [_ctl statusStateWithUptime:^(NSString *state, long uptime) {
         if (generation != _catalogGeneration) return;
+        /* the daemon owns the clock, so the elapsed time survives the app being
+           closed and reopened over a live tunnel */
+        _tunnelUptime = uptime;
+        _tunnelUptimeAt = uptime > 0 ? CACurrentMediaTime() : 0.0;
         vlessState = [state copy];
         applyBackendState();
     }];
@@ -553,17 +716,18 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
 }
 
 - (BOOL)isListMutationLocked {
-    return _busy || [self isTunnelActive];
+    return _busy || _subscriptionMutationBusy || [self isTunnelActive];
 }
 
 - (void)applyServerListLock {
-    BOOL locked = _busy;
+    BOOL locked = _busy || _subscriptionMutationBusy;
     _table.allowsSelection = !locked;
+    _table.userInteractionEnabled = !_subscriptionMutationBusy;
     _table.alpha = locked ? 0.72f : 1.0f;
 }
 
 - (void)setLastErr:(NSString *)msg {
-    NSString *shown = msg ? SenkoLocalizedText(msg) : nil;
+    NSString *shown = msg ? SenkoHumanReadableError(msg) : nil;
     [_lastErr release];
     _lastErr = shown ? [shown copy] : nil;
     if (!shown || ![shown length]) {
@@ -575,7 +739,7 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
     [_lastAlertErr release];
     _lastAlertErr = [shown copy];
     UIAlertView *alert = [[[UIAlertView alloc]
-        initWithTitle:SenkoLocalizedText(@"Error")
+        initWithTitle:SenkoLocalizedText(@"Connection failed")
               message:shown delegate:nil cancelButtonTitle:SenkoLocalizedText(@"OK")
         otherButtonTitles:nil] autorelease];
     [alert show];
@@ -588,31 +752,21 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
     if (scrollView != _table) return;
-    if (_headerSnapAnimating) return;
+    /* the collapse is tied to the spacer above the first row, so the card
+       finishes shrinking exactly as that spacer leaves the screen and the two
+       never disagree about how far the list has travelled */
+    CGFloat travel = _table.tableHeaderView
+        ? _table.tableHeaderView.bounds.size.height : 72.0f;
+    if (travel < 24.0f) travel = 24.0f;
     CGFloat offset = scrollView.contentOffset.y;
-    CGFloat progress = offset <= 0.0f ? 0.0f : offset / 72.0f;
+    CGFloat progress = offset <= 0.0f ? 0.0f : offset / travel;
     if (progress > 1.0f) progress = 1.0f;
-    [self setListHeaderProgress:progress animated:NO];
+    [self setListHeaderProgress:progress];
 }
 
-- (void)snapListHeader {
-    if (_headerSnapAnimating) return;
-    CGFloat target = _listHeaderProgress >= 0.5f ? 1.0f : 0.0f;
-    if (fabsf((float)(_listHeaderProgress - target)) < 0.01f) return;
-    [self setListHeaderProgress:target animated:YES];
-}
 
-- (void)scrollViewDidEndDragging:(UIScrollView *)scrollView
-                   willDecelerate:(BOOL)decelerate {
-    if (scrollView != _table) return;
-    if (!decelerate)
-        [self snapListHeader];
-}
 
-- (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView {
-    if (scrollView != _table) return;
-    [self snapListHeader];
-}
+
 
 - (void)sectionToggleTapped:(UIButton *)button {
     int subIdx = (int)button.tag - 4000;
@@ -799,15 +953,15 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
 - (CGFloat)tableView:(UITableView *)tv heightForRowAtIndexPath:(NSIndexPath *)ip {
     (void)tv; (void)ip;
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad)
-        return 100.0f;
-    return 88.0f;
+        return 82.0f;
+    return 76.0f;
 }
 
 - (CGFloat)tableView:(UITableView *)tv heightForHeaderInSection:(NSInteger)s {
     (void)tv; (void)s;
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad)
-        return 60.0f;
-    return 52.0f;
+        return 68.0f;
+    return 64.0f;
 }
 
 - (UIView *)tableView:(UITableView *)tv viewForHeaderInSection:(NSInteger)s {
@@ -822,8 +976,8 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
     if (w < 1.0f) w = CGRectGetWidth(tv.frame);
     if (w < 160.0f) w = 160.0f;
     CGFloat plateW = w - side * 2.0f;
-    CGFloat hh = pad ? 60.0f : 52.0f;
-    CGFloat plateH = hh - 8.0f; /* leave room for title and meta */
+    CGFloat hh = pad ? 68.0f : 64.0f;
+    CGFloat plateH = hh - 6.0f;
     CGFloat cr = SenkoThemeCardRadius();
 /* keep actions inside the plate */
     CGFloat actionW = compact ? 30.0f : 32.0f;
@@ -883,8 +1037,9 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
         plate.clipsToBounds = NO;
     }
     [plate.layer insertSublayer:g atIndex:0];
-/* cache section chrome */
-    plate.layer.shouldRasterize = YES;
+/* cache section chrome, except under ios26 where the plate holds a live blur
+   that would be re-rendered offscreen on every frame */
+    plate.layer.shouldRasterize = !SenkoThemeIsIos26();
     plate.layer.rasterizationScale = [UIScreen mainScreen].scale;
     [wrap addSubview:plate];
 
@@ -900,25 +1055,26 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
 
     CGFloat moreX = 0, pingX = 0, refreshX = 0;
     CGFloat textW;
+    /* refresh and ping belong to a subscription or to the amneziawg profile */
     BOOL showActions = (subIdx >= 0) || manualHasAwg;
-    /* subscription edit stays on the right with the other actions */
-    BOOL showMore = (subIdx >= 0) || manualHasAwg;
+    /* the manual group keeps its own menu for the delete-all action */
+    BOOL showMore = showActions || (subIdx < 0 && n > 0);
     BOOL subPingBusy = subIdx >= 0 &&
         [_pingingSubs containsObject:[NSNumber numberWithInt:subIdx]];
+    CGFloat cursor = CGRectGetWidth(plate.bounds) - actionRight - actionW;
+    if (showMore) {
+        moreX = cursor;
+        if (moreX < 0.0f) moreX = 0.0f;
+        cursor -= actionGap + actionW;
+    }
     if (showActions) {
-        CGFloat cursor = CGRectGetWidth(plate.bounds) - actionRight - actionW;
-        if (showMore) {
-            moreX = cursor;
-            if (moreX < 0.0f) moreX = 0.0f;
-            cursor -= actionGap + actionW;
-        }
         /* keep the action slots stable while a group is being pinged */
-        if (showActions) {
-            pingX = cursor;
-            cursor -= actionGap + actionW;
-        }
+        pingX = cursor;
+        cursor -= actionGap + actionW;
         refreshX = cursor;
         textW = refreshX - 12.0f;
+    } else if (showMore) {
+        textW = moreX - 12.0f;
     } else {
         textW = plateW - 24.0f;
     }
@@ -930,90 +1086,92 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
     }
     CGFloat labelWidth = textW - textX + 12.0f;
     if (labelWidth < 42.0f) labelWidth = 42.0f;
-    UILabel *lab = [[[UILabel alloc] initWithFrame:CGRectMake(textX, 6,
-                                                               labelWidth, 20)] autorelease];
+    UILabel *lab = [[[UILabel alloc] initWithFrame:CGRectMake(textX, 3,
+                                                               labelWidth, 29)] autorelease];
     lab.backgroundColor = [UIColor clearColor];
-    lab.font = SenkoThemeIsIos16() ? SenkoFontBody(15, YES) : [UIFont boldSystemFontOfSize:15];
+    lab.font = SenkoThemeIsIos16() ? SenkoFontBody(14, YES) : [UIFont boldSystemFontOfSize:14];
     SenkoStyleSectionTitle(lab);
     lab.text = title;
     lab.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    lab.lineBreakMode = NSLineBreakByTruncatingTail;
+    lab.numberOfLines = 2;
+    lab.lineBreakMode = NSLineBreakByWordWrapping;
     [plate addSubview:lab];
 
-    UILabel *meta = [[[UILabel alloc] initWithFrame:CGRectMake(textX, 26, labelWidth, 14)] autorelease];
+    UILabel *meta = [[[UILabel alloc] initWithFrame:CGRectMake(textX, 31, labelWidth, 24)] autorelease];
     meta.backgroundColor = [UIColor clearColor];
-    meta.font = SenkoThemeIsIos16() ? SenkoFontBody(11, NO) : [UIFont systemFontOfSize:11];
+    meta.font = SenkoThemeIsIos16() ? SenkoFontBody(10, NO) : [UIFont systemFontOfSize:10];
     SenkoStyleSectionMeta(meta);
     meta.text = metaText;
     meta.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    meta.lineBreakMode = NSLineBreakByTruncatingTail;
+    meta.numberOfLines = 2;
+    meta.lineBreakMode = NSLineBreakByWordWrapping;
     [plate addSubview:meta];
 
-    if (showActions) {
+    if (showMore) {
         UIColor *iconTint = (SenkoThemeIsBoykisser() || SenkoThemeIsMiside())
             ? [UIColor colorWithRed:1.00 green:0.42 blue:0.72 alpha:1.0]
             : kAccentBlue;
-        UIButton *ref = [UIButton buttonWithType:UIButtonTypeCustom];
-        ref.frame = CGRectMake(refreshX, actionY, actionW, actionH);
-        ref.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-        ref.contentMode = UIViewContentModeCenter;
-        ref.imageView.contentMode = UIViewContentModeScaleAspectFit;
-        [ref setImage:TintedIconNamed(@"icon-refresh.png", iconPx, iconTint)
-             forState:UIControlStateNormal];
-        if (manualHasAwg) {
-            [ref addTarget:self action:@selector(awgRefreshTapped:)
-          forControlEvents:UIControlEventTouchUpInside];
-        } else {
-            ref.tag = 1000 + subIdx;
-            [ref addTarget:self action:@selector(subRefreshTapped:)
-          forControlEvents:UIControlEventTouchUpInside];
-        }
-        [plate addSubview:ref];
-
-        UIButton *ping = [UIButton buttonWithType:UIButtonTypeCustom];
-        ping.frame = CGRectMake(pingX, actionY, actionW, actionH);
-        ping.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-        ping.contentMode = UIViewContentModeCenter;
-        ping.imageView.contentMode = UIViewContentModeScaleAspectFit;
-        ping.hidden = NO;
-        ping.enabled = !subPingBusy;
-        ping.alpha = subPingBusy ? 0.45f : 1.0f;
-        [ping setImage:GaugeIcon(iconPx, iconTint)
-              forState:UIControlStateNormal];
-        if (manualHasAwg) {
-            [ping addTarget:self action:@selector(awgPingTapped:)
-           forControlEvents:UIControlEventTouchUpInside];
-        } else {
-            ping.tag = 3000 + subIdx;
-            [ping addTarget:self action:@selector(subPingTapped:)
-           forControlEvents:UIControlEventTouchUpInside];
-        }
-        [plate addSubview:ping];
-
-        if (showMore) {
-            UIButton *more = [UIButton buttonWithType:UIButtonTypeCustom];
-            more.frame = CGRectMake(moreX, actionY, actionW, actionH);
-            more.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-            more.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
-            more.contentVerticalAlignment = UIControlContentVerticalAlignmentCenter;
-            [more setTitle:@"\u2022\u2022\u2022" forState:UIControlStateNormal];
-            more.titleLabel.font = [UIFont boldSystemFontOfSize:compact ? 14.0f : 16.0f];
-            SenkoStyleSectionGlyph(more);
-            [more setTitleColor:iconTint forState:UIControlStateNormal];
-            [more setTitleColor:[iconTint colorWithAlphaComponent:0.55f]
-                       forState:UIControlStateHighlighted];
-            more.titleLabel.shadowColor = nil;
-            more.titleLabel.shadowOffset = CGSizeZero;
+        if (showActions) {
+            UIButton *ref = [UIButton buttonWithType:UIButtonTypeCustom];
+            ref.frame = CGRectMake(refreshX, actionY, actionW, actionH);
+            ref.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+            ref.contentMode = UIViewContentModeCenter;
+            ref.imageView.contentMode = UIViewContentModeScaleAspectFit;
+            [ref setImage:SenkoIconRefresh(iconPx, iconTint)
+                 forState:UIControlStateNormal];
             if (manualHasAwg) {
-                [more addTarget:self action:@selector(showAWGMenu)
+                [ref addTarget:self action:@selector(awgRefreshTapped:)
+              forControlEvents:UIControlEventTouchUpInside];
+            } else {
+                ref.tag = 1000 + subIdx;
+                [ref addTarget:self action:@selector(subRefreshTapped:)
+              forControlEvents:UIControlEventTouchUpInside];
+            }
+            [plate addSubview:ref];
+
+            UIButton *ping = [UIButton buttonWithType:UIButtonTypeCustom];
+            ping.frame = CGRectMake(pingX, actionY, actionW, actionH);
+            ping.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+            ping.contentMode = UIViewContentModeCenter;
+            ping.imageView.contentMode = UIViewContentModeScaleAspectFit;
+            ping.hidden = NO;
+            ping.enabled = !subPingBusy;
+            ping.alpha = subPingBusy ? 0.45f : 1.0f;
+            [ping setImage:GaugeIcon(iconPx, iconTint)
+                  forState:UIControlStateNormal];
+            if (manualHasAwg) {
+                [ping addTarget:self action:@selector(awgPingTapped:)
                forControlEvents:UIControlEventTouchUpInside];
             } else {
-                more.tag = 2000 + subIdx;
-                [more addTarget:self action:@selector(subMenuTapped:)
+                ping.tag = 3000 + subIdx;
+                [ping addTarget:self action:@selector(subPingTapped:)
                forControlEvents:UIControlEventTouchUpInside];
             }
-            [plate addSubview:more];
+            [plate addSubview:ping];
         }
+
+        UIButton *more = [UIButton buttonWithType:UIButtonTypeCustom];
+        more.frame = CGRectMake(moreX, actionY, actionW, actionH);
+        more.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+        more.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
+        more.contentVerticalAlignment = UIControlContentVerticalAlignmentCenter;
+        [more setTitle:@"\u2022\u2022\u2022" forState:UIControlStateNormal];
+        more.titleLabel.font = [UIFont boldSystemFontOfSize:compact ? 14.0f : 16.0f];
+        SenkoStyleSectionGlyph(more);
+        [more setTitleColor:iconTint forState:UIControlStateNormal];
+        [more setTitleColor:[iconTint colorWithAlphaComponent:0.55f]
+                   forState:UIControlStateHighlighted];
+        more.titleLabel.shadowColor = nil;
+        more.titleLabel.shadowOffset = CGSizeZero;
+        if (subIdx < 0) {
+            [more addTarget:self action:@selector(showManualMenu)
+           forControlEvents:UIControlEventTouchUpInside];
+        } else {
+            more.tag = 2000 + subIdx;
+            [more addTarget:self action:@selector(subMenuTapped:)
+           forControlEvents:UIControlEventTouchUpInside];
+        }
+        [plate addSubview:more];
     }
     return wrap;
 }
@@ -1033,7 +1191,7 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
         if (picked && [_state isEqualToString:@"connected"])
             st = @"on";
         else if (picked && [_state isEqualToString:@"connecting"])
-            st = @"...";
+            st = SenkoLocalizedText(@"checking");
         else {
             NSNumber *ms = [_serverStatus objectForKey:[NSNumber numberWithInt:-1]];
             if (ms) st = [NSString stringWithFormat:@"%d ms", [ms intValue]];
@@ -1043,6 +1201,7 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
                           detail:@"awg / udp / full-device"
                           picked:picked
                           status:st];
+        [cell setPingTarget:nil action:NULL serverIndex:-1];
         return cell;
     }
     static NSString *cid = @"srv";
@@ -1059,18 +1218,38 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
     NSNumber *msVal = sv
         ? [_serverStatus objectForKey:[NSNumber numberWithInt:sv->index]] : nil;
     BOOL hideLinks = [[NSUserDefaults standardUserDefaults] boolForKey:SENKO_HIDE_LINKS_KEY];
-    [cell configureWithServer:sv picked:picked hideLinks:hideLinks pingVal:msVal];
+    NSString *shown = sv ? [_rowName objectForKey:
+        [NSNumber numberWithInt:sv->index]] : nil;
+    [cell configureWithServer:sv picked:picked hideLinks:hideLinks pingVal:msVal
+                  displayName:shown];
+    [cell setPingTarget:self action:@selector(serverPingTapped:)
+            serverIndex:sv ? sv->index : -1];
     return cell;
+}
+
+/* rows lift into place the first time they are shown. the set remembers what
+   already appeared so scrolling back up does not replay the entrance */
+- (void)tableView:(UITableView *)tv willDisplayCell:(UITableViewCell *)cell
+forRowAtIndexPath:(NSIndexPath *)ip {
+    (void)tv;
+    NSString *key = [NSString stringWithFormat:@"%ld.%ld",
+                     (long)ip.section, (long)ip.row];
+    if ([_revealedRows containsObject:key]) return;
+    [_revealedRows addObject:key];
+    if ([cell isKindOfClass:[ServerCell class]])
+        [(ServerCell *)cell revealAtIndex:(NSUInteger)ip.row];
+    else
+        SenkoRevealView(cell.contentView, (NSUInteger)ip.row);
 }
 
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
     SenkoThemeSfxPlay(); /* play the cell tap sound */
-    if ([self isServerSelectionLocked]) {
-        [tv deselectRowAtIndexPath:ip animated:YES];
-        SetStatusDefault(_statusLabel, @"disconnect to switch");
-        return;
-    }
     if ([self isAWGRowAtIndexPath:ip]) {
+        if ([self isServerSelectionLocked]) {
+            [tv deselectRowAtIndexPath:ip animated:YES];
+            SetStatusDefault(_statusLabel, @"disconnect to switch");
+            return;
+        }
         if ([self isTunnelActive] && _activeBackend == SenkoBackendServer) {
             [tv deselectRowAtIndexPath:ip animated:YES];
             SetStatusDefault(_statusLabel, @"disconnect to switch backend");
@@ -1087,26 +1266,139 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
             [tv reloadData];
         return;
     }
+    /* the card is read-only until its own connect button is used, so it opens
+       even while a tunnel is up and the selection itself is locked */
     SenkoServer *sv = [self serverAtIndexPath:ip];
     if (!sv) return;
-    if ([self isTunnelActive] && _activeBackend == SenkoBackendAmneziaWG) {
-        [tv deselectRowAtIndexPath:ip animated:YES];
-        SetStatusDefault(_statusLabel, @"disconnect to switch backend");
-        return;
-    }
+    [tv deselectRowAtIndexPath:ip animated:YES];
+    [self openSheetForServer:sv];
+}
+
+/* selection is no longer a side effect of tapping a row: the detail sheet owns
+   it, so the same path serves the sheet and any future caller */
+- (void)selectServerIndex:(int)index {
     int oldIdx = _selectedSrvIdx;
     _selectedBackend = SenkoBackendServer;
     [[NSUserDefaults standardUserDefaults] setInteger:_selectedBackend forKey:SENKO_SELECTED_BACKEND_KEY];
     [[NSUserDefaults standardUserDefaults] synchronize];
-    _selectedSrvIdx = sv->index;
-    [tv deselectRowAtIndexPath:ip animated:YES];
-    NSArray *vis = [tv indexPathsForVisibleRows];
+    _selectedSrvIdx = index;
+    NSArray *vis = [_table indexPathsForVisibleRows];
     if ([vis count])
-        [tv reloadRowsAtIndexPaths:vis withRowAnimation:UITableViewRowAnimationNone];
+        [_table reloadRowsAtIndexPaths:vis withRowAnimation:UITableViewRowAnimationNone];
     else
-        [tv reloadData];
-    if ([self isTunnelActive] && _activeBackend == SenkoBackendServer && oldIdx != sv->index)
-        [self switchActiveServerIndex:sv->index];
+        [_table reloadData];
+    [self applyState];
+    if ([self isTunnelActive] && _activeBackend == SenkoBackendServer && oldIdx != index)
+        [self switchActiveServerIndex:index];
+}
+
+- (SenkoServer *)serverByIndex:(int)index {
+    for (SenkoServer *s in _servers)
+        if (s->index == index) return s;
+    return nil;
+}
+
+- (void)openSheetForServer:(SenkoServer *)server {
+    if (!server) return;
+    [_sheet dismiss];
+    [_sheet release];
+
+    NSString *source = SenkoLocalizedText(@"Manual");
+    if (server->group >= 0) {
+        for (SenkoSub *sub in _subs) {
+            if (sub->index != server->group) continue;
+            if ([sub->name length]) source = sub->name;
+            break;
+        }
+    }
+    BOOL active = [self isTunnelActive] &&
+                  _activeBackend == SenkoBackendServer &&
+                  _selectedSrvIdx == server->index;
+    _sheet = [[SenkoServerSheet alloc]
+              initWithServer:server
+                        ping:[_serverStatus objectForKey:[NSNumber numberWithInt:server->index]]
+                      source:source
+                      active:active
+                   canMutate:![self isListMutationLocked] && server->group < 0
+                    delegate:self];
+    [_sheet presentInView:self.view];
+
+    int idx = server->index;
+    [_ctl serverLinkIndex:idx reply:^(NSString *link) {
+        [_sheet setLink:link];
+    }];
+}
+
+- (void)serverSheet:(SenkoServerSheet *)sheet
+    didChooseAction:(NSString *)action
+        serverIndex:(int)index {
+    (void)sheet;
+    SenkoServer *server = [self serverByIndex:index];
+    if (!server) return;
+
+    if ([action isEqualToString:SenkoServerSheetActionConnect]) {
+        if ([self isTunnelActive] && _activeBackend == SenkoBackendAmneziaWG) {
+            SetStatusDefault(_statusLabel, @"disconnect to switch backend");
+            return;
+        }
+        if ([self isServerSelectionLocked] && _selectedSrvIdx != index) {
+            SetStatusDefault(_statusLabel, @"disconnect to switch");
+            return;
+        }
+        BOOL wasActive = [self isTunnelActive] &&
+                         _activeBackend == SenkoBackendServer &&
+                         _selectedSrvIdx == index;
+        if (!wasActive) [self selectServerIndex:index];
+        if (wasActive || ![self isTunnelActive])
+            [self togglePressed];
+        return;
+    }
+    if ([action isEqualToString:SenkoServerSheetActionPing]) {
+        NSNumber *key = [NSNumber numberWithInt:index];
+        [_serverStatus setObject:[NSNumber numberWithInt:-3] forKey:key];
+        [self reloadServerRowForIndex:index];
+        [_ctl pingIndex:index reply:^(int ms) {
+            [_serverStatus setObject:[NSNumber numberWithInt:ms] forKey:key];
+            [_sheet setPingResult:[NSNumber numberWithInt:ms]];
+            [self reloadServerRowForIndex:index];
+        }];
+        return;
+    }
+    if ([action isEqualToString:SenkoServerSheetActionEdit]) {
+        [_ctl serverLinkIndex:index reply:^(NSString *link) {
+            if (![link length]) return;
+            EditServerVC *editor = [[[EditServerVC alloc] initWithLink:link
+                                                                  index:index
+                                                               delegate:self] autorelease];
+            UINavigationController *nav = [[[UINavigationController alloc]
+                                            initWithRootViewController:editor] autorelease];
+            StyleNavBarClassic(nav);
+            nav.modalPresentationStyle = UIModalPresentationFullScreen;
+            [self presentViewController:nav animated:YES completion:nil];
+        }];
+        return;
+    }
+    if ([action isEqualToString:SenkoServerSheetActionDelete]) {
+        if ([self isListMutationLocked]) return;
+        if (index == _selectedSrvIdx) _selectedSrvIdx = -1;
+        [_ctl deleteServerIndex:index reply:^(NSString *reply) {
+            (void)reply;
+            [self refresh];
+        }];
+    }
+}
+
+/* the editor replaces a profile by identity, so the old entry has to go before
+   the new link is added or the list keeps both */
+- (void)editServerVC:(EditServerVC *)vc saveLink:(NSString *)link index:(int)idx {
+    [_ctl deleteServerIndex:idx reply:^(NSString *reply) {
+        if (!reply || [reply hasPrefix:@"ERR"]) return;
+        [_ctl addServerLink:link reply:^(NSString *added) {
+            if (!added || ![added hasPrefix:@"OK"]) return;
+            [vc dismissViewControllerAnimated:YES completion:nil];
+            [self refresh];
+        }];
+    }];
 }
 
 - (BOOL)tableView:(UITableView *)tv canEditRowAtIndexPath:(NSIndexPath *)ip {
@@ -1138,6 +1430,11 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
 - (BOOL)tableView:(UITableView *)tv canMoveRowAtIndexPath:(NSIndexPath *)ip {
     (void)tv;
     if ([self isListMutationLocked] || [self isAWGRowAtIndexPath:ip]) return NO;
+    /* a drag writes a position back to the daemon, which a sorted view would
+       immediately hide again */
+    if ([[NSUserDefaults standardUserDefaults] integerForKey:SENKO_SERVER_SORT_KEY]
+        != SenkoSortManual)
+        return NO;
     return [self isManualSection:ip.section];
 }
 
@@ -1182,7 +1479,8 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
 
 - (void)subRefreshTapped:(UIButton *)btn {
     int subIdx = (int)btn.tag - 1000;
-    if (subIdx < 0) return;
+    if (subIdx < 0 || [self isListMutationLocked] ||
+        ![self subscriptionByIndex:subIdx]) return;
     SetStatusRefresh(_statusLabel, @"refreshing subscription...");
     [_ctl refreshSubIndex:subIdx reply:^(NSString *reply) {
         if (reply && [reply hasPrefix:@"ERR"]) {
@@ -1198,18 +1496,18 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
 
 - (void)subPingTapped:(UIButton *)btn {
     int subIdx = (int)btn.tag - 3000;
-    if (subIdx < 0) return;
+    if (subIdx < 0 || [self isListMutationLocked] ||
+        ![self subscriptionByIndex:subIdx]) return;
+    [_pingMode release];
+    _pingMode = [@"handshake" copy];
     [self pingServersInSub:subIdx];
 }
 
 - (void)subMenuTapped:(UIButton *)btn {
     int subIdx = (int)btn.tag - 2000;
-    if (subIdx < 0) return;
-    if (_actionSheet) {
-        [_actionSheet dismissWithClickedButtonIndex:_actionSheet.cancelButtonIndex animated:NO];
-        [_actionSheet release];
-        _actionSheet = nil;
-    }
+    if (subIdx < 0 || [self isListMutationLocked] ||
+        ![self subscriptionByIndex:subIdx]) return;
+    [self dismissCurrentActionSheetAnimated:NO];
     _menuSubIdx = subIdx;
     UIActionSheet *as = [[UIActionSheet alloc]
                          initWithTitle:SenkoLocalizedText(@"Subscription")
@@ -1218,8 +1516,9 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
                          destructiveButtonTitle:SenkoLocalizedText(@"Remove")
                          otherButtonTitles:SenkoLocalizedText(@"Refresh now"),
                                            SenkoLocalizedText(@"Check ping"),
+                                           SenkoLocalizedText(@"Subscription details"),
                                            SenkoLocalizedText(@"Edit details"), nil];
-    as.tag = 40;
+    as.tag = 400000 + subIdx;
     _actionSheet = as;
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad &&
         [as respondsToSelector:@selector(showFromRect:inView:animated:)])
@@ -1301,28 +1600,64 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
         SetStatusDefault(_statusLabel, @"no servers to ping");
         return;
     }
+    if ([self isTunnelActive]) {
+        SetStatusDefault(_statusLabel, @"disconnect to check profiles");
+        return;
+    }
     [self startPingSweep];
+}
+
+- (void)serverPingTapped:(UIButton *)button {
+    int serverIndex = (int)button.tag;
+    if (serverIndex < 0 || [self isTunnelActive]) {
+        SetStatusDefault(_statusLabel, @"disconnect to check profiles");
+        return;
+    }
+    NSInteger generation = ++_checkGeneration;
+    NSNumber *key = [NSNumber numberWithInt:serverIndex];
+    [_serverStatus setObject:[NSNumber numberWithInt:-3] forKey:key];
+    [self reloadServerRowForIndex:serverIndex];
+    SetStatusDefault(_statusLabel, @"checking server...");
+    [_ctl checkIndex:serverIndex mode:@"handshake" reply:^(int ms, NSString *error) {
+        if (generation != _checkGeneration) return;
+        [_serverStatus setObject:[NSNumber numberWithInt:ms] forKey:key];
+        [self reloadServerRowForIndex:serverIndex];
+        SetStatusDefault(_statusLabel, ms >= 0
+            ? [NSString stringWithFormat:@"%@: %d ms",
+               SenkoLocalizedText(@"profile works"), ms]
+            : SenkoHumanReadableError(error ?: @"profile check failed"));
+    }];
 }
 
 - (void)startPingSweep {
     _checkGeneration++;
+    [_pingMode release];
+    _pingMode = [@"handshake" copy];
     NSSet *busySubs = [_pingingSubs copy];
     [_pingingSubs removeAllObjects];
     [_serverStatus removeAllObjects];
     [self updateSubscriptionPingButtons:busySubs];
     [busySubs release];
-    SetStatusDefault(_statusLabel, @"checking ping...");
-    [self checkStatusOfServerAtIndex:0 generation:_checkGeneration];
+    SetStatusDefault(_statusLabel, @"checking profiles...");
+    NSMutableArray *indexes = [NSMutableArray array];
+    for (SenkoServer *server in _servers)
+        [indexes addObject:[NSNumber numberWithInt:server->index]];
+    [self beginBoundedPing:indexes subIndex:-1 generation:_checkGeneration];
 }
 
 - (void)updateSubscriptionPingButtons:(NSSet *)subIndexes {
     if (!_table || ![subIndexes count] || !_sections || ![_sections count]) return;
+/* headerViewForSection: only exists from ios 6; on ios 5 the live header is
+   reached through the section view the delegate handed back */
+    BOOL canAskTable = [_table respondsToSelector:@selector(headerViewForSection:)];
     for (NSInteger section = 0; section < (NSInteger)[_sections count]; ++section) {
         if (section >= [_table numberOfSections]) break;
         int subIdx = [[[_sections objectAtIndex:section] objectForKey:@"subIdx"] intValue];
         if (subIdx >= 0 &&
             [subIndexes containsObject:[NSNumber numberWithInt:subIdx]]) {
-            UIView *header = [_table headerViewForSection:section];
+            UIView *header = canAskTable
+                ? [_table headerViewForSection:section]
+                : [_table viewWithTag:(7000 + (NSInteger)section)];
             UIButton *ping = (UIButton *)[header viewWithTag:(3000 + subIdx)];
             if (![ping isKindOfClass:[UIButton class]]) continue;
             BOOL busy = [_pingingSubs containsObject:
@@ -1361,7 +1696,7 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
 - (void)checkStatusOfServerAtIndex:(NSUInteger)idx generation:(NSInteger)gen {
     if (gen != _checkGeneration) return;
     if (idx >= [_servers count]) {
-        SetStatusDefault(_statusLabel, @"ping check complete");
+        SetStatusDefault(_statusLabel, @"profile check complete");
         return;
     }
     SenkoServer *sv = [_servers objectAtIndex:idx];
@@ -1391,8 +1726,65 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
                                          [NSNumber numberWithInt:subIdx]]];
     _checkGeneration++;
     NSInteger gen = _checkGeneration;
-    SetStatusDefault(_statusLabel, @"checking group ping...");
-    [self pingIndexList:idxs at:0 generation:gen];
+    SetStatusDefault(_statusLabel, @"checking group profiles...");
+    [self beginBoundedPing:idxs subIndex:subIdx generation:gen];
+}
+
+- (void)beginBoundedPing:(NSArray *)idxs subIndex:(int)subIdx generation:(NSInteger)gen {
+    [_pingQueue release];
+    _pingQueue = [idxs copy];
+    _pingNext = 0;
+    _pingPending = 0;
+    _pingCompleted = 0;
+    _pingSubIndex = subIdx;
+    if (!_pingMode) _pingMode = [@"tcp" copy];
+    [self launchBoundedPingsForGeneration:gen];
+}
+
+- (void)launchBoundedPingsForGeneration:(NSInteger)gen {
+    if (gen != _checkGeneration) return;
+    NSUInteger parallelLimit = [_pingMode isEqualToString:@"handshake"] ? 1 : 3;
+    while (_pingPending < parallelLimit && _pingNext < [_pingQueue count]) {
+        int serverIndex = [[_pingQueue objectAtIndex:_pingNext++] intValue];
+        _pingPending++;
+        [_ctl checkIndex:serverIndex mode:_pingMode reply:^(int ms, NSString *error) {
+            (void)error;
+            if (gen != _checkGeneration) return;
+            _pingPending--;
+            _pingCompleted++;
+            [_serverStatus setObject:[NSNumber numberWithInt:ms]
+                              forKey:[NSNumber numberWithInt:serverIndex]];
+            [self reloadServerRowForIndex:serverIndex];
+            if (_pingCompleted >= [_pingQueue count])
+                [self finishBoundedPing];
+            else
+                [self launchBoundedPingsForGeneration:gen];
+        }];
+    }
+}
+
+- (void)finishBoundedPing {
+    [_servers sortUsingComparator:^NSComparisonResult(SenkoServer *a, SenkoServer *b) {
+        int av = [[_serverStatus objectForKey:[NSNumber numberWithInt:a->index]] intValue];
+        int bv = [[_serverStatus objectForKey:[NSNumber numberWithInt:b->index]] intValue];
+        if (av < 0) av = INT_MAX;
+        if (bv < 0) bv = INT_MAX;
+        if (av < bv) return NSOrderedAscending;
+        if (av > bv) return NSOrderedDescending;
+        return NSOrderedSame;
+    }];
+    [self rebuildSections];
+    [_table reloadData];
+    if (_pingSubIndex >= 0) {
+        NSNumber *key = [NSNumber numberWithInt:_pingSubIndex];
+        [_pingingSubs removeObject:key];
+        [self updateSubscriptionPingButtons:[NSSet setWithObject:key]];
+        SetStatusDefault(_statusLabel, @"group profile check complete");
+    } else {
+        SetStatusDefault(_statusLabel, @"profile check complete");
+    }
+    [_pingQueue release];
+    _pingQueue = nil;
 }
 
 - (void)pingIndexList:(NSArray *)idxs at:(NSUInteger)i generation:(NSInteger)gen {
@@ -1412,7 +1804,7 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
         if (subIdx >= 0)
             [self updateSubscriptionPingButtons:[NSSet setWithObject:
                                                  [NSNumber numberWithInt:subIdx]]];
-        SetStatusDefault(_statusLabel, @"group ping complete");
+        SetStatusDefault(_statusLabel, @"group profile check complete");
         return;
     }
     int srv = [[idxs objectAtIndex:i] intValue];

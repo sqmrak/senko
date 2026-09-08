@@ -14,18 +14,19 @@ static void SenkoPlaceBehind(UIView *view, UIView *root) {
 @implementation MainVC (Decor)
 
 - (void)bringMainChromeToFront {
-    if (_connectBtn) [self.view bringSubviewToFront:_connectBtn];
-    if (_pingAllBtn) [self.view bringSubviewToFront:_pingAllBtn];
-    if (_statusLabel) [self.view bringSubviewToFront:_statusLabel];
-    UIView *title = [self.view viewWithTag:8001];
-    UIView *gear = [self.view viewWithTag:8002];
-    UIView *refresh = [self.view viewWithTag:8003];
-    UIView *plus = [self.view viewWithTag:8004];
-    if (title) [self.view bringSubviewToFront:title];
-    if (_misideLogo) [self.view bringSubviewToFront:_misideLogo];
-    if (gear) [self.view bringSubviewToFront:gear];
-    if (refresh) [self.view bringSubviewToFront:refresh];
-    if (plus) [self.view bringSubviewToFront:plus];
+    /* the connect pill, the check pill, and the detail line live inside the
+       status card now, so raising the card raises all three at once */
+    if (_statusCard) [self.view bringSubviewToFront:_statusCard];
+    /* particle fields do not receive touches, so they can cross the status card
+       without taking the connect and ping controls out of the responder chain */
+    if (_boyField && !_boyField.hidden) [self.view bringSubviewToFront:_boyField];
+    if (_bubbleField && !_bubbleField.hidden) [self.view bringSubviewToFront:_bubbleField];
+    if (_ui.title) [self.view bringSubviewToFront:_ui.title];
+    if (_ui.gear) [self.view bringSubviewToFront:_ui.gear];
+    if (_ui.refresh) [self.view bringSubviewToFront:_ui.refresh];
+    if (_ui.plus) [self.view bringSubviewToFront:_ui.plus];
+    /* the detail sheet is modal over everything the screen draws */
+    if (_sheet.superview == self.view) [self.view bringSubviewToFront:_sheet];
 }
 
 /* wallpaper only (glow is laid out with the connect button) */
@@ -53,19 +54,24 @@ static void SenkoPlaceBehind(UIView *view, UIView *root) {
     }
 }
 
-/* soft halo centered on connect; size tracks button frame (incl. scale) */
 - (void)layoutStatusGlow {
-    if (!_statusWashHost || !_connectBtn) return;
-    CGRect fr = _connectBtn.frame;
-    if (fr.size.width < 1.0f || fr.size.height < 1.0f) return;
-    CGFloat d = MAX(fr.size.width, fr.size.height) * 2.35f;
-    if (d < 160.0f) d = 160.0f;
-    _statusWashHost.bounds = CGRectMake(0, 0, d, d);
-    _statusWashHost.center = _connectBtn.center;
-    if (_statusWash)
-        _statusWash.frame = _statusWashHost.bounds;
-    if (_connectBtn.superview == self.view)
-        [self.view insertSubview:_statusWashHost belowSubview:_connectBtn];
+    if (!_statusWashHost || !_statusCard || !_statusCard->orb)
+        return;
+    if (_statusWashHost.superview != _statusCard) {
+        if (_statusCard->ring)
+            [_statusCard insertSubview:_statusWashHost belowSubview:_statusCard->ring];
+        else
+            [_statusCard insertSubview:_statusWashHost atIndex:0];
+    }
+    CGFloat orbSide = _statusCard->orb.bounds.size.width;
+    if (orbSide < 1.0f) orbSide = 44.0f;
+    CGFloat d = orbSide * 2.8f;
+    if (d < 100.0f) d = 100.0f;
+    if (fabsf((float)(_statusWashHost.bounds.size.width - d)) > 0.5f) {
+        _statusWashHost.bounds = CGRectMake(0, 0, d, d);
+        if (_statusWash) _statusWash.frame = _statusWashHost.bounds;
+    }
+    _statusWashHost.center = _statusCard->orb.center;
 }
 
 - (void)ensureStatusWash {
@@ -83,25 +89,10 @@ static void SenkoPlaceBehind(UIView *view, UIView *root) {
     _statusWash.contentsGravity = kCAGravityResize;
     _statusWash.opacity = 0.0f;
     [_statusWashHost.layer insertSublayer:_statusWash atIndex:0];
-    [self.view insertSubview:_statusWashHost atIndex:0];
 }
 
 - (void)layoutMisideChrome {
     [self layoutWallpaperStack];
-    if (_misideLogo && !_misideLogo.hidden) {
-        UIView *title = [self.view viewWithTag:8001];
-        CGRect b = self.view.bounds;
-        CGFloat W = b.size.width;
-        CGFloat top = GetTopOffset();
-        BOOL pad = ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad);
-        BOOL compact = (!pad && b.size.height <= 568.0f);
-        CGFloat logoW = pad ? 160.0f : (compact ? 110.0f : 132.0f);
-        CGFloat logoH = logoW * (84.0f / 240.0f);
-        CGFloat titleBottom = title
-            ? CGRectGetMaxY(title.frame)
-            : (top + (compact ? 42.0f : 46.0f));
-        _misideLogo.frame = CGRectMake((W - logoW) * 0.5f, titleBottom - 2.0f, logoW, logoH);
-    }
 }
 
 - (void)syncMisideDecor {
@@ -124,29 +115,10 @@ static void SenkoPlaceBehind(UIView *view, UIView *root) {
             }
         }
         _misidePattern.hidden = NO;
-
-        if (!_misideLogo) {
-            UIImage *logo = [UIImage imageNamed:@"miside-logo.png"];
-            if (!logo) {
-                NSString *p = [[NSBundle mainBundle] pathForResource:@"miside-logo" ofType:@"png"];
-                if (p) logo = [UIImage imageWithContentsOfFile:p];
-            }
-            if (logo) {
-                _misideLogo = [[UIImageView alloc] initWithImage:logo];
-                _misideLogo.tag = 8006;
-                _misideLogo.contentMode = UIViewContentModeScaleAspectFit;
-                _misideLogo.userInteractionEnabled = NO;
-                _misideLogo.autoresizingMask =
-                    UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
-                [self.view addSubview:_misideLogo];
-            }
-        }
-        if (_misideLogo) _misideLogo.hidden = NO;
         [self layoutMisideChrome];
         [self bringMainChromeToFront];
     } else {
         if (_misidePattern) _misidePattern.hidden = YES;
-        if (_misideLogo) _misideLogo.hidden = YES;
     }
 }
 
@@ -302,10 +274,8 @@ static void SenkoPlaceBehind(UIView *view, UIView *root) {
         SenkoApplyStatusWash(_statusWash, key, side, animated);
         _statusWashHost.hidden = NO;
     }
-    if (_statusWashHost && _connectBtn && _connectBtn.superview == self.view)
-        [self.view insertSubview:_statusWashHost belowSubview:_connectBtn];
+    [self layoutStatusGlow];
 }
 
-/* recolor existing ui after theme change */
 
 @end

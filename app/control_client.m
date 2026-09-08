@@ -1,4 +1,6 @@
 #import "control_client.h"
+#include "../common/senko_paths.h"
+#include "../daemon/core/b64.h"
 
 #import <sys/socket.h>
 #import <sys/un.h>
@@ -8,6 +10,8 @@
 #import <string.h>
 #import <errno.h>
 #import <spawn.h>
+#import <stdio.h>
+#import <sys/stat.h>
 
 extern char **environ;
 
@@ -27,6 +31,8 @@ extern char **environ;
     [name release];
     [url release];
     [header release];
+    [description release];
+    [supportURL release];
     [super dealloc];
 }
 @end
@@ -64,11 +70,45 @@ static int reply_complete(const char *buf, size_t len) {
                 (llen >= 4 && memcmp(ln, "SRV ", 4) == 0) ||
                 (llen >= 4 && memcmp(ln, "SUB ", 4) == 0) ||
                 (llen >= 8 && memcmp(ln, "SUBMETA ", 8) == 0) ||
+                (llen >= 8 && memcmp(ln, "SUBINFO ", 8) == 0) ||
                 (llen >= 7 && memcmp(ln, "SUBHDR ", 7) == 0) ||
                 (llen >= 8 && memcmp(ln, "SECTION ", 8) == 0) ||
                 (llen >= 6 && memcmp(ln, "FDATA ", 6) == 0);
             if (!stream) return 1; /* stop on terminal records */
         }
+        start = i + 1;
+    }
+    return 0;
+}
+
+/* LIST streams many records and ends with LISTEND. the generic predicate above
+   stops at the first line it does not recognise, and the daemon can push a
+   STATE or PONG event into the middle of the stream, which truncated the reply
+   and made a freshly added subscription appear only after a restart */
+static int list_reply_complete(const char *buf, size_t len) {
+    size_t start = 0;
+    for (size_t i = 0; i < len; ++i) {
+        if (buf[i] != '\n') continue;
+        size_t llen = i - start;
+        const char *ln = buf + start;
+        if ((llen >= 8 && memcmp(ln, "LISTEND ", 8) == 0) ||
+            (llen >= 4 && memcmp(ln, "ERR ", 4) == 0))
+            return 1;
+        start = i + 1;
+    }
+    return 0;
+}
+
+/* FETCH, LOGS and every other blob reply ends with FDEND */
+static int blob_reply_complete(const char *buf, size_t len) {
+    size_t start = 0;
+    for (size_t i = 0; i < len; ++i) {
+        if (buf[i] != '\n') continue;
+        size_t llen = i - start;
+        const char *ln = buf + start;
+        if ((llen >= 6 && memcmp(ln, "FDEND ", 6) == 0) ||
+            (llen >= 4 && memcmp(ln, "ERR ", 4) == 0))
+            return 1;
         start = i + 1;
     }
     return 0;
@@ -172,16 +212,9 @@ static int senkoCtlAuth(int fd, NSString *sockPath) {
         return nil;
     }
 
-/* probe the daemon before auth */
-    BOOL is_status = [cmd hasPrefix:@"STATUS"];
-    if (!is_status) {
-        if (senkoCtlAuth(fd, _sockPath) != 0) {
-            NSString *tok = senkoLoadCtlToken(_sockPath);
-            if ([tok length]) {
-                close(fd);
-                return nil;
-            }
-        }
+    if (senkoCtlAuth(fd, _sockPath) != 0) {
+        close(fd);
+        return nil;
     }
 
     NSString *line = [cmd hasSuffix:@"\n"] ? cmd : [cmd stringByAppendingString:@"\n"];
@@ -197,7 +230,12 @@ static int senkoCtlAuth(int fd, NSString *sockPath) {
 /* use the timeout for a dead daemon */
     int is_tunnel = ([cmd hasPrefix:@"CONNECT "] || [cmd isEqualToString:@"DISCONNECT"] ||
                      [cmd isEqualToString:@"DISCONNECT\n"]);
-    int (*done_fn)(const char *, size_t) = is_tunnel ? tunnel_reply_complete : reply_complete;
+    int is_list = [cmd hasPrefix:@"LIST"];
+    int is_blob = [cmd hasPrefix:@"LOGS"] || [cmd hasPrefix:@"FETCH "];
+    int (*done_fn)(const char *, size_t) = reply_complete;
+    if (is_tunnel) done_fn = tunnel_reply_complete;
+    else if (is_list) done_fn = list_reply_complete;
+    else if (is_blob) done_fn = blob_reply_complete;
 
     NSMutableData *acc = [NSMutableData data];
     char buf[4096];
@@ -229,6 +267,88 @@ static int senkoCtlAuth(int fd, NSString *sockPath) {
     [self sendCommand:cmd timeoutMs:2000 reply:done];
 }
 
+- (void)deviceHWID:(void (^)(NSString *))done {
+    [self sendCommand:@"HWID" timeoutMs:2000 reply:^(NSString *reply) {
+        NSString *value = nil;
+        if ([reply hasPrefix:@"OK "]) {
+            value = [[reply substringFromIndex:3] stringByTrimmingCharactersInSet:
+                     [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (![value length]) value = nil;
+        }
+        if (done) done(value);
+    }];
+}
+
+/* FDATA lines carry base64 chunks and FDEND closes the blob */
+static NSString *senkoDecodeBlobReply(NSString *reply) {
+    if (![reply length]) return nil;
+    NSMutableData *raw = [NSMutableData data];
+    BOOL sawEnd = NO;
+    for (NSString *ln in [reply componentsSeparatedByString:@"\n"]) {
+        if ([ln hasPrefix:@"FDEND "]) { sawEnd = YES; break; }
+        if (![ln hasPrefix:@"FDATA "]) continue;
+        const char *encoded = [[ln substringFromIndex:6] UTF8String];
+        if (!encoded) return nil;
+        size_t encoded_len = strlen(encoded);
+        size_t cap = b64_decoded_maxlen(encoded_len);
+        if (cap == 0) continue;
+        NSMutableData *chunk = [NSMutableData dataWithLength:cap];
+        size_t got = 0;
+        if (b64_decode(encoded, encoded_len, [chunk mutableBytes], cap, &got) != 0)
+            return nil;
+        [chunk setLength:got];
+        [raw appendData:chunk];
+    }
+    if (!sawEnd) return nil;
+    NSString *text = [[[NSString alloc] initWithData:raw
+                                            encoding:NSUTF8StringEncoding] autorelease];
+    if (!text)
+        text = [[[NSString alloc] initWithData:raw
+                                      encoding:NSISOLatin1StringEncoding] autorelease];
+    return text;
+}
+
+- (void)daemonLogTail:(void (^)(NSString *))done {
+    [self sendCommand:@"LOGS" timeoutMs:6000 reply:^(NSString *reply) {
+        if (done) done(senkoDecodeBlobReply(reply));
+    }];
+}
+
+- (void)importContent:(NSData *)data reply:(void (^)(NSString *))done {
+    if (![data length]) {
+        if (done) done(@"ERR nothing to import");
+        return;
+    }
+    NSString *stage = @SENKO_IMPORT_STAGE;
+    NSString *dir = [stage stringByDeletingLastPathComponent];
+    NSError *err = nil;
+    if (![[NSFileManager defaultManager] createDirectoryAtPath:dir
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:&err] ||
+        ![data writeToFile:stage atomically:YES]) {
+        if (done) done(@"ERR could not stage the import file");
+        return;
+    }
+    [self sendCommand:@"IMPORT" timeoutMs:10000 reply:^(NSString *reply) {
+/* the daemon removes the file once it has read it; clean up when it never did */
+        [[NSFileManager defaultManager] removeItemAtPath:stage error:nil];
+        if (done) done(reply);
+    }];
+}
+
+- (void)clearManualServers:(void (^)(NSString *))done {
+    [self sendCommand:@"CLEARMANUAL" timeoutMs:5000 reply:done];
+}
+
+- (void)exportBackup:(void (^)(NSString *))done {
+    [self sendCommand:@"EXPORT" timeoutMs:5000 reply:done];
+}
+
+- (void)restoreBackup:(void (^)(NSString *))done {
+    [self sendCommand:@"RESTORE" timeoutMs:5000 reply:done];
+}
+
 - (void)sendCommand:(NSString *)cmd timeoutMs:(int)timeoutMs reply:(void (^)(NSString *))done {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         NSString *reply = [self blockingSend:cmd timeoutMs:timeoutMs];
@@ -245,10 +365,22 @@ static int senkoCtlAuth(int fd, NSString *sockPath) {
     }];
 }
 
-/* show helper errors */
+/* senko-kick answers with the reason it gave up, and a bare number in the
+   alert told the user nothing they could act on */
+static NSString *SenkoKickFailureText(int code) {
+    switch (code) {
+        case 1: return @"senko-kick is not setuid root: reinstall the package";
+        case 2: return @"senkod is missing: reinstall the package";
+        case 3: return @"another daemon start is still running";
+        case 5: return @"senkod did not open its control socket";
+        default: break;
+    }
+    return [NSString stringWithFormat:@"daemon start failed (%d)", code];
+}
+
 - (void)kickDaemon:(void (^)(BOOL, NSString *))done {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        const char *path = "/usr/bin/senko-kick";
+        const char *path = SENKO_USR_BIN "/senko-kick";
         BOOL ok = NO;
         NSString *detail = nil;
         if (access(path, X_OK) != 0) {
@@ -276,7 +408,7 @@ static int senkoCtlAuth(int fd, NSString *sockPath) {
                     detail = @"daemon started";
                 } else {
                     int code = waited > 0 && WIFEXITED(st) ? WEXITSTATUS(st) : -1;
-                    detail = [NSString stringWithFormat:@"daemon start failed (%d)", code];
+                    detail = SenkoKickFailureText(code);
                     break;
                 }
             }
@@ -421,6 +553,26 @@ static SenkoSub *parseSUB(NSString *line) {
                 }
                 continue;
             }
+            if ([ln hasPrefix:@"SUBINFO "]) {
+                NSArray *t = [ln componentsSeparatedByString:@" "];
+                if ([t count] >= 7) {
+                    int idx = [[t objectAtIndex:1] intValue];
+                    for (SenkoSub *s in subs) {
+                        if (s->index != idx) continue;
+                        s->upload = (unsigned long long)[[t objectAtIndex:2] longLongValue];
+                        s->download = (unsigned long long)[[t objectAtIndex:3] longLongValue];
+                        s->total = (unsigned long long)[[t objectAtIndex:4] longLongValue];
+                        NSString *description = [[t objectAtIndex:5]
+                            stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+                        NSString *support = [[t objectAtIndex:6]
+                            stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+                        s->description = [(description && ![description isEqualToString:@"-"]) ? description : @"" copy];
+                        s->supportURL = [(support && ![support isEqualToString:@"-"]) ? support : @"" copy];
+                        break;
+                    }
+                }
+                continue;
+            }
             if ([ln hasPrefix:@"SUBHDR "]) {
                 NSArray *t = [ln componentsSeparatedByString:@" "];
                 if ([t count] >= 3) {
@@ -444,6 +596,7 @@ static SenkoSub *parseSUB(NSString *line) {
                     [order addObject:[NSNumber numberWithInt:[[t objectAtIndex:i] intValue]]];
                 continue;
             }
+            if (![ln hasPrefix:@"SRV "]) continue; /* skip interleaved events */
             SenkoServer *sv = parseSRV(ln);
             if (sv) [srvs addObject:sv];
         }
@@ -483,14 +636,32 @@ static SenkoSub *parseSUB(NSString *line) {
     }];
 }
 
-- (void)statusState:(void (^)(NSString *))done {
+- (void)statusStateWithUptime:(void (^)(NSString *, long))done {
     [self sendCommand:@"STATUS" reply:^(NSString *reply) {
         NSString *state = nil;
+        long uptime = 0;
         if ([reply hasPrefix:@"STATE "]) {
-            state = [[reply substringFromIndex:6]
-                     stringByTrimmingCharactersInSet:
-                     [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            NSString *tail = [[reply substringFromIndex:6]
+                              stringByTrimmingCharactersInSet:
+                              [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            /* the age is an optional trailing token, so a daemon that predates
+               it still answers with a state this parser accepts */
+            NSRange sp = [tail rangeOfString:@" "];
+            if (sp.location == NSNotFound) {
+                state = tail;
+            } else {
+                state = [tail substringToIndex:sp.location];
+                uptime = [[tail substringFromIndex:sp.location + 1] intValue];
+                if (uptime < 0) uptime = 0;
+            }
         }
+        if (done) done(state, uptime);
+    }];
+}
+
+- (void)statusState:(void (^)(NSString *))done {
+    [self statusStateWithUptime:^(NSString *state, long uptime) {
+        (void)uptime;
         if (done) done(state);
     }];
 }
@@ -578,9 +749,25 @@ static SenkoSub *parseSUB(NSString *line) {
     }];
 }
 
+- (void)checkIndex:(int)idx mode:(NSString *)mode
+              reply:(void (^)(int, NSString *))done {
+    NSArray *safeMode = [NSArray arrayWithObjects:@"tcp", @"proxy", @"tunnel", @"handshake", nil];
+    if (![safeMode containsObject:mode]) { if (done) done(-1, @"unknown check type"); return; }
+    [self sendCommand:[NSString stringWithFormat:@"CHECK %@ %d", mode, idx]
+            timeoutMs:12000 reply:^(NSString *reply) {
+        int ms = -1;
+        if ([reply hasPrefix:@"PONG "]) {
+            NSArray *parts = [[reply stringByTrimmingCharactersInSet:
+                [NSCharacterSet whitespaceAndNewlineCharacterSet]] componentsSeparatedByString:@" "];
+            if ([parts count] >= 3) ms = [[parts objectAtIndex:2] intValue];
+        }
+        if (done) done(ms, ms >= 0 ? nil : reply);
+    }];
+}
+
 - (void)runAWGHelper:(NSArray *)args reply:(void (^)(NSString *))done {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        const char *path = "/usr/bin/senko-kick";
+        const char *path = SENKO_USR_BIN "/senko-kick";
         NSMutableArray *argvData = [NSMutableArray array];
         [argvData addObject:[NSData dataWithBytes:path length:strlen(path) + 1]];
         for (NSString *arg in args) {
@@ -633,11 +820,38 @@ static SenkoSub *parseSUB(NSString *line) {
     [self runAWGHelper:[NSArray arrayWithObjects:@"--awg", path, nil] reply:done];
 }
 
+/* the helper is a setuid spawn that serialises on the daemon startup lock, and
+   the connect path pays for two of them before the tunnel even starts. these
+   are the same two files the helper reads to decide it has nothing to do, so
+   reading them here gives that answer without the spawn */
+static BOOL senkoAWGIdle(void) {
+    struct stat st;
+    /* only a provably absent pid file proves nothing is running. any other
+       failure means this process cannot read /var/run, and then the helper has
+       to answer, or a live amneziawg tunnel would never be stopped */
+    if (stat("/var/run/senkoawgd.pid", &st) == 0 || errno != ENOENT) return NO;
+    FILE *f = fopen("/var/run/senkoawgd.status", "r");
+    if (!f) return errno == ENOENT;
+    char line[64];
+    line[0] = '\0';
+    if (!fgets(line, sizeof line, f)) line[0] = '\0';
+    fclose(f);
+    line[strcspn(line, "\r\n")] = '\0';
+    return line[0] == '\0' || strcmp(line, "idle") == 0;
+}
+
+- (void)replyIdle:(void (^)(NSString *))done {
+    if (!done) return;
+    dispatch_async(dispatch_get_main_queue(), ^{ done(@"idle\n"); });
+}
+
 - (void)stopAWG:(void (^)(NSString *))done {
+    if (senkoAWGIdle()) { [self replyIdle:done]; return; }
     [self runAWGHelper:[NSArray arrayWithObject:@"--awg-stop"] reply:done];
 }
 
 - (void)awgStatus:(void (^)(NSString *))done {
+    if (senkoAWGIdle()) { [self replyIdle:done]; return; }
     [self runAWGHelper:[NSArray arrayWithObject:@"--awg-status"] reply:done];
 }
 
@@ -663,7 +877,7 @@ static SenkoSub *parseSUB(NSString *line) {
         return;
     }
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        const char *bin = "/usr/bin/senko-kick";
+        const char *bin = SENKO_USR_BIN "/senko-kick";
         if (access(bin, X_OK) != 0) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (done) done(@"UPDATE ERR senko-kick missing");
@@ -699,7 +913,7 @@ static SenkoSub *parseSUB(NSString *line) {
         posix_spawn_file_actions_init(&fa);
         posix_spawn_file_actions_adddup2(&fa, pipefd[1], STDOUT_FILENO);
         if (posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, errlog,
-                                             O_WRONLY | O_CREAT | O_APPEND, 0666) != 0) {
+                                             O_WRONLY | O_CREAT | O_APPEND, 0600) != 0) {
             posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/dev/null",
                                              O_WRONLY, 0);
         }
