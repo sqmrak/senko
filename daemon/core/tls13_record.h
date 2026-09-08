@@ -33,7 +33,6 @@ typedef enum {
     TLS13_REC_ERR_CRYPTO= -4
 } tls13_rec_status_t;
 
-/* seal one tls record and return the complete wire bytes */
 tls13_rec_status_t tls13_record_seal(const uint8_t key[TLS13_REC_KEY_LEN],
                                      const uint8_t iv[TLS13_REC_IV_LEN],
                                      uint64_t seq,
@@ -41,7 +40,6 @@ tls13_rec_status_t tls13_record_seal(const uint8_t key[TLS13_REC_KEY_LEN],
                                      const uint8_t *content, size_t content_len,
                                      uint8_t *out, size_t cap, size_t *out_len);
 
-/* authenticate and open one tls record before exposing plaintext */
 tls13_rec_status_t tls13_record_open(const uint8_t key[TLS13_REC_KEY_LEN],
                                      const uint8_t iv[TLS13_REC_IV_LEN],
                                      uint64_t seq,

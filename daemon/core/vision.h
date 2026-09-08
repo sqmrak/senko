@@ -70,7 +70,6 @@ void vision_unpad_bind_traffic(vision_unpad_t *ctx, vision_traffic_t *traffic);
 /* inspect one unpadded tls buffer before the padding window closes */
 void vision_filter_tls(vision_traffic_t *traffic, const uint8_t *buf, size_t len);
 
-/* remove vision framing and latch raw passthrough at direct command */
 int vision_unpad(vision_unpad_t *ctx, const uint8_t *in, size_t in_len,
                  uint8_t *out, size_t cap, size_t *out_len, int *switched_direct);
 

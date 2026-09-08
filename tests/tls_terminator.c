@@ -33,11 +33,10 @@ static int connect_backend(const char *host, const char *port) {
     return fd;
 }
 
-/* relay between a tls conn (ssl) and a plaintext backend fd until either ends.
-   simple blocking-ish poll loop; fine for a one-shot smoke test*/
+/* a bounded poll keeps this one-shot fixture from hanging the test suite */
 static void relay(SSL *ssl, int sfd, int bfd) {
     struct pollfd pfd[2];
-    pfd[0].fd = sfd;    /* the tls socket (we poll the raw fd for readability) */
+    pfd[0].fd = sfd;    /* openssl readiness follows its underlying socket */
     pfd[1].fd = bfd;
     uint8_t buf[8192];
     for (;;) {

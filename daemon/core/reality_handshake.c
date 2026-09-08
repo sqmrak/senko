@@ -271,6 +271,7 @@ static int cert_extract(const uint8_t *msg, size_t msg_len,
 
 void *reality_handshake_open(int fd, const rh_params_t *p, rh_status_t *err) {
     rh_status_t e = RH_ERR_PROTO;
+    const char *stage = "arguments";
 #define FAIL(code) do { e = (code); goto fail; } while (0)
 
     rh_conn_t *c = NULL;
@@ -280,6 +281,7 @@ void *reality_handshake_open(int fd, const rh_params_t *p, rh_status_t *err) {
 
     if (fd < 0 || !p) { e = RH_ERR_ARG; goto fail; }
 
+    stage = "ephemeral key generation";
     if (rc_x25519_keygen(eph_priv, eph_pub) != RC_OK) FAIL(RH_ERR_CRYPTO);
 
     uint8_t hello[2048]; size_t hello_len = 0;
@@ -292,10 +294,12 @@ void *reality_handshake_open(int fd, const rh_params_t *p, rh_status_t *err) {
     chp.sni = p->sni;
     chp.fp = (tls_fp_t)p->fp;
     chp.p256_pub = p->has_p256 ? p->p256_pub : NULL;
+    stage = "ClientHello construction";
     if (tls_build_clienthello(&chp, hello, sizeof hello, &hello_len) != TLS_CH_OK)
         FAIL(RH_ERR_PROTO);
 
 /* bind the reality token to the zeroed clienthello aad */
+    stage = "authorization token";
     if (reality_derive_authkey(eph_priv, p->pbk, chp.random, authkey) != RA_OK)
         FAIL(RH_ERR_CRYPTO);
     uint8_t sid[RA_SESSIONID_LEN];
@@ -308,15 +312,18 @@ void *reality_handshake_open(int fd, const rh_params_t *p, rh_status_t *err) {
     if (tls13_transcript_init(&tr) != 0) FAIL(RH_ERR_CRYPTO);
     tls13_transcript_update(&tr, hello, hello_len);
 
+    stage = "ClientHello send";
     if (write_plaintext_record(fd, CT_HANDSHAKE, hello, hello_len) != 0)
         FAIL(RH_ERR_IO);
 
+    stage = "ServerHello read";
     uint8_t shrec[MAX_RECORD], shtype; size_t shlen;
     do {
         if (read_record(fd, &shtype, shrec, sizeof shrec, &shlen, NULL) != 0) FAIL(RH_ERR_IO);
     } while (shtype == CT_CCS);
     if (shtype != CT_HANDSHAKE) FAIL(RH_ERR_PROTO);
 
+    stage = "ServerHello parse";
     tls13_serverhello_t sh;
     if (tls13_parse_serverhello(shrec, shlen, &sh) != TLS13_SH_OK) FAIL(RH_ERR_PROTO);
 /* both suites we accept ride the sha-256 key schedule */
@@ -328,6 +335,7 @@ void *reality_handshake_open(int fd, const rh_params_t *p, rh_status_t *err) {
     if (!sh.have_key_share) FAIL(RH_ERR_PROTO);
     tls13_transcript_update(&tr, shrec, shlen);
 
+    stage = "TLS key schedule";
     uint8_t ecdhe[RC_SHARED_LEN];
     if (rc_x25519_shared(eph_priv, sh.server_x25519, ecdhe) != RC_OK) FAIL(RH_ERR_CRYPTO);
 
@@ -360,6 +368,7 @@ void *reality_handshake_open(int fd, const rh_params_t *p, rh_status_t *err) {
     int have_cert = 0;
     uint8_t th_before_fin[TLS13_TRANSCRIPT_LEN]; /* hash up to cert verify */
 
+    stage = "encrypted server flight";
     for (;;) {
         const uint8_t *msg; size_t mlen;
         int r = flight_next_msg(&fl, &fconsumed, &msg, &mlen);
@@ -370,6 +379,7 @@ void *reality_handshake_open(int fd, const rh_params_t *p, rh_status_t *err) {
         if (mtype == HS_FINISHED) {
             if (tls13_transcript_current(&tr, th_before_fin) != 0) FAIL(RH_ERR_CRYPTO);
             if (mlen != 4 + TLS13_FINISHED_LEN) FAIL(RH_ERR_PROTO);
+            stage = "server Finished verification";
             if (tls13_finished_verify(s_hs_secret, th_before_fin, msg + 4) != TLS13_OK)
                 FAIL(RH_ERR_PROTO);
             tls13_transcript_update(&tr, msg, mlen); /* now include it */
@@ -387,8 +397,10 @@ void *reality_handshake_open(int fd, const rh_params_t *p, rh_status_t *err) {
         tls13_transcript_update(&tr, msg, mlen);
     }
     (void)saw_ee; (void)saw_cv;
+    stage = "server certificate";
     if (!saw_cert || !have_cert) FAIL(RH_ERR_PROTO);
 
+    stage = "REALITY certificate proof";
     if (reality_verify_server(authkey, cert_pub, 32, cert_sig, cert_sig_len) != RA_OK)
         FAIL(RH_ERR_NOT_REALITY);
 
@@ -420,6 +432,7 @@ void *reality_handshake_open(int fd, const rh_params_t *p, rh_status_t *err) {
                           cfin_msg, sizeof cfin_msg,
                           cfin_rec, sizeof cfin_rec, &cfin_rec_len) != TLS13_REC_OK)
         FAIL(RH_ERR_CRYPTO);
+    stage = "client Finished send";
     if (write_full(fd, cfin_rec, cfin_rec_len) != 0) FAIL(RH_ERR_IO);
 
     c = (rh_conn_t *)calloc(1, sizeof *c);
@@ -439,6 +452,7 @@ void *reality_handshake_open(int fd, const rh_params_t *p, rh_status_t *err) {
     return c;
 
 fail:
+    fprintf(stderr, "senkod: REALITY %s failed (%s)\n", stage, rh_status_name(e));
     if (tr.ctx) tls13_transcript_free(&tr);
     if (c) free(c);
     if (err) *err = e;
@@ -776,9 +790,12 @@ static void *rh_open(int fd, const transport_tls_cfg_t *cfg) {
         p.short_id_len = 0;
     }
 
-    p.version[0] = 1;
-    p.version[1] = 8;
-    p.version[2] = 0;
+/* REALITY servers may enforce a minimum wire client version before accepting
+   the encrypted session token.  The old 1.8.0 marker is rejected by current
+   deployments even though the key and ClientHello are otherwise valid. */
+    p.version[0] = 26;
+    p.version[1] = 7;
+    p.version[2] = 28;
 
 /* map the fingerprint and generate firefox's decoy point in crypto code */
     p.fp = TLS_FP_CHROME;

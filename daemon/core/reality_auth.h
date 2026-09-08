@@ -21,7 +21,6 @@ typedef enum {
     RA_ERR_AUTH   = -3 /* reject invalid tokens or server proofs */
 } ra_status_t;
 
-/* bind the client random and server key to the reality authentication key */
 ra_status_t reality_derive_authkey(const uint8_t our_priv[RA_AUTHKEY_LEN],
                                    const uint8_t their_pub[RA_AUTHKEY_LEN],
                                    const uint8_t client_random[RA_RANDOM_LEN],
@@ -35,7 +34,6 @@ ra_status_t reality_seal_token(const uint8_t authkey[RA_AUTHKEY_LEN],
                                const uint8_t *aad, size_t aad_len,
                                uint8_t out_session_id[RA_SESSIONID_LEN]);
 
-/* open a token in tests and reject any key, aad, or tag mismatch */
 ra_status_t reality_open_token(const uint8_t authkey[RA_AUTHKEY_LEN],
                                const uint8_t client_random[RA_RANDOM_LEN],
                                const uint8_t *aad, size_t aad_len,

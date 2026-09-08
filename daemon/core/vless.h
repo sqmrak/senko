@@ -35,7 +35,6 @@ typedef enum {
 
 typedef struct {
     vless_atyp_t atyp;
-/* keep one destination layout for ip, ipv6, and domain requests */
     uint8_t  host_addr[16];
     char     domain[256];
     uint16_t port; /* store host order until wire serialization */
