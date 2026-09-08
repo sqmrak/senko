@@ -19,6 +19,11 @@ typedef struct {
     char url[512];
     char header[512]; /* optional HTTP header for subscription fetches */
     uint64_t expire;
+    uint64_t upload;
+    uint64_t download;
+    uint64_t total;
+    char description[256];
+    char support_url[512];
     int  used;
 } store_sub_t;
 
@@ -56,6 +61,13 @@ store_status_t store_move_section(store_t *st, int section_id, size_t to_pos);
 
 store_status_t store_add_manual(store_t *st, const char *link, size_t *out_index);
 
+/* the already parsed variant, used by bulk imports of foreign client profiles */
+store_status_t store_add_manual_server(store_t *st, const vl_server_t *server,
+                                       size_t *out_index);
+
+/* drop every manual server in one step; out_removed counts what went */
+store_status_t store_clear_manual(store_t *st, size_t *out_removed);
+
 store_status_t store_add_sub(store_t *st, const char *name, const char *url,
                              size_t *out_sub);
 
@@ -67,10 +79,13 @@ store_status_t store_refresh_sub(store_t *st, size_t sub_index,
 store_status_t store_remove(store_t *st, size_t index);
 store_status_t store_move_manual(store_t *st, size_t index, size_t to_pos);
 
-/* remove one subscription and its servers */
 store_status_t store_remove_sub(store_t *st, size_t sub_index);
 
 void store_set_sub_expire(store_t *st, size_t sub_index, uint64_t expire);
+
+void store_set_sub_meta(store_t *st, size_t sub_index, uint64_t upload,
+                        uint64_t download, uint64_t total,
+                        const char *description, const char *support_url);
 
 /* set a single optional HTTP request header for subscription refreshes */
 store_status_t store_set_sub_header(store_t *st, size_t sub_index,

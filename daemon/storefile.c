@@ -76,13 +76,7 @@ storefile_status_t storefile_save(const store_t *st, const daemon_settings_t *se
     if (store_serialize(st, g_store, sizeof g_store, &store_len) != STORE_OK)
         return STOREFILE_ERR_TOOBIG;
 
-    size_t body_off = 0;
-    if (store_len >= 3 && memcmp(g_store, "V1\n", 3) == 0) body_off = 3;
-
     size_t off = 0;
-    int n = snprintf(g_buf + off, sizeof g_buf - off, "V1\n");
-    if (n < 0 || (size_t)n >= sizeof g_buf - off) return STOREFILE_ERR_TOOBIG;
-    off += (size_t)n;
 
     if (set) {
         size_t set_len = 0;
@@ -91,11 +85,10 @@ storefile_status_t storefile_save(const store_t *st, const daemon_settings_t *se
         off += set_len;
     }
 
-    if (body_off < store_len) {
-        size_t body_len = store_len - body_off;
-        if (off + body_len > sizeof g_buf) return STOREFILE_ERR_TOOBIG;
-        memcpy(g_buf + off, g_store + body_off, body_len);
-        off += body_len;
+    if (store_len > 0) {
+        if (off + store_len > sizeof g_buf) return STOREFILE_ERR_TOOBIG;
+        memcpy(g_buf + off, g_store, store_len);
+        off += store_len;
     }
     size_t len = off;
 

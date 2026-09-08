@@ -46,6 +46,7 @@ typedef struct {
     char       open_path[256];
     char       open_ws_host[256];
     char       open_xhttp_mode[16];
+    char       open_peer_host[256];
     transport_tls_cfg_t open_tls_cfg;
     void      *open_th;
 
@@ -58,6 +59,9 @@ typedef struct {
     uint8_t    prebuf[LOOP_PREBUF_CAP];
     size_t     prebuf_len;
 
+/* the relay ended without error, so a transport may half close politely */
+    int        relay_clean;
+
 /* retain local output so large package transfers survive backpressure */
     uint8_t    pend[64 * 1024];
     size_t     pend_len;
@@ -69,6 +73,9 @@ typedef struct loop {
     int                   tproxy_fd; /* transparent listener, -1 means off */
     uint16_t              tproxy_port; /* redirect port used by natlook */
     int                   tproxy_sockname; /* ipfw retains original destination */
+    uint64_t              tproxy_accept_generation;
+    char                  tproxy_last_host[64];
+    uint16_t              tproxy_last_port;
     const transport_vt_t *vt; /* active remote transport */
     loop_dialer_fn        dial;
     void                 *dial_ctx;
@@ -87,6 +94,7 @@ typedef struct loop {
     char     path[256];
     char     ws_host[256];
     char     xhttp_mode[16];
+    char     peer_host[256]; /* dial target, authority fallback for http/2 */
     transport_tls_cfg_t tls_cfg;
 
 /* keep the listener bound while rejecting clients without a server */
@@ -109,7 +117,6 @@ typedef enum {
     LOOP_ERR      = -3
 } loop_status_t;
 
-/* bind the local listener and retain the remote path configuration */
 loop_status_t loop_init(loop_t *lp, uint16_t listen_port, int bind_public,
                         const transport_vt_t *vt,
                         loop_dialer_fn dial, void *dial_ctx,
@@ -123,7 +130,7 @@ uint16_t loop_listen_port(const loop_t *lp);
 void loop_set_tls(loop_t *lp, const char *sni, const char *fingerprint,
                   const char *reality_pbk, const char *reality_sid,
                   const char *path, const char *ws_host,
-                  const char *xhttp_mode);
+                  const char *xhttp_mode, const char *peer_host);
 
 /* replace the active path and drop connections tied to the old server */
 loop_status_t loop_set_server(loop_t *lp, const transport_vt_t *vt,
@@ -134,20 +141,25 @@ loop_status_t loop_set_server(loop_t *lp, const transport_vt_t *vt,
                               const char *sni, const char *fingerprint,
                               const char *reality_pbk, const char *reality_sid,
                               const char *path, const char *ws_host,
-                              const char *xhttp_mode);
+                              const char *xhttp_mode, const char *peer_host);
 
 /* stop traffic while keeping the listener ready for the next selection */
 void loop_stop(loop_t *lp);
 
-/* enable the listener used by full-device transparent routing */
+/* enable the listener used by full-device transparent routing. pf rewrites
+   the destination, so that mode asks pf for it; every ipfw fwd mode keeps the
+   destination on the accepted socket and reads it with getsockname */
 loop_status_t loop_enable_tproxy(loop_t *lp, uint16_t port);
-loop_status_t loop_enable_tproxy_ios5(loop_t *lp, uint16_t port);
+loop_status_t loop_enable_tproxy_sockname(loop_t *lp, uint16_t port);
 void loop_disable_tproxy(loop_t *lp);
 
-/* advance sockets, workers, and completed connections for one poll interval */
 loop_status_t loop_step(loop_t *lp, int timeout_ms);
 
 size_t loop_conn_count(const loop_t *lp);
+
+uint64_t loop_tproxy_generation(const loop_t *lp);
+int loop_tproxy_seen(const loop_t *lp, uint64_t after_generation,
+                     const char *host, uint16_t port);
 
 void loop_close(loop_t *lp);
 

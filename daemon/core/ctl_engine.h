@@ -29,9 +29,18 @@ typedef struct {
 typedef struct {
     store_t      store;
     ctl_state_t  state; /* state shared with the control protocol */
+    /* wall clock second the tunnel last reached CONNECTED. the app shows the
+       elapsed time, and it has to survive the app being closed and reopened,
+       so the daemon is the one that keeps it */
+    long         connected_at;
 } ctl_engine_t;
 
 void ctl_engine_init(ctl_engine_t *e);
+
+long ctl_engine_now(void);
+/* 0 rather than a negative value while disconnected, because the status
+   line prints it directly */
+long ctl_engine_uptime(const ctl_engine_t *e);
 
 /* emit the immediate protocol event and defer network work to the daemon */
 ctl_status_t ctl_engine_handle(ctl_engine_t *e, const ctl_cmd_t *cmd,

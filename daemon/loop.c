@@ -123,6 +123,7 @@ loop_status_t loop_init(loop_t *lp, uint16_t listen_port, int bind_public,
     lp->tls_cfg.path        = lp->path;
     lp->tls_cfg.ws_host     = lp->ws_host;
     lp->tls_cfg.xhttp_mode  = lp->xhttp_mode;
+    lp->tls_cfg.peer_host   = lp->peer_host;
 
     /* command-line mode starts active; managed mode selects a server later */
     lp->active = 1;
@@ -210,7 +211,7 @@ static void copy_field(char *dst, size_t cap, const char *src) {
 void loop_set_tls(loop_t *lp, const char *sni, const char *fingerprint,
                   const char *reality_pbk, const char *reality_sid,
                   const char *path, const char *ws_host,
-                  const char *xhttp_mode) {
+                  const char *xhttp_mode, const char *peer_host) {
     if (!lp) return;
     copy_field(lp->sni,          sizeof lp->sni,          sni);
     copy_field(lp->fingerprint,  sizeof lp->fingerprint,  fingerprint);
@@ -219,6 +220,7 @@ void loop_set_tls(loop_t *lp, const char *sni, const char *fingerprint,
     copy_field(lp->path,         sizeof lp->path,         path);
     copy_field(lp->ws_host,      sizeof lp->ws_host,      ws_host);
     copy_field(lp->xhttp_mode,   sizeof lp->xhttp_mode,   xhttp_mode);
+    copy_field(lp->peer_host,    sizeof lp->peer_host,    peer_host);
     lp->tls_cfg.sni = lp->sni;
     lp->tls_cfg.fingerprint = lp->fingerprint;
     lp->tls_cfg.reality_pbk = lp->reality_pbk;
@@ -226,6 +228,7 @@ void loop_set_tls(loop_t *lp, const char *sni, const char *fingerprint,
     lp->tls_cfg.path = lp->path;
     lp->tls_cfg.ws_host = lp->ws_host;
     lp->tls_cfg.xhttp_mode = lp->xhttp_mode;
+    lp->tls_cfg.peer_host = lp->peer_host;
 }
 
 static loop_conn_t *alloc_conn(loop_t *lp) {
@@ -340,6 +343,8 @@ static void drop_conn(loop_t *lp, loop_conn_t *c) {
         cancel_opening_conn(lp, c);
         return;
     }
+    if (c->relay_clean && c->th && c->open_vt && c->open_vt->shutdown)
+        c->open_vt->shutdown(c->th);
     session_trace_close(&c->sess, "drop");
     if (c->sess.state == SESS_ERROR)
         fprintf(stderr, "senkod: dropping errored session\n");
@@ -469,7 +474,7 @@ loop_status_t loop_set_server(loop_t *lp, const transport_vt_t *vt,
                               const char *sni, const char *fingerprint,
                               const char *reality_pbk, const char *reality_sid,
                               const char *path, const char *ws_host,
-                              const char *xhttp_mode) {
+                              const char *xhttp_mode, const char *peer_host) {
     if (!lp || !vt || !dial) return LOOP_ERR_ARG;
     if (proto == VL_PROTO_VLESS && !uuid) return LOOP_ERR_ARG;
 
@@ -490,7 +495,7 @@ loop_status_t loop_set_server(loop_t *lp, const transport_vt_t *vt,
     copy_field(lp->pass, sizeof lp->pass, (pass && pass[0]) ? pass : NULL);
 
     loop_set_tls(lp, sni, fingerprint, reality_pbk, reality_sid, path, ws_host,
-                 xhttp_mode);
+                 xhttp_mode, peer_host);
 
     lp->active = 1; /* accept clients again */
     return LOOP_OK;
@@ -535,7 +540,7 @@ loop_status_t loop_enable_tproxy(loop_t *lp, uint16_t port) {
     return loop_enable_tproxy_mode(lp, port, 0);
 }
 
-loop_status_t loop_enable_tproxy_ios5(loop_t *lp, uint16_t port) {
+loop_status_t loop_enable_tproxy_sockname(loop_t *lp, uint16_t port) {
     return loop_enable_tproxy_mode(lp, port, 1);
 }
 
@@ -564,6 +569,7 @@ static void fill_open_fields(loop_t *lp, loop_conn_t *c) {
     copy_field(c->open_path, sizeof c->open_path, lp->path);
     copy_field(c->open_ws_host, sizeof c->open_ws_host, lp->ws_host);
     copy_field(c->open_xhttp_mode, sizeof c->open_xhttp_mode, lp->xhttp_mode);
+    copy_field(c->open_peer_host, sizeof c->open_peer_host, lp->peer_host);
     c->open_tls_cfg.sni = c->open_sni;
     c->open_tls_cfg.fingerprint = c->open_fingerprint;
     c->open_tls_cfg.reality_pbk = c->open_reality_pbk;
@@ -571,6 +577,7 @@ static void fill_open_fields(loop_t *lp, loop_conn_t *c) {
     c->open_tls_cfg.path = c->open_path;
     c->open_tls_cfg.ws_host = c->open_ws_host;
     c->open_tls_cfg.xhttp_mode = c->open_xhttp_mode;
+    c->open_tls_cfg.peer_host = c->open_peer_host;
 }
 
 static int start_opening(loop_t *lp, loop_conn_t *c, int cfd) {
@@ -645,11 +652,23 @@ static void accept_tproxy_one(loop_t *lp) {
             return;
         }
         dport = ntohs(dest.sin_port);
+        /* the wildcard bind that ipfw fwd needs is reachable from the network,
+           and a direct connection to it carries no original destination, so it
+           would either relay to this listener forever or hand a stranger an
+           open proxy */
+        if (dport == lp->tproxy_port) {
+            close(cfd);
+            return;
+        }
     } else if (pf_natlook_dest(cfd, &clientaddr, lp->tproxy_port,
                                host, sizeof host, &dport) != 0) {
         close(cfd);
         return;
     }
+
+    lp->tproxy_accept_generation++;
+    snprintf(lp->tproxy_last_host, sizeof lp->tproxy_last_host, "%s", host);
+    lp->tproxy_last_port = dport;
 
     loop_conn_t *c = alloc_conn(lp);
     if (!c) {
@@ -767,8 +786,10 @@ static void service_conn(loop_t *lp, loop_conn_t *c,
     }
 
     /* close only after the session and pending output are done */
-    if (session_is_done(&c->sess) && c->pend_off >= c->pend_len)
+    if (session_is_done(&c->sess) && c->pend_off >= c->pend_len) {
+        c->relay_clean = 1;
         drop_conn(lp, c);
+    }
 }
 
 loop_status_t loop_step(loop_t *lp, int timeout_ms) {
@@ -887,6 +908,18 @@ loop_status_t loop_step(loop_t *lp, int timeout_ms) {
 
 size_t loop_conn_count(const loop_t *lp) {
     return lp ? lp->nconns : 0;
+}
+
+uint64_t loop_tproxy_generation(const loop_t *lp) {
+    return lp ? lp->tproxy_accept_generation : 0;
+}
+
+int loop_tproxy_seen(const loop_t *lp, uint64_t after_generation,
+                     const char *host, uint16_t port) {
+    if (!lp || !host || lp->tproxy_accept_generation == after_generation)
+        return 0;
+    return lp->tproxy_last_port == port &&
+           strcmp(lp->tproxy_last_host, host) == 0;
 }
 
 void loop_close(loop_t *lp) {

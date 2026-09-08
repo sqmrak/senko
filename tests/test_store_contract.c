@@ -66,15 +66,24 @@ int main(void) {
        strcmp(st.servers[st.selected].host, "ok.example") == 0);
 
     store_set_sub_expire(&st, sub, 1893456000ULL);
+    store_set_sub_meta(&st, sub, 1024ULL * 1024ULL, 2ULL * 1024ULL * 1024ULL,
+                       10ULL * 1024ULL * 1024ULL, "monthly plan",
+                       "https://support.example/plan");
     char saved[8192];
     size_t saved_len = 0;
     ok("serialize order and expiry",
        store_serialize(&st, saved, sizeof saved, &saved_len) == STORE_OK &&
-       strstr(saved, "ORDER ") != NULL && strstr(saved, "SUBMETA ") != NULL);
+       strstr(saved, "ORDER ") != NULL && strstr(saved, "SUBMETA ") != NULL &&
+       strstr(saved, "SUBINFO ") != NULL);
     store_t restored;
     ok("deserialize order and expiry",
        store_deserialize(&restored, saved, saved_len) == STORE_OK &&
        restored.subs[sub].expire == 1893456000ULL &&
+       restored.subs[sub].upload == 1024ULL * 1024ULL &&
+       restored.subs[sub].download == 2ULL * 1024ULL * 1024ULL &&
+       restored.subs[sub].total == 10ULL * 1024ULL * 1024ULL &&
+       strcmp(restored.subs[sub].description, "monthly plan") == 0 &&
+       strcmp(restored.subs[sub].support_url, "https://support.example/plan") == 0 &&
        store_section_at(&restored, 0) == (int)sub &&
        store_section_at(&restored, 1) == STORE_GROUP_MANUAL);
 
@@ -83,6 +92,27 @@ int main(void) {
     added = 99;
     ok("empty refresh rejected", store_refresh_sub(&st, sub, empty, sizeof empty - 1, &added) == STORE_ERR_PARSE);
     ok("empty refresh preserves servers", st.n == before_empty);
+
+/* the one button that empties the manual group has to leave subscription
+   servers and their group ids intact */
+    {
+        size_t sub_before = 0;
+        for (size_t i = 0; i < st.n; ++i)
+            if (st.group[i] != STORE_GROUP_MANUAL) sub_before++;
+        size_t removed = 0;
+        ok("clear manual", store_clear_manual(&st, &removed) == STORE_OK);
+        ok("clear manual removed something", removed > 0);
+        ok("clear manual kept the subscription servers", st.n == sub_before);
+        int any_manual = 0;
+        for (size_t i = 0; i < st.n; ++i)
+            if (st.group[i] == STORE_GROUP_MANUAL) any_manual = 1;
+        ok("no manual server survives", !any_manual);
+        ok("selection stays inside the list",
+           st.selected < 0 || (size_t)st.selected < st.n);
+        removed = 99;
+        ok("clearing twice is not an error",
+           store_clear_manual(&st, &removed) == STORE_OK && removed == 0);
+    }
 
     if (g_fail) {
         fprintf(stderr, "%d check(s) failed\n", g_fail);

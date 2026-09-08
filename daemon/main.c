@@ -9,10 +9,9 @@
 #include "core/store.h"
 #include "ctl_server.h"
 #include "daemon_ctl.h"
-#include "legacy_ios.h"
-#include "routing_ios5.h"
 #include "dialer.h"
 #include "loop.h"
+#include "proc_detach.h"
 #include "storefile.h"
 #include "settings.h"
 #include "vpn_icon.h"
@@ -37,7 +36,6 @@ static void install_signals(void) {
     signal(SIGTERM, on_signal);
 }
 
-/* run one server without the control daemon */
 static int run_single(const char *link, int port) {
     vl_server_t srv;
     if (cfg_parse_link(link, &srv) != CFG_OK) {
@@ -65,7 +63,7 @@ static int run_single(const char *link, int port) {
     dialer_ctx_t dctx;
     dialer_set_target(&dctx, srv.host, srv.port);
 
-    /* keep the large loop state off the stack */
+    /* heap allocation avoids overflowing the small default stack on ios 5 */
     static loop_t lp;
     if (loop_init(&lp, (uint16_t)port, 0, vt, dialer_connect, &dctx,
                   srv.proto, uuid, srv.flow, srv.user, srv.pass) != LOOP_OK) {
@@ -73,7 +71,7 @@ static int run_single(const char *link, int port) {
         return 1;
     }
     loop_set_tls(&lp, srv.sni, srv.fp, srv.pbk, srv.sid, srv.path, srv.ws_host,
-                 srv.mode);
+                 srv.mode, srv.host);
 
     install_signals();
     fprintf(stderr, "senkod: socks5 on 127.0.0.1:%u -> %s:%u (%s)\n",
@@ -88,13 +86,14 @@ static int run_single(const char *link, int port) {
     return 0;
 }
 
-/* run the root daemon with a control socket */
 static int run_managed(const char *ctl_path, const char *config_path,
                        int full_device, daemon_settings_t *settings) {
     if (!settings) return 2;
+    /* the tunnel has to outlive whatever started it */
+    senko_proc_detach();
     int port = (int)settings->socks_port;
     int socks_public = settings->socks_public;
-    /* a socket file alone does not prove that the daemon is alive */
+    /* stale socket files survive crashes, so a live connect decides ownership */
     int check_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (check_fd >= 0) {
         struct sockaddr_un addr;
@@ -102,26 +101,9 @@ static int run_managed(const char *ctl_path, const char *config_path,
         addr.sun_family = AF_UNIX;
         strncpy(addr.sun_path, ctl_path, sizeof addr.sun_path - 1);
         if (connect(check_fd, (struct sockaddr *)&addr, sizeof addr) == 0) {
-            struct timeval tv;
-            tv.tv_sec = 1;
-            tv.tv_usec = 0;
-            setsockopt(check_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-            const char *ping = "STATUS\n";
-            (void)write(check_fd, ping, 7);
-            char rbuf[64];
-            ssize_t nr = read(check_fd, rbuf, sizeof rbuf - 1);
             close(check_fd);
-            if (nr >= 6 && memcmp(rbuf, "STATE ", 6) == 0) {
-                fprintf(stderr, "senkod: already running on %s\n", ctl_path);
-                return 0;
-            }
-            if (nr == 0 || (nr < 0 && (errno == ECONNRESET || errno == EPIPE))) {
-                fprintf(stderr, "senkod: stale ctl sock, taking over\n");
-                unlink(ctl_path);
-            } else {
-                fprintf(stderr, "senkod: control peer did not answer safely\n");
-                return 1;
-            }
+            fprintf(stderr, "senkod: already running\n");
+            return 0;
         } else {
             int connect_errno = errno;
             close(check_fd);
@@ -135,7 +117,7 @@ static int run_managed(const char *ctl_path, const char *config_path,
     uint8_t zero_uuid[VLESS_UUID_LEN];
     memset(zero_uuid, 0, sizeof zero_uuid);
 
-    /* bind SOCKS first, but keep it inactive until a server is selected */
+    /* delaying activation prevents traffic from leaving through an unselected server */
     static loop_t lp;
     if (loop_init(&lp, (uint16_t)port, socks_public, &transport_tcp, dialer_connect, NULL,
                   VL_PROTO_VLESS, zero_uuid, NULL, NULL, NULL) != LOOP_OK) {
@@ -157,11 +139,9 @@ static int run_managed(const char *ctl_path, const char *config_path,
 
     vpn_icon_set(0);
 
-    if (senko_is_ios5()) {
-        routing_ios5_clear_rules();
-    } else {
-        routing_exec_clear_stale();
-    }
+    /* a crash can leave either rule set behind, and only the go backend
+       installs none of them */
+    if (!go_backend_supported()) c_backend_clear_stale();
 
     static ctl_server_t cs;
     if (ctl_server_init(&cs, ctl_path, daemon_ctl_apply, &dc) != CTLS_OK) {
@@ -180,6 +160,10 @@ static int run_managed(const char *ctl_path, const char *config_path,
 
     ctl_server_set_tunnel_probe(&cs, daemon_ctl_ping_tunnel);
 
+    ctl_server_set_backup(&cs, daemon_ctl_backup);
+    ctl_server_set_check(&cs, daemon_ctl_check);
+    ctl_server_set_reason(&cs, daemon_ctl_last_reason);
+
     if (config_path && config_path[0]) {
         if (storefile_load(&cs.engine.store, settings, config_path) == STOREFILE_OK)
             fprintf(stderr, "senkod: loaded %zu server(s) from %s\n",
@@ -197,14 +181,14 @@ static int run_managed(const char *ctl_path, const char *config_path,
             socks_public ? "0.0.0.0" : "127.0.0.1",
             loop_listen_port(&lp), ctl_path);
 
-    /* selected server is restored by the ui when the user connects */
     while (!g_stop) {
         if (loop_step(&lp, 50) != LOOP_OK) break;
         ctl_server_step(&cs, 50);
+        if (daemon_ctl_maintain(&dc) != 0)
+            cs.engine.state = CTL_STATE_ERROR;
     }
 
     fprintf(stderr, "senkod: shutting down\n");
-    /* remove routing before closing the data loop */
     daemon_ctl_shutdown(&dc);
     if (config_path && config_path[0])
         storefile_save(&cs.engine.store, settings, config_path);
@@ -257,7 +241,7 @@ static void parse_managed_args(int argc, char **argv,
 }
 
 int main(int argc, char **argv) {
-/* initialize openssl early so ios6 teardown does not trip cleanup code */
+/* early initialization prevents ios 6 teardown from entering uninitialized cleanup */
     OPENSSL_init_crypto(OPENSSL_INIT_NO_ATEXIT, NULL);
 
     if (argc < 2) { usage(argv[0]); return 2; }
@@ -270,7 +254,9 @@ int main(int argc, char **argv) {
         int full_device = 0;
         parse_managed_args(argc, argv, &ctl_path, &config_path, &settings, &full_device);
         if (config_path[0]) {
-            store_t preload;
+            /* half a megabyte of servers does not fit the small default stack
+               on ios 5, and the daemon reads the config once at startup */
+            static store_t preload;
             store_init(&preload);
             storefile_load(&preload, &settings, config_path);
             parse_managed_args(argc, argv, &ctl_path, &config_path, &settings, &full_device);

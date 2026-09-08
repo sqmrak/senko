@@ -11,6 +11,8 @@ void store_init(store_t *st) {
     for (size_t i = 0; i < STORE_MAX_SERVERS; ++i) st->group[i] = STORE_GROUP_MANUAL;
 }
 
+/* full wire configuration identity: two servers that would dial, handshake
+   or route differently must not collapse into one entry */
 static int same_server(const vl_server_t *a, const vl_server_t *b) {
     return a->port == b->port
         && a->proto == b->proto
@@ -19,7 +21,16 @@ static int same_server(const vl_server_t *a, const vl_server_t *b) {
         && strcmp(a->user, b->user) == 0
         && strcmp(a->pass, b->pass) == 0
         && strcmp(a->uuid, b->uuid) == 0
-        && strcmp(a->host, b->host) == 0;
+        && strcmp(a->host, b->host) == 0
+        && strcmp(a->flow, b->flow) == 0
+        && strcmp(a->sni, b->sni) == 0
+        && strcmp(a->fp, b->fp) == 0
+        && strcmp(a->pbk, b->pbk) == 0
+        && strcmp(a->sid, b->sid) == 0
+        && strcmp(a->path, b->path) == 0
+        && strcmp(a->ws_host, b->ws_host) == 0
+        && strcmp(a->mode, b->mode) == 0
+        && strcmp(a->encryption, b->encryption) == 0;
 }
 
 static int section_seen(const int *order, size_t n, int id) {
@@ -28,25 +39,46 @@ static int section_seen(const int *order, size_t n, int id) {
     return 0;
 }
 
-store_status_t store_add_manual(store_t *st, const char *link, size_t *out_index) {
-    if (!st || !link) return STORE_ERR_ARG;
+store_status_t store_add_manual_server(store_t *st, const vl_server_t *server,
+                                       size_t *out_index) {
+    if (!st || !server) return STORE_ERR_ARG;
     if (st->n >= STORE_MAX_SERVERS) return STORE_ERR_FULL;
-
-    vl_server_t tmp;
-    if (cfg_parse_link(link, &tmp) != CFG_OK) return STORE_ERR_PARSE;
-    if (!cfg_validate_server(&tmp, NULL, 0)) return STORE_ERR_UNSUPPORTED;
+    if (!cfg_validate_server(server, NULL, 0)) return STORE_ERR_UNSUPPORTED;
 
     for (size_t i = 0; i < st->n; ++i) {
-        if (same_server(&st->servers[i], &tmp)) {
+        if (same_server(&st->servers[i], server)) {
             if (out_index) *out_index = i;
             return STORE_ERR_EXISTS;
         }
     }
 
-    st->servers[st->n] = tmp;
+    st->servers[st->n] = *server;
     st->group[st->n] = STORE_GROUP_MANUAL;
     if (out_index) *out_index = st->n;
     st->n++;
+    return STORE_OK;
+}
+
+store_status_t store_add_manual(store_t *st, const char *link, size_t *out_index) {
+    if (!st || !link) return STORE_ERR_ARG;
+
+    vl_server_t tmp;
+    if (cfg_parse_link(link, &tmp) != CFG_OK) return STORE_ERR_PARSE;
+    return store_add_manual_server(st, &tmp, out_index);
+}
+
+store_status_t store_clear_manual(store_t *st, size_t *out_removed) {
+    if (!st) return STORE_ERR_ARG;
+    if (out_removed) *out_removed = 0;
+    size_t removed = 0;
+/* walking backwards keeps store_remove's index shifting and its selection
+   bookkeeping correct without a second pass */
+    for (size_t i = st->n; i-- > 0; ) {
+        if (st->group[i] != STORE_GROUP_MANUAL) continue;
+        if (store_remove(st, i) != STORE_OK) return STORE_ERR_RANGE;
+        removed++;
+    }
+    if (out_removed) *out_removed = removed;
     return STORE_OK;
 }
 
@@ -272,8 +304,11 @@ store_status_t store_move_manual(store_t *st, size_t index, size_t to_pos) {
     vl_server_t selected;
     int had_selected = st->selected >= 0 && (size_t)st->selected < st->n;
     if (had_selected) selected = st->servers[st->selected];
-    vl_server_t next[STORE_MAX_SERVERS];
-    int next_group[STORE_MAX_SERVERS];
+    /* the full server table is close to half a megabyte, which overflows the
+       small default stack on ios 5. store calls are serialized by the daemon
+       loop, so one scratch table can be reused */
+    static vl_server_t next[STORE_MAX_SERVERS];
+    static int next_group[STORE_MAX_SERVERS];
     size_t out = 0, seen = 0;
     int inserted = 0;
     for (size_t i = 0; i < st->n; ++i) {
@@ -340,6 +375,23 @@ store_status_t store_remove_sub(store_t *st, size_t sub_index) {
 void store_set_sub_expire(store_t *st, size_t sub_index, uint64_t expire) {
     if (!st || sub_index >= STORE_MAX_SUBS || !st->subs[sub_index].used) return;
     st->subs[sub_index].expire = expire;
+}
+
+void store_set_sub_meta(store_t *st, size_t sub_index, uint64_t upload,
+                        uint64_t download, uint64_t total,
+                        const char *description, const char *support_url) {
+    store_sub_t *sub;
+    if (!st || sub_index >= STORE_MAX_SUBS || !st->subs[sub_index].used) return;
+    sub = &st->subs[sub_index];
+    sub->upload = upload;
+    sub->download = download;
+    sub->total = total;
+    if (description) {
+        snprintf(sub->description, sizeof sub->description, "%s", description);
+    }
+    if (support_url) {
+        snprintf(sub->support_url, sizeof sub->support_url, "%s", support_url);
+    }
 }
 
 static int valid_sub_header(const char *header) {
@@ -441,7 +493,7 @@ static int build_link(const vl_server_t *s, char *buf, size_t cap) {
         if (n < 0 || (size_t)n >= cap) return -1;
         size_t off = (size_t)n;
         if (s->remark[0]) {
-            char enc[256];
+            char enc[768];
             if (pct_encode(s->remark, enc, sizeof enc) < 0) return -1;
             int m = snprintf(buf + off, cap - off, "#%s", enc);
             if (m < 0 || (size_t)m >= cap - off) return -1;
@@ -476,7 +528,7 @@ static int build_link(const vl_server_t *s, char *buf, size_t cap) {
     }
 
     if (s->remark[0]) {
-        char enc[256];
+        char enc[768];
         if (pct_encode(s->remark, enc, sizeof enc) < 0) return -1;
         int m = snprintf(buf + off, cap - off, "#%s", enc);
         if (m < 0 || (size_t)m >= cap - off) return -1;
@@ -494,9 +546,7 @@ store_status_t store_serialize(const store_t *st, char *buf, size_t cap, size_t 
     if (!st || !buf) return STORE_ERR_ARG;
     size_t off = 0;
 
-    int n = snprintf(buf + off, cap - off, "V1\n");
-    if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
-    off += (size_t)n;
+    int n = 0;
 
     for (size_t i = 0; i < STORE_MAX_SUBS; ++i) {
         if (!st->subs[i].used) continue;
@@ -506,6 +556,19 @@ store_status_t store_serialize(const store_t *st, char *buf, size_t cap, size_t 
         off += (size_t)n;
         n = snprintf(buf + off, cap - off, "SUBMETA %zu %llu\n", i,
                      (unsigned long long)st->subs[i].expire);
+        if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
+        off += (size_t)n;
+        char description[768];
+        char support_url[1536];
+        if (pct_encode(st->subs[i].description, description, sizeof description) < 0 ||
+            pct_encode(st->subs[i].support_url, support_url, sizeof support_url) < 0)
+            return STORE_ERR_FULL;
+        n = snprintf(buf + off, cap - off, "SUBINFO %zu %llu %llu %llu %s %s\n", i,
+                     (unsigned long long)st->subs[i].upload,
+                     (unsigned long long)st->subs[i].download,
+                     (unsigned long long)st->subs[i].total,
+                     description[0] ? description : "-",
+                     support_url[0] ? support_url : "-");
         if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
         off += (size_t)n;
         char header[1536];
@@ -633,6 +696,44 @@ store_status_t store_deserialize(store_t *st, const char *buf, size_t len) {
                     idx >= 0 && idx < STORE_MAX_SUBS) {
                     want_expire[idx] = expire;
                     expire_seen[idx] = 1;
+                }
+            }
+        } else if (llen >= 8 && memcmp(p, "SUBINFO ", 8) == 0) {
+            const char *starts[6], *ends[6], *q = p + 8;
+            size_t fields = 0;
+            int idx = -1;
+            uint64_t upload = 0, download = 0, total = 0;
+            char description[sizeof st->subs[0].description];
+            char support_url[sizeof st->subs[0].support_url];
+            while (q < le && fields < 6) {
+                while (q < le && *q == ' ') ++q;
+                if (q >= le) break;
+                starts[fields] = q;
+                ends[fields] = memchr(q, ' ', (size_t)(le - q));
+                if (!ends[fields]) ends[fields] = le;
+                q = ends[fields];
+                fields++;
+            }
+            if (fields == 6 && parse_int(starts[0], ends[0], &idx) == 0 &&
+                parse_u64(starts[1], ends[1], &upload) == 0 &&
+                parse_u64(starts[2], ends[2], &download) == 0 &&
+                parse_u64(starts[3], ends[3], &total) == 0 &&
+                idx >= 0 && idx < STORE_MAX_SUBS && st->subs[idx].used) {
+                size_t dl = (size_t)(ends[4] - starts[4]);
+                size_t sl = (size_t)(ends[5] - starts[5]);
+                if (dl < sizeof description && sl < sizeof support_url) {
+                    memcpy(description, starts[4], dl);
+                    description[dl] = '\0';
+                    memcpy(support_url, starts[5], sl);
+                    support_url[sl] = '\0';
+                    if (strcmp(description, "-") == 0) description[0] = '\0';
+                    if (strcmp(support_url, "-") == 0) support_url[0] = '\0';
+                    if (url_percent_decode(description, strlen(description),
+                                           description, sizeof description) >= 0 &&
+                        url_percent_decode(support_url, strlen(support_url),
+                                           support_url, sizeof support_url) >= 0)
+                        store_set_sub_meta(st, (size_t)idx, upload, download, total,
+                                           description, support_url);
                 }
             }
         } else if (llen >= 7 && memcmp(p, "SUBHDR ", 7) == 0) {

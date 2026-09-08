@@ -3,7 +3,10 @@
 #include "ctl_server.h"
 #include "core/b64.h"
 #include "core/control.h"
+#include "core/url.h"
+#include "core/config.h"
 #include "daemon_ctl.h"
+#include "../common/senko_paths.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -47,7 +50,7 @@ static int remove_stale_socket(const char *path) {
     return unlink(path);
 }
 
-/* keep the token beside the socket */
+/* colocating the token with the socket keeps both inside one protected runtime boundary */
 static void ctl_token_path_from_sock(const char *sock, char *out, size_t cap) {
     if (!sock || !out || cap < 8) {
         if (out && cap) out[0] = '\0';
@@ -74,11 +77,7 @@ static int write_ctl_token(const char *path, char *token_out, size_t token_cap) 
     int ur = open("/dev/urandom", O_RDONLY);
     ssize_t got = (ur >= 0) ? read(ur, raw, sizeof raw) : -1;
     if (ur >= 0) close(ur);
-    if (got != (ssize_t)sizeof raw) {
-        pid_t pid = getpid();
-        for (size_t i = 0; i < sizeof raw; ++i)
-            raw[i] = (unsigned char)((pid * 131u) ^ (unsigned)(i * 17u) ^ 0x5au);
-    }
+    if (got != (ssize_t)sizeof raw) return -1;
     static const char hex[] = "0123456789abcdef";
     for (size_t i = 0; i < sizeof raw; ++i) {
         token_out[i * 2]     = hex[raw[i] >> 4];
@@ -86,27 +85,51 @@ static int write_ctl_token(const char *path, char *token_out, size_t token_cap) 
     }
     token_out[32] = '\0';
 
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0640);
+    char tmp[128];
+    int tn = snprintf(tmp, sizeof tmp, "%s.%ld.tmp", path, (long)getpid());
+    if (tn <= 0 || (size_t)tn >= sizeof tmp) return -1;
+    (void)unlink(tmp);
+    int flags = O_WRONLY | O_CREAT | O_EXCL;
+#ifdef O_NOFOLLOW
+    flags |= O_NOFOLLOW;
+#endif
+    int fd = open(tmp, flags, 0640);
     if (fd < 0) return -1;
     char line[48];
     int ln = snprintf(line, sizeof line, "%s\n", token_out);
     ssize_t w = (ln > 0) ? write(fd, line, (size_t)ln) : -1;
-    (void)fchmod(fd, 0640);
-    close(fd);
+    int secure = fchmod(fd, 0640) == 0;
+    if (fchown(fd, 0, CTL_MOBILE_GID) != 0 && geteuid() == 0) secure = 0;
+    if (fsync(fd) != 0) secure = 0;
+    if (close(fd) != 0) secure = 0;
     if (w != (ssize_t)ln) {
-        unlink(path);
+        unlink(tmp);
         return -1;
     }
-    (void)chown(path, 0, CTL_MOBILE_GID);
+    if (!secure || rename(tmp, path) != 0) {
+        unlink(tmp);
+        return -1;
+    }
     return 0;
 }
 
-static void tighten_sock_perms(const char *path) {
-    if (!path || !path[0]) return;
-    if (chown(path, 0, CTL_MOBILE_GID) == 0)
-        chmod(path, 0660);
-    else
-        chmod(path, 0666); /* use open permissions in host tests */
+static int tighten_sock_perms(const char *path) {
+    if (!path || !path[0]) return -1;
+    if (chown(path, 0, CTL_MOBILE_GID) != 0 && geteuid() == 0) return -1;
+    return chmod(path, 0660);
+}
+
+static int token_equal(const char *a, const char *b) {
+    size_t al = a ? strlen(a) : 0;
+    size_t bl = b ? strlen(b) : 0;
+    unsigned char diff = (unsigned char)(al ^ bl);
+    size_t n = al > bl ? al : bl;
+    for (size_t i = 0; i < n; ++i) {
+        unsigned char ac = i < al ? (unsigned char)a[i] : 0;
+        unsigned char bc = i < bl ? (unsigned char)b[i] : 0;
+        diff |= (unsigned char)(ac ^ bc);
+    }
+    return diff == 0;
 }
 
 ctls_status_t ctl_server_init(ctl_server_t *s, const char *path,
@@ -140,13 +163,21 @@ ctls_status_t ctl_server_init(ctl_server_t *s, const char *path,
         close(fd);
         return CTLS_ERR_BIND;
     }
-    tighten_sock_perms(path);
+    if (tighten_sock_perms(path) != 0) {
+        close(fd);
+        unlink(path);
+        return CTLS_ERR_BIND;
+    }
     if (listen(fd, 4) != 0) {
         close(fd);
         unlink(path);
         return CTLS_ERR_BIND;
     }
-    s->require_auth = (write_ctl_token(s->token_path, s->token, sizeof s->token) == 0);
+    if (write_ctl_token(s->token_path, s->token, sizeof s->token) != 0) {
+        close(fd);
+        unlink(path);
+        return CTLS_ERR_AUTH;
+    }
     set_nonblock(fd);
     s->listen_fd = fd;
     return CTLS_OK;
@@ -175,6 +206,21 @@ void ctl_server_set_verify(ctl_server_t *s, ctl_verify_fn verify) {
 void ctl_server_set_tunnel_probe(ctl_server_t *s, ctl_tunnel_probe_fn probe) {
     if (!s) return;
     s->tunnel_probe = probe;
+}
+
+void ctl_server_set_backup(ctl_server_t *s, ctl_backup_fn backup) {
+    if (!s) return;
+    s->backup = backup;
+}
+
+void ctl_server_set_check(ctl_server_t *s, ctl_check_fn check) {
+    if (!s) return;
+    s->check = check;
+}
+
+void ctl_server_set_reason(ctl_server_t *s, ctl_reason_fn reason) {
+    if (!s) return;
+    s->reason = reason;
 }
 
 static ctl_client_t *alloc_client(ctl_server_t *s) {
@@ -218,7 +264,7 @@ static void accept_one(ctl_server_t *s) {
     if (!c) { close(cfd); return; }
     set_nonblock(cfd);
     c->fd = cfd;
-    c->authed = s->require_auth ? 0 : 1;
+    c->authed = 0;
     c->in_len = 0;
 }
 
@@ -315,6 +361,58 @@ static int fetch_body_alloc(ctl_server_t *s, const char *url,
     return 0;
 }
 
+#define LOG_TAIL_MAX (48 * 1024)
+
+#define IMPORT_STAGE_MAX (512 * 1024)
+
+/* read a staged import file whole; the cap is what the parser is allowed to see */
+static int read_whole_file(const char *path, size_t max_bytes,
+                           unsigned char **out, size_t *out_len) {
+    if (!path || !out || !out_len) return -1;
+    *out = NULL;
+    *out_len = 0;
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    unsigned char *buf = (unsigned char *)malloc(max_bytes);
+    if (!buf) { fclose(f); return -1; }
+    size_t got = fread(buf, 1, max_bytes, f);
+    int overflowed = (got == max_bytes && fgetc(f) != EOF);
+    fclose(f);
+    if (overflowed) { free(buf); return -1; }
+    *out = buf;
+    *out_len = got;
+    return 0;
+}
+
+/* read the last bytes of a log file, starting at a line boundary */
+static int read_log_tail(const char *path, size_t max_bytes,
+                         unsigned char **out, size_t *out_len) {
+    if (!path || !out || !out_len || max_bytes == 0) return -1;
+    *out = NULL;
+    *out_len = 0;
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return -1; }
+    long size = ftell(f);
+    if (size < 0) { fclose(f); return -1; }
+    size_t want = (size_t)size > max_bytes ? max_bytes : (size_t)size;
+    if (fseek(f, size - (long)want, SEEK_SET) != 0) { fclose(f); return -1; }
+    unsigned char *buf = (unsigned char *)malloc(want ? want : 1);
+    if (!buf) { fclose(f); return -1; }
+    size_t got = want ? fread(buf, 1, want, f) : 0;
+    fclose(f);
+    size_t start = 0;
+/* a truncated first line would reach the ui as a fragment */
+    if ((size_t)size > want) {
+        while (start < got && buf[start] != '\n') ++start;
+        if (start < got) ++start;
+    }
+    memmove(buf, buf + start, got - start);
+    *out = buf;
+    *out_len = got - start;
+    return 0;
+}
+
 static void fetch_reply_body(ctl_client_t *c,
                              const unsigned char *body, size_t blen) {
     char line[520];
@@ -353,7 +451,16 @@ static void connect_failure_set(connect_failure_t *f,
     snprintf(f->reason, sizeof f->reason, "%s", reason ? reason : "unknown error");
 }
 
-static void connect_failure_from_apply(connect_failure_t *f, int r) {
+static const char *connect_verify_layer(const char *reason) {
+    return reason && strncmp(reason, "routing ", 8) == 0 ? "routing" : "socks";
+}
+
+static void connect_failure_from_apply(ctl_server_t *s, connect_failure_t *f, int r) {
+    const char *detail = (s && s->reason) ? s->reason(s->apply_ctx) : NULL;
+    if ((r == DCTL_ERR_ROUTING || r == DCTL_ERR_GO) && detail && detail[0]) {
+        connect_failure_set(f, r == DCTL_ERR_GO ? "tunnel" : "routing", detail);
+        return;
+    }
     if (r == DCTL_ERR_TRANSPORT)
         connect_failure_set(f, "server", "unsupported protocol or security");
     else if (r == DCTL_ERR_UUID)
@@ -364,8 +471,8 @@ static void connect_failure_from_apply(connect_failure_t *f, int r) {
         connect_failure_set(f, "server", "dns resolution failed");
     else if (r == DCTL_ERR_ROUTING)
         connect_failure_set(f, "routing", "routing setup failed");
-    else if (r == DCTL_ERR_IOS5)
-        connect_failure_set(f, "routing", "ios 5 full-device routing is disabled for safety");
+    else if (r == DCTL_ERR_GO)
+        connect_failure_set(f, "tunnel", "the go backend core could not start; open System Logs for the exact cause");
     else
         connect_failure_set(f, "server", "unknown error");
 }
@@ -381,7 +488,7 @@ static void connect_failure_write(ctl_client_t *c, const connect_failure_t *f) {
 
 static void connect_fail_notify_error(ctl_server_t *s, ctl_client_t *c, int r) {
     connect_failure_t f;
-    connect_failure_from_apply(&f, r);
+    connect_failure_from_apply(s, &f, r);
     if (c) {
         connect_failure_write(c, &f);
         char ev[64]; size_t en = 0;
@@ -393,7 +500,6 @@ static void connect_fail_notify_error(ctl_server_t *s, ctl_client_t *c, int r) {
     }
 }
 
-/* check the control socket */
 static int client_still_open(const ctl_client_t *c) {
     if (!c || c->fd < 0) return 0;
     struct pollfd p;
@@ -405,7 +511,6 @@ static int client_still_open(const ctl_client_t *c) {
     return 1;
 }
 
-/* connect only to the selected server */
 static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_idx) {
     if (!s || !s->apply) return -1;
     store_t *st = &s->engine.store;
@@ -418,16 +523,16 @@ static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_
     connect_failure_t last_fail;
     connect_failure_set(&last_fail, "server", "no working server");
 
-/* publish the connecting state */
     if (c) {
         char ev[64]; size_t en = 0;
         s->engine.state = CTL_STATE_CONNECTING;
-        if (ctl_build_state(CTL_STATE_CONNECTING, ev, sizeof ev, &en) == CTL_OK)
+        s->engine.connected_at = 0;
+        if (ctl_build_state(CTL_STATE_CONNECTING, 0, ev, sizeof ev, &en) == CTL_OK)
             client_write(c, ev, en);
     }
 
     for (size_t off = 0; off < tries; ++off) {
-/* stop routing after a client timeout */
+/* a timed-out client cannot own routing state it can no longer observe */
         if (c && !client_still_open(c)) {
             ctl_action_t stop = { .kind = CTL_ACT_STOP };
             s->apply(s->apply_ctx, &stop);
@@ -456,7 +561,7 @@ static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_
 
         int r = s->apply(s->apply_ctx, &action);
         if (r != 0) {
-            connect_failure_from_apply(&last_fail, r);
+            connect_failure_from_apply(s, &last_fail, r);
             connect_fail_notify_error(s, NULL, r);
             s->engine.state = CTL_STATE_IDLE;
             continue;
@@ -466,7 +571,7 @@ static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_
             char vreason[120];
             vreason[0] = '\0';
             if (s->verify(s->apply_ctx, vreason, sizeof vreason) != 0) {
-                connect_failure_set(&last_fail, "socks",
+                connect_failure_set(&last_fail, connect_verify_layer(vreason),
                                     vreason[0] ? vreason : "tunnel verify failed");
                 ctl_action_t stop = { .kind = CTL_ACT_STOP };
                 s->apply(s->apply_ctx, &stop);
@@ -475,7 +580,7 @@ static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_
             }
         }
 
-/* stop a tunnel after client exit */
+/* client exit must not leave an unowned tunnel active */
         if (c && !client_still_open(c)) {
             ctl_action_t stop = { .kind = CTL_ACT_STOP };
             s->apply(s->apply_ctx, &stop);
@@ -503,7 +608,6 @@ static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_
             tries,
             last_fail.layer[0] ? last_fail.layer : "server",
             last_fail.reason[0] ? last_fail.reason : "unknown");
-/* stop after all tries fail */
     {
         ctl_action_t stop = { .kind = CTL_ACT_STOP };
         s->apply(s->apply_ctx, &stop);
@@ -536,7 +640,7 @@ static int apply_connect_action(ctl_server_t *s, ctl_client_t *c, ctl_action_t *
                 s->engine.state = CTL_STATE_IDLE;
                 if (c) {
                     connect_failure_t f;
-                    connect_failure_set(&f, "socks",
+                    connect_failure_set(&f, connect_verify_layer(vreason),
                                         vreason[0] ? vreason : "tunnel verify failed");
                     connect_failure_write(c, &f);
                 }
@@ -550,7 +654,7 @@ static int apply_connect_action(ctl_server_t *s, ctl_client_t *c, ctl_action_t *
     } else if (r != 0 && action->kind == CTL_ACT_START) {
         if (c) {
             connect_failure_t f;
-            connect_failure_from_apply(&f, r);
+            connect_failure_from_apply(s, &f, r);
             connect_failure_write(c, &f);
             char ev[64]; size_t en = 0;
             if (ctl_engine_notify(&s->engine, CTL_STATE_ERROR, ev, sizeof ev, &en) == CTL_OK)
@@ -589,13 +693,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
 
     if (cmd.kind == CTL_CMD_AUTH) {
         char reply[64]; size_t rn = 0;
-        if (!s->require_auth || !s->token[0]) {
-            c->authed = 1;
-            if (ctl_build_ok("authed", reply, sizeof reply, &rn) == CTL_OK)
-                client_write(c, reply, rn);
-            return;
-        }
-        if (strcmp(cmd.text, s->token) == 0) {
+        if (s->token[0] && token_equal(cmd.text, s->token)) {
             c->authed = 1;
             if (ctl_build_ok("authed", reply, sizeof reply, &rn) == CTL_OK)
                 client_write(c, reply, rn);
@@ -607,15 +705,171 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         return;
     }
 
-/* let the status probe run before auth */
-    if (cmd.kind != CTL_CMD_STATUS && s->require_auth && !c->authed) {
+    if (!c->authed) {
         char err[64]; size_t en = 0;
         if (ctl_build_err("auth required", err, sizeof err, &en) == CTL_OK)
             client_write(c, err, en);
         return;
     }
 
-/* stream large replies here */
+    if (cmd.kind == CTL_CMD_EXPORT || cmd.kind == CTL_CMD_RESTORE) {
+        char reply[128]; size_t rn = 0;
+        int restore = cmd.kind == CTL_CMD_RESTORE;
+        int ok = s->backup && s->backup(s->apply_ctx, restore,
+                                        &s->engine.store) == 0;
+        if (ok) {
+            if (ctl_build_ok(restore ? "backup restored" : "backup exported",
+                             reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+        } else if (ctl_build_err(restore ? "backup is invalid" : "backup export failed",
+                                 reply, sizeof reply, &rn) == CTL_OK) {
+            client_write(c, reply, rn);
+        }
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_CHECK) {
+        char reply[160]; size_t rn = 0;
+        if (!s->check || cmd.server_index < 0 ||
+            (size_t)cmd.server_index >= s->engine.store.n) {
+            if (ctl_build_err("check unavailable", reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        char reason[96];
+        reason[0] = '\0';
+        int ms = s->check(s->apply_ctx, cmd.name,
+                          &s->engine.store.servers[cmd.server_index],
+                          reason, sizeof reason);
+        if (ms >= 0) {
+            if (ctl_build_pong(cmd.server_index, ms, reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+        } else if (ctl_build_err(reason[0] ? reason : "check failed",
+                                 reply, sizeof reply, &rn) == CTL_OK) {
+            client_write(c, reply, rn);
+        }
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_CLEAR_MANUAL) {
+        char reply[96]; size_t rn = 0;
+        if (s->engine.state == CTL_STATE_CONNECTED ||
+            s->engine.state == CTL_STATE_CONNECTING) {
+            if (ctl_build_err("disconnect first", reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        size_t removed = 0;
+        if (store_clear_manual(&s->engine.store, &removed) != STORE_OK) {
+            if (ctl_build_err("could not clear manual servers",
+                              reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
+        char msg[64];
+        snprintf(msg, sizeof msg, "removed %zu server(s)", removed);
+        if (ctl_build_ok(msg, reply, sizeof reply, &rn) == CTL_OK)
+            client_write(c, reply, rn);
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_IMPORT) {
+        char reply[128]; size_t rn = 0;
+        unsigned char *blob = NULL;
+        size_t blen = 0;
+        if (read_whole_file(SENKO_IMPORT_STAGE, IMPORT_STAGE_MAX, &blob, &blen) != 0 ||
+            blen == 0) {
+            free(blob);
+            (void)unlink(SENKO_IMPORT_STAGE);
+            if (ctl_build_err("nothing to import", reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        (void)unlink(SENKO_IMPORT_STAGE);
+
+        cfg_content_t kind = cfg_content_kind((const char *)blob, blen);
+        if (kind == CFG_CONTENT_UNKNOWN) {
+            free(blob);
+            if (ctl_build_err("unknown content type", reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+
+        vl_server_t *parsed = (vl_server_t *)calloc(STORE_MAX_SERVERS, sizeof *parsed);
+        if (!parsed) {
+            free(blob);
+            if (ctl_build_err("out of memory", reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        size_t found = 0;
+        (void)cfg_parse_subscription((const char *)blob, blen, parsed,
+                                     STORE_MAX_SERVERS, &found);
+        free(blob);
+        if (found == 0) {
+            free(parsed);
+            if (ctl_build_err("no server senko can run in this file",
+                              reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        size_t added = 0, skipped = 0;
+        for (size_t i = 0; i < found; ++i) {
+            if (store_add_manual_server(&s->engine.store, &parsed[i], NULL) == STORE_OK)
+                added++;
+            else
+                skipped++;
+        }
+        free(parsed);
+        if (added && s->persist) s->persist(s->apply_ctx, &s->engine.store);
+        char msg[96];
+        if (skipped)
+            snprintf(msg, sizeof msg, "imported %zu server(s), skipped %zu",
+                     added, skipped);
+        else
+            snprintf(msg, sizeof msg, "imported %zu server(s)", added);
+        if (added == 0) {
+            if (ctl_build_err("every server in this file is already saved",
+                              reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        if (ctl_build_ok(msg, reply, sizeof reply, &rn) == CTL_OK)
+            client_write(c, reply, rn);
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_HWID) {
+        char hwid[65];
+        char reply[128]; size_t rn = 0;
+        url_device_hwid(hwid, sizeof hwid);
+        if (!hwid[0]) {
+            if (ctl_build_err("no device id", reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        if (ctl_build_ok(hwid, reply, sizeof reply, &rn) == CTL_OK)
+            client_write(c, reply, rn);
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_LOGS) {
+/* the ui runs as mobile and, on jailbreaks that keep the app sandboxed, cannot
+   open the log at all, so the daemon that owns the file hands it over */
+        char reply[128]; size_t rn = 0;
+        unsigned char *tail = NULL;
+        size_t tlen = 0;
+        if (read_log_tail(SENKO_SYSTEM_LOG, LOG_TAIL_MAX, &tail, &tlen) != 0) {
+            if (ctl_build_err("no daemon log", reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        fetch_reply_body(c, tail, tlen);
+        free(tail);
+        return;
+    }
+
     if (cmd.kind == CTL_CMD_FETCH) {
         char reply[128]; size_t rn = 0;
         if (!s->fetch) {
@@ -636,11 +890,9 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
     }
 
     if (cmd.kind == CTL_CMD_LIST) {
-/* repair old groups */
         store_normalize(&s->engine.store);
         const store_t *st = &s->engine.store;
         char ln[2048]; size_t lnn = 0;
-/* send subscriptions before servers */
         for (size_t i = 0; i < store_section_count(st); ++i) {
             int section = store_section_at(st, i);
             if (section < 0 || section >= STORE_MAX_SUBS || !st->subs[section].used)
@@ -649,6 +901,13 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
                               ln, sizeof ln, &lnn) == CTL_OK)
                 client_write(c, ln, lnn);
             if (ctl_build_submeta(section, st->subs[section].expire,
+                                  ln, sizeof ln, &lnn) == CTL_OK)
+                client_write(c, ln, lnn);
+            if (ctl_build_subinfo(section, st->subs[section].upload,
+                                  st->subs[section].download,
+                                  st->subs[section].total,
+                                  st->subs[section].description,
+                                  st->subs[section].support_url,
                                   ln, sizeof ln, &lnn) == CTL_OK)
                 client_write(c, ln, lnn);
             if (ctl_build_subhdr(section, st->subs[section].header,
@@ -713,7 +972,6 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
     ctl_engine_handle(&s->engine, &cmd, out, sizeof out, &on, &action);
     if (on > 0) client_write(c, out, on);
 
-/* save accepted changes */
     const char *ok_line = NULL;
     if (on >= 3 && memcmp(out, "OK ", 3) == 0)
         ok_line = out;
@@ -732,7 +990,6 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         s->persist(s->apply_ctx, &s->engine.store);
     }
 
-/* handle refresh here */
     if (action.kind == CTL_ACT_REFRESH) {
         int si = action.server_index;
         char reply[128]; size_t rn = 0;
@@ -757,6 +1014,18 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
                 client_write(c, reply, rn);
             return;
         }
+        if (meta.gated) {
+/* the panel answers a device it will not serve with a one entry placeholder
+   profile, so keeping the previous nodes is the only correct outcome */
+            free(blob);
+            char msg[320];
+            snprintf(msg, sizeof msg, "subscription refused this device: %s",
+                     meta.gate_reason);
+            char gerr[352]; size_t gn = 0;
+            if (ctl_build_err(msg, gerr, sizeof gerr, &gn) == CTL_OK)
+                client_write(c, gerr, gn);
+            return;
+        }
         size_t added = 0;
         if (store_refresh_sub(&s->engine.store, (size_t)si, (const char *)blob, blen, &added) != STORE_OK) {
             free(blob);
@@ -767,9 +1036,11 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         free(blob);
         if (meta.expire)
             store_set_sub_expire(&s->engine.store, (size_t)si, meta.expire);
+        store_set_sub_meta(&s->engine.store, (size_t)si, meta.upload,
+                           meta.download, meta.total, meta.description,
+                           meta.support_url);
         if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
         char msg[96];
-/* report a full server list */
         if (s->engine.store.n >= STORE_MAX_SERVERS)
             snprintf(msg, sizeof msg, "refreshed %zu server(s) (list full)", added);
         else
@@ -779,7 +1050,6 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         return;
     }
 
-/* use the active path while connected */
     if (action.kind == CTL_ACT_PING) {
         int ms = -1;
         if ((s->engine.state == CTL_STATE_CONNECTED ||
@@ -866,7 +1136,7 @@ void ctl_server_broadcast(ctl_server_t *s, const char *line, size_t len) {
     if (!s || !line) return;
     for (size_t i = 0; i < CTL_SERVER_MAX_CLIENTS; ++i) {
         if (s->clients[i].fd < 0) continue;
-        if (s->require_auth && !s->clients[i].authed) continue;
+        if (!s->clients[i].authed) continue;
         client_write(&s->clients[i], line, len);
     }
 }
@@ -887,5 +1157,4 @@ void ctl_server_close(ctl_server_t *s) {
     if (s->sock_path[0]) (void)remove_stale_socket(s->sock_path);
     if (s->token_path[0]) (void)unlink(s->token_path);
     s->token[0] = '\0';
-    s->require_auth = 0;
 }

@@ -16,6 +16,7 @@
 
 static int g_fail = 0;
 static int g_verify_fail = 0;
+static const char *g_verify_reason = "mock verify failed";
 static void ok(const char *what, int cond) {
     if (cond) return;
     g_fail++;
@@ -48,6 +49,8 @@ typedef struct {
     const char *blob;
     int  fail_next;
     uint64_t expire;
+    int  gated;
+    const char *gate_reason;
 } fetch_rec_t;
 
 static fetch_rec_t g_fetch;
@@ -57,7 +60,12 @@ static int mock_fetch(void *ctx, const char *url,
                       unsigned char *buf, size_t cap, size_t *len,
                       ctl_fetch_meta_t *meta) {
     (void)ctx;
-    if (meta) meta->expire = g_fetch.expire;
+    if (meta) {
+        meta->expire = g_fetch.expire;
+        meta->gated = g_fetch.gated;
+        snprintf(meta->gate_reason, sizeof meta->gate_reason, "%s",
+                 g_fetch.gate_reason ? g_fetch.gate_reason : "");
+    }
     g_fetch.calls++;
     snprintf(g_fetch.last_url, sizeof g_fetch.last_url, "%s", url);
     snprintf(g_fetch.last_header, sizeof g_fetch.last_header, "%s",
@@ -107,7 +115,7 @@ static int mock_verify_ok(void *ctx, char *reason, size_t reason_cap) {
     if (g_verify_fail > 0) {
         g_verify_fail--;
         if (reason && reason_cap)
-            snprintf(reason, reason_cap, "%s", "mock verify failed");
+            snprintf(reason, reason_cap, "%s", g_verify_reason);
         return -1;
     }
     if (reason && reason_cap) reason[0] = '\0';
@@ -153,17 +161,37 @@ static void set_nonblock(int fd) {
 }
 
 /* drain replies after a few loop ticks */
+/* the server queues a reply and flushes it on a later step, so one pump can
+   return before the line reaches the client and the read comes back empty.
+   every caller here waits for a whole line, and the wait is bounded so a reply
+   that never arrives still fails its own assertion */
+/* a state line carries the tunnel age as a trailing token once the clock has
+   moved, so a test that compared the whole line failed whenever the run
+   straddled a second */
+static int state_line_is(const char *buf, const char *name) {
+    size_t n = strlen(name);
+    if (strncmp(buf, "STATE ", 6) != 0) return 0;
+    if (strncmp(buf + 6, name, n) != 0) return 0;
+    const char *p = buf + 6 + n;
+    if (*p == ' ') {
+        ++p;
+        if (*p < '0' || *p > '9') return 0;
+        while (*p >= '0' && *p <= '9') ++p;
+    }
+    return p[0] == '\n' && p[1] == '\0';
+}
+
 static size_t exchange(ctl_server_t *s, int cli, char *out, size_t cap) {
-    for (int i = 0; i < 20; ++i) ctl_server_step(s, 2);
     size_t tot = 0;
-    for (;;) {
-        ssize_t n = read(cli, out + tot, cap - 1 - tot);
-        if (n > 0) {
+    for (int round = 0; round < 25; ++round) {
+        for (int i = 0; i < 20; ++i) ctl_server_step(s, 2);
+        for (;;) {
+            ssize_t n = read(cli, out + tot, cap - 1 - tot);
+            if (n <= 0) break;
             tot += (size_t)n;
-            continue;
         }
-        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
-        break;
+        out[tot] = '\0';
+        if (tot > 0 && out[tot - 1] == '\n') return tot;
     }
     out[tot] = '\0';
     return tot;
@@ -229,6 +257,20 @@ int main(void) {
 
     ctl_server_t s;
     ok("server init", ctl_server_init(&s, path, mock_apply, &rec) == CTLS_OK);
+    struct stat sockst;
+    ok("control socket is not world accessible",
+       stat(path, &sockst) == 0 && (sockst.st_mode & 0007) == 0);
+    char token_path[160];
+    token_path_from_sock(path, token_path, sizeof token_path);
+    ok("control token is not world accessible",
+       stat(token_path, &sockst) == 0 && (sockst.st_mode & 0007) == 0);
+    ctl_cmd_t parsed;
+    ok("parse typed check",
+       ctl_parse_cmd("CHECK handshake 1\n", 18, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_CHECK && parsed.server_index == 1 &&
+       strcmp(parsed.name, "handshake") == 0);
+    ok("reject unknown check",
+       ctl_parse_cmd("CHECK magic 1\n", 14, &parsed) == CTL_ERR_PARSE);
     ctl_server_set_verify(&s, mock_verify_ok);
 
     size_t idx;
@@ -247,7 +289,9 @@ int main(void) {
 
     write(cli, "STATUS\n", 7);
     exchange(&s, cli, buf, sizeof buf);
-    ok("status idle unauthed", strcmp(buf, "STATE idle\n") == 0);
+/* senko-kick treats this exact line as proof that a daemon is listening, so the
+   wording is part of the control contract, not just a message */
+    ok("status needs auth", strcmp(buf, "ERR auth required\n") == 0);
 
     write(cli, "CONNECT 1\n", 10);
     exchange(&s, cli, buf, sizeof buf);
@@ -255,6 +299,10 @@ int main(void) {
                             strstr(buf, "ERR ") != NULL);
 
     ok("auth client", auth_client(&s, cli, path));
+
+    write(cli, "STATUS\n", 7);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("status idle authed", state_line_is(buf, "idle"));
 
     write(cli, "CONNECT 1\n", 10);
     exchange(&s, cli, buf, sizeof buf);
@@ -267,11 +315,11 @@ int main(void) {
     ctl_engine_notify(&s.engine, CTL_STATE_CONNECTED, ev, sizeof ev, &en);
     ctl_server_broadcast(&s, ev, en);
     exchange(&s, cli, buf, sizeof buf);
-    ok("broadcast connected", strcmp(buf, "STATE connected\n") == 0);
+    ok("broadcast connected", state_line_is(buf, "connected"));
 
     write(cli, "DISCONNECT\n", 11);
     exchange(&s, cli, buf, sizeof buf);
-    ok("disconnect event", strcmp(buf, "STATE idle\n") == 0);
+    ok("disconnect event", state_line_is(buf, "idle"));
     ok("apply got stop", rec.last_kind == CTL_ACT_STOP);
 
     int calls_before = rec.calls;
@@ -300,9 +348,20 @@ int main(void) {
     ok("strict connect keeps requested selection", s.engine.store.selected == 0);
     ok("strict connect does not switch server", rec.last_index == 0);
 
+    g_verify_reason = "routing rules accepted but traffic was not redirected";
+    g_verify_fail = 1;
+    write(cli, "CONNECT 0\n", 10);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("routing verification has routing layer",
+       strstr(buf, "ERR routing: routing rules accepted but traffic was not redirected\n") != NULL);
+    ok("routing verification never reports connected",
+       strstr(buf, "STATE connected\n") == NULL);
+    ok("routing verification removes active routing", rec.last_kind == CTL_ACT_STOP);
+    g_verify_reason = "mock verify failed";
+
     write(cli, "DISCONNECT\n", 11);
     exchange(&s, cli, buf, sizeof buf);
-    ok("strict test disconnects", strcmp(buf, "STATE idle\n") == 0);
+    ok("strict test disconnects", state_line_is(buf, "idle"));
 
     /* use a fixed refresh body */
     memset(&g_fetch, 0, sizeof g_fetch);
@@ -354,6 +413,27 @@ int main(void) {
     ok("refresh fetch-fail err", strncmp(buf, "ERR ", 4) == 0);
     ok("refresh fetch-fail no change", s.engine.store.n == n_now);
 
+/* a panel that refuses the device answers 200 with a one entry placeholder
+   profile; replacing the saved nodes with it is what made every row show the
+   same name, so the refresh has to fail and keep what is stored */
+    {
+        const char *saved_blob = g_fetch.blob;
+        g_fetch.gated = 1;
+        g_fetch.gate_reason = "device limit reached";
+        g_fetch.blob =
+            "vless://00000000-0000-0000-0000-000000000000@0.0.0.0:1"
+            "?encryption=none&type=tcp&security=none#App%20not%20supported\n";
+        write(cli, "REFRESH 0\n", 10);
+        exchange(&s, cli, buf, sizeof buf);
+        ok("gated refresh errs", strncmp(buf, "ERR ", 4) == 0);
+        ok("gated refresh names the reason",
+           strstr(buf, "device limit reached") != NULL);
+        ok("gated refresh keeps the servers", s.engine.store.n == n_now);
+        g_fetch.gated = 0;
+        g_fetch.gate_reason = NULL;
+        g_fetch.blob = saved_blob;
+    }
+
     {
         const char *cmd = "ADDSUB https://second.example/feed Second\n";
         write(cli, cmd, strlen(cmd));
@@ -388,6 +468,7 @@ int main(void) {
     write(cli, "LIST\n", 5);
     exchange(&s, cli, buf, sizeof buf);
     ok("list has subscription metadata", strstr(buf, "SUBMETA 0 1893456000\n") != NULL);
+    ok("list has subscription info", strstr(buf, "SUBINFO 0 ") != NULL);
     ok("list has subscription header", strstr(buf, "SUBHDR 0 Authorization:%20Bearer%20abc%2Btest\n") != NULL);
     ok("list has section order", strstr(buf, "SECTION 1 -1 0\n") != NULL);
 

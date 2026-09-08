@@ -25,6 +25,7 @@ static int reply_complete(const char *buf, size_t len) {
                 (llen >= 4 && memcmp(ln, "SRV ", 4) == 0) ||
                 (llen >= 4 && memcmp(ln, "SUB ", 4) == 0) ||
                 (llen >= 8 && memcmp(ln, "SUBMETA ", 8) == 0) ||
+                (llen >= 8 && memcmp(ln, "SUBINFO ", 8) == 0) ||
                 (llen >= 7 && memcmp(ln, "SUBHDR ", 7) == 0) ||
                 (llen >= 8 && memcmp(ln, "SECTION ", 8) == 0) ||
                 (llen >= 6 && memcmp(ln, "FDATA ", 6) == 0);
@@ -48,7 +49,6 @@ static int tunnel_reply_complete(const char *buf, size_t len) {
             const char *st = buf + start + 6;
             size_t slen = llen - 6;
             if (slen >= 10 && memcmp(st, "connecting", 10) == 0) {
-/* keep reading */
             } else if ((slen >= 9 && memcmp(st, "connected", 9) == 0) ||
                        (slen >= 5 && memcmp(st, "error", 5) == 0) ||
                        (slen >= 4 && memcmp(st, "idle", 4) == 0)) {
@@ -112,7 +112,7 @@ static int load_token(const char *sock, char *token, size_t cap) {
 /* without AUTH any local process can mutate the tunnel on a jailbreak */
 static int ctl_auth(int fd, const char *sock) {
     char token[48];
-    if (load_token(sock, token, sizeof token) != 0) return 0;
+    if (load_token(sock, token, sizeof token) != 0) return -1;
     char line[80];
     int ln = snprintf(line, sizeof line, "AUTH %s\n", token);
     if (ln <= 0 || (size_t)ln >= sizeof line) return -1;
@@ -160,9 +160,8 @@ static ssize_t talk_ex(const char *sock, const char *line, size_t line_len,
     int fd;
     if (connect_sock(sock, &fd) != 0) return -1;
 
-/* status stays open for boot probes; mutators still need the token */
-    int is_status = (line_len >= 6 && memcmp(line, "STATUS", 6) == 0);
-    if (!is_status && ctl_auth(fd, sock) != 0) {
+/* every command needs the token, including read-only status */
+    if (ctl_auth(fd, sock) != 0) {
         close(fd);
         return -1;
     }
@@ -238,7 +237,7 @@ static int run_fetch(const char *sock, const char *url) {
             return 0;
         }
 
-        fprintf(stderr, "senkoctl: unexpected fetch reply: %s", reply);
+        fprintf(stderr, "senkoctl: unexpected fetch reply\n");
         close(fd);
         return 2;
     }
@@ -334,8 +333,9 @@ int main(int argc, char **argv) {
     char buf[65536];
     int is_tunnel = (strcmp(cmd, "connect") == 0 || strcmp(cmd, "disconnect") == 0);
     int is_ping = (strcmp(cmd, "ping") == 0);
+    int is_check = strncmp(line, "CHECK ", 6) == 0;
 /* leave timeout headroom for verification and two ping samples */
-    int timeout_sec = is_tunnel ? 60 : (is_ping ? 8 : 5);
+    int timeout_sec = is_tunnel ? 60 : (is_ping ? 8 : (is_check ? 12 : 5));
     int (*done)(const char *, size_t) =
         is_tunnel ? tunnel_reply_complete : reply_complete;
     ssize_t n = talk_ex(sock, line, strlen(line), buf, sizeof buf,

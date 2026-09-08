@@ -64,6 +64,22 @@ ctl_status_t ctl_parse_cmd(const char *line, size_t len, ctl_cmd_t *out) {
         out->server_index = idx;
         return CTL_OK;
     }
+    if (verb_is(line, len, "CHECK", &rest, &rl)) {
+        const char *sp = memchr(rest, ' ', rl);
+        int idx = -1;
+        size_t ml = sp ? (size_t)(sp - rest) : 0;
+        if (!sp || ml == 0 || ml >= sizeof out->name ||
+            parse_int_span(sp + 1, rl - ml - 1, &idx) != 0 || idx < 0)
+            return CTL_ERR_PARSE;
+        memcpy(out->name, rest, ml);
+        out->name[ml] = '\0';
+        if (strcmp(out->name, "tcp") != 0 && strcmp(out->name, "proxy") != 0 &&
+            strcmp(out->name, "tunnel") != 0 && strcmp(out->name, "handshake") != 0)
+            return CTL_ERR_PARSE;
+        out->server_index = idx;
+        out->kind = CTL_CMD_CHECK;
+        return CTL_OK;
+    }
     if (verb_is(line, len, "REFRESH", &rest, &rl)) {
         int idx;
         if (parse_int_span(rest, rl, &idx) != 0) return CTL_ERR_PARSE;
@@ -130,6 +146,30 @@ ctl_status_t ctl_parse_cmd(const char *line, size_t len, ctl_cmd_t *out) {
         out->kind = CTL_CMD_LIST;
         return CTL_OK;
     }
+    if (verb_is(line, len, "HWID", &rest, &rl) && rl == 0) {
+        out->kind = CTL_CMD_HWID;
+        return CTL_OK;
+    }
+    if (verb_is(line, len, "LOGS", &rest, &rl) && rl == 0) {
+        out->kind = CTL_CMD_LOGS;
+        return CTL_OK;
+    }
+    if (verb_is(line, len, "IMPORT", &rest, &rl) && rl == 0) {
+        out->kind = CTL_CMD_IMPORT;
+        return CTL_OK;
+    }
+    if (verb_is(line, len, "CLEARMANUAL", &rest, &rl) && rl == 0) {
+        out->kind = CTL_CMD_CLEAR_MANUAL;
+        return CTL_OK;
+    }
+    if (verb_is(line, len, "EXPORT", &rest, &rl) && rl == 0) {
+        out->kind = CTL_CMD_EXPORT;
+        return CTL_OK;
+    }
+    if (verb_is(line, len, "RESTORE", &rest, &rl) && rl == 0) {
+        out->kind = CTL_CMD_RESTORE;
+        return CTL_OK;
+    }
     if (verb_is(line, len, "GETSRV", &rest, &rl)) {
         int idx;
         if (parse_int_span(rest, rl, &idx) != 0 || idx < 0) return CTL_ERR_PARSE;
@@ -185,6 +225,8 @@ static ctl_status_t finish(int written, size_t cap, size_t *n) {
     return CTL_OK;
 }
 
+static int ctl_pct_encode(const char *src, char *dst, size_t cap);
+
 ctl_status_t ctl_build_connect(int idx, char *buf, size_t cap, size_t *n) {
     if (!buf) return CTL_ERR_ARG;
     return finish(snprintf(buf, cap, "CONNECT %d\n", idx), cap, n);
@@ -216,8 +258,14 @@ ctl_status_t ctl_build_refresh(int sub_index, char *buf, size_t cap, size_t *n) 
     return finish(snprintf(buf, cap, "REFRESH %d\n", sub_index), cap, n);
 }
 
-ctl_status_t ctl_build_state(ctl_state_t st, char *buf, size_t cap, size_t *n) {
+ctl_status_t ctl_build_state(ctl_state_t st, long uptime,
+                             char *buf, size_t cap, size_t *n) {
     if (!buf) return CTL_ERR_ARG;
+    /* the age is a trailing token so a reader that only wants the state name
+       can keep taking the first word */
+    if (uptime > 0)
+        return finish(snprintf(buf, cap, "STATE %s %ld\n",
+                               ctl_state_name(st), uptime), cap, n);
     return finish(snprintf(buf, cap, "STATE %s\n", ctl_state_name(st)), cap, n);
 }
 
@@ -297,6 +345,23 @@ ctl_status_t ctl_build_submeta(int idx, uint64_t expire,
     if (!buf) return CTL_ERR_ARG;
     return finish(snprintf(buf, cap, "SUBMETA %d %llu\n", idx,
                            (unsigned long long)expire), cap, n);
+}
+
+ctl_status_t ctl_build_subinfo(int idx, uint64_t upload, uint64_t download,
+                               uint64_t total, const char *description,
+                               const char *support_url,
+                               char *buf, size_t cap, size_t *n) {
+    char desc[768], support[1536];
+    if (!buf || !description || !support_url) return CTL_ERR_ARG;
+    if (ctl_pct_encode(description, desc, sizeof desc) != 0 ||
+        ctl_pct_encode(support_url, support, sizeof support) != 0)
+        return CTL_ERR_BUF;
+    return finish(snprintf(buf, cap, "SUBINFO %d %llu %llu %llu %s %s\n", idx,
+                           (unsigned long long)upload,
+                           (unsigned long long)download,
+                           (unsigned long long)total,
+                           desc[0] ? desc : "-", support[0] ? support : "-"),
+                  cap, n);
 }
 
 static int ctl_pct_encode(const char *src, char *dst, size_t cap) {

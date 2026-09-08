@@ -14,8 +14,8 @@ typedef enum {
     CTL_CMD_DISCONNECT,
     CTL_CMD_STATUS,
     CTL_CMD_PING,
-    CTL_CMD_ADD_SERVER, /* add a server */
-    CTL_CMD_ADD_SUB, /* add a subscription */
+    CTL_CMD_ADD_SERVER,
+    CTL_CMD_ADD_SUB,
     CTL_CMD_REFRESH, /* refresh a subscription */
     CTL_CMD_DEL_SERVER, /* delete a server */
     CTL_CMD_DEL_SUB, /* delete a subscription */
@@ -25,7 +25,14 @@ typedef enum {
     CTL_CMD_AUTH,
     CTL_CMD_MOVE_SECTION,
     CTL_CMD_MOVE_MANUAL,
-    CTL_CMD_SET_SUB_HEADER
+    CTL_CMD_SET_SUB_HEADER,
+    CTL_CMD_EXPORT,
+    CTL_CMD_RESTORE,
+    CTL_CMD_CHECK,
+    CTL_CMD_HWID, /* report the device id sent to subscription panels */
+    CTL_CMD_LOGS, /* stream the daemon log tail to a client that cannot read it */
+    CTL_CMD_IMPORT,       /* parse the staged file and add what it holds */
+    CTL_CMD_CLEAR_MANUAL  /* drop every manual server */
 } ctl_cmd_kind_t;
 
 typedef struct {
@@ -61,7 +68,9 @@ ctl_status_t ctl_build_add_sub(const char *url, const char *name,
                                char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_refresh(int sub_index, char *buf, size_t cap, size_t *n);
 
-ctl_status_t ctl_build_state(ctl_state_t st, char *buf, size_t cap, size_t *n);
+/* uptime is appended only when it is greater than zero */
+ctl_status_t ctl_build_state(ctl_state_t st, long uptime,
+                             char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_pong(int server_index, int ms, char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_stat(uint64_t up, uint64_t down, char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_ok(const char *msg, char *buf, size_t cap, size_t *n);
@@ -76,6 +85,10 @@ ctl_status_t ctl_build_srv(int idx, int selected, int group,
                            char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_listend(int count, char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_submeta(int idx, uint64_t expire,
+                                char *buf, size_t cap, size_t *n);
+ctl_status_t ctl_build_subinfo(int idx, uint64_t upload, uint64_t download,
+                               uint64_t total, const char *description,
+                               const char *support_url,
                                char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_subhdr(int idx, const char *header,
                                char *buf, size_t cap, size_t *n);
