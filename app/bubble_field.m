@@ -91,7 +91,6 @@ static CGFloat bub_randf(CGFloat a, CGFloat b) {
         memset(_bubbles, 0, sizeof _bubbles);
         for (int i = 0; i < _count; ++i) {
             CALayer *body = [CALayer layer];
-/* denser cyan glass so bubbles read on sky wallpaper */
             body.backgroundColor =
                 [UIColor colorWithRed:0.70 green:0.92 blue:1.00 alpha:0.78].CGColor;
             body.borderWidth = 1.5f;

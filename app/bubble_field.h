@@ -3,7 +3,6 @@
 
 #import <UIKit/UIKit.h>
 
-/* floating gloss bubbles for frutigeraero */
 @interface SenkoBubbleField : UIView
 - (void)start;
 - (void)stop;

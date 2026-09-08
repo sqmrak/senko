@@ -4,6 +4,38 @@
 #include <objc/message.h>
 #import "ui_chrome_priv.h"
 
+/* ios 15 draws every navigation bar with scrollEdgeAppearance, and its default
+   is transparent: the bar image set through the old properties is ignored and
+   the dark title is left on whatever is behind the bar */
+static void SenkoApplyBarAppearance(UINavigationBar *bar, UIImage *background,
+                                    UIColor *titleColor, UIFont *titleFont) {
+    Class cls = NSClassFromString(@"UINavigationBarAppearance");
+    if (!cls || ![bar respondsToSelector:@selector(setStandardAppearance:)]) return;
+    id appearance = [[cls alloc] init];
+    if (!appearance) return;
+    if ([appearance respondsToSelector:@selector(configureWithOpaqueBackground)])
+        ((void (*)(id, SEL))objc_msgSend)(appearance, @selector(configureWithOpaqueBackground));
+    if (background && [appearance respondsToSelector:@selector(setBackgroundImage:)])
+        ((void (*)(id, SEL, id))objc_msgSend)(appearance, @selector(setBackgroundImage:),
+                                              background);
+    if ([appearance respondsToSelector:@selector(setShadowColor:)])
+        ((void (*)(id, SEL, id))objc_msgSend)(appearance, @selector(setShadowColor:), nil);
+/* the appearance object takes attributed string keys, and the legacy
+   UITextAttribute* shadow keys are not among them */
+    NSMutableDictionary *attrs = [NSMutableDictionary dictionary];
+    if (titleColor) [attrs setObject:titleColor forKey:@"NSColor"];
+    if (titleFont) [attrs setObject:titleFont forKey:@"NSFont"];
+    if ([attrs count] && [appearance respondsToSelector:@selector(setTitleTextAttributes:)])
+        ((void (*)(id, SEL, id))objc_msgSend)(appearance,
+                                              @selector(setTitleTextAttributes:), attrs);
+    ((void (*)(id, SEL, id))objc_msgSend)(bar, @selector(setStandardAppearance:), appearance);
+    if ([bar respondsToSelector:@selector(setCompactAppearance:)])
+        ((void (*)(id, SEL, id))objc_msgSend)(bar, @selector(setCompactAppearance:), appearance);
+    if ([bar respondsToSelector:@selector(setScrollEdgeAppearance:)])
+        ((void (*)(id, SEL, id))objc_msgSend)(bar, @selector(setScrollEdgeAppearance:), appearance);
+    [appearance release];
+}
+
 void StyleNavBarClassic(UINavigationController *nav) {
     if (!nav) return;
     UINavigationBar *bar = nav.navigationBar;
@@ -11,28 +43,24 @@ void StyleNavBarClassic(UINavigationController *nav) {
     BOOL flat = SenkoThemeIsFlat();
     BOOL boy = SenkoThemeIsBoykisser();
     BOOL miside = SenkoThemeIsMiside();
-/* miside is purple field: use black bar chrome, not ios6 light white */
+    UIImage *barBackground = nil;
+/* black chrome preserves contrast over the purple miside field on ios 6 */
     BOOL barLight = light && !miside;
     bar.barStyle = barLight ? UIBarStyleDefault : UIBarStyleBlack;
-/* opaque bars: translucent nav ate the first section title (settings/daemon) */
+/* an opaque bar prevents old navigation controllers from covering the first section */
     bar.translucent = NO;
     if ([bar respondsToSelector:@selector(setBackgroundImage:forBarMetrics:)]) {
         CGSize sz = CGSizeMake(2, 44);
         UIGraphicsBeginImageContextWithOptions(sz, YES, 0);
         CGContextRef ctx = UIGraphicsGetCurrentContext();
         if (miside) {
-/* deep plum bar matching dark wallpaper */
             CGContextSetRGBFillColor(ctx, 0.12f, 0.04f, 0.14f, 1.0f);
             CGContextFillRect(ctx, CGRectMake(0, 0, 2, 44));
             CGContextSetRGBFillColor(ctx, 1.00f, 0.36f, 0.70f, 0.50f);
             CGContextFillRect(ctx, CGRectMake(0, 43, 2, 1));
-            UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
-            UIGraphicsEndImageContext();
-            [bar setBackgroundImage:img forBarMetrics:UIBarMetricsDefault];
         } else if (flat) {
             if (SenkoThemeIsIos16()) {
                 if (light) {
-/* frosted material bar over pastel wallpaper */
                     CGContextSetRGBFillColor(ctx, 0.98f, 0.96f, 0.99f, 1.0f);
                     CGContextFillRect(ctx, CGRectMake(0, 0, 2, 44));
                     CGContextSetRGBFillColor(ctx, 0.88f, 0.84f, 0.94f, 1.0f);
@@ -54,14 +82,14 @@ void StyleNavBarClassic(UINavigationController *nav) {
                 CGContextSetRGBFillColor(ctx, 0.22f, 0.22f, 0.24f, 1.0f);
                 CGContextFillRect(ctx, CGRectMake(0, 43, 2, 1));
             }
-            UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
-            UIGraphicsEndImageContext();
-            [bar setBackgroundImage:img forBarMetrics:UIBarMetricsDefault];
         } else {
             CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
             CGFloat comps[12];
-            if (boy) {
+            if (boy && light) {
                 CGFloat p[] = { 1.00,0.92,0.95,1, 1.00,0.78,0.88,1, 1.00,0.68,0.82,1 };
+                memcpy(comps, p, sizeof p);
+            } else if (boy) {
+                CGFloat p[] = { 0.30,0.115,0.20,1, 0.165,0.060,0.115,1, 0.095,0.032,0.068,1 };
                 memcpy(comps, p, sizeof p);
             } else if (light) {
                 CGFloat l[] = { 0.96,0.95,0.92,1, 0.86,0.84,0.80,1, 0.76,0.74,0.70,1 };
@@ -75,24 +103,26 @@ void StyleNavBarClassic(UINavigationController *nav) {
             CGContextDrawLinearGradient(ctx, gr, CGPointMake(0, 0), CGPointMake(0, 44), 0);
             CGGradientRelease(gr);
             CGColorSpaceRelease(cs);
-            UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
-            UIGraphicsEndImageContext();
-            [bar setBackgroundImage:img forBarMetrics:UIBarMetricsDefault];
         }
+        barBackground = UIGraphicsGetImageFromCurrentImageContext();
+        UIGraphicsEndImageContext();
+        [bar setBackgroundImage:barBackground forBarMetrics:UIBarMetricsDefault];
     }
+    UIColor *titleC;
+/* the boykisser dark ink is already a pink white, and plain white next to it
+   reads as a second colour on the same bar */
+    if (miside)
+        titleC = [UIColor whiteColor];
+    else if (light || flat || boy)
+        titleC = kInk;
+    else
+        titleC = [UIColor whiteColor];
+    UIFont *titleFont = SenkoThemeIsIos16()
+        ? SenkoFontTitle(18)
+        : ((flat) ? SenkoFontTitle(17) : [UIFont boldSystemFontOfSize:18]);
     if ([bar respondsToSelector:@selector(setTitleTextAttributes:)]) {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        UIColor *titleC;
-        if (miside)
-            titleC = [UIColor whiteColor];
-        else if (light || flat)
-            titleC = kInk;
-        else
-            titleC = [UIColor whiteColor];
-        UIFont *titleFont = SenkoThemeIsIos16()
-            ? SenkoFontTitle(18)
-            : ((flat) ? SenkoFontTitle(17) : [UIFont boldSystemFontOfSize:18]);
         NSMutableDictionary *attrs = [NSMutableDictionary dictionaryWithObjectsAndKeys:
             titleC, UITextAttributeTextColor,
             titleFont, UITextAttributeFont, nil];
@@ -110,7 +140,6 @@ void StyleNavBarClassic(UINavigationController *nav) {
 #pragma clang diagnostic pop
         [bar setTitleTextAttributes:attrs];
     }
-/* done / back tint */
     if ([bar respondsToSelector:@selector(setTintColor:)]) {
         if (miside)
             bar.tintColor = [UIColor colorWithRed:1.0 green:0.55 blue:0.80 alpha:1.0];
@@ -120,13 +149,13 @@ void StyleNavBarClassic(UINavigationController *nav) {
             bar.tintColor = kAccentBlue;
     }
     if ([bar respondsToSelector:@selector(setShadowImage:)]) {
-/* clear default nav bar shadow image */
         CGSize one = CGSizeMake(1, 1);
         UIGraphicsBeginImageContextWithOptions(one, NO, 0);
         UIImage *clear = UIGraphicsGetImageFromCurrentImageContext();
         UIGraphicsEndImageContext();
         [bar setShadowImage:clear];
     }
+    SenkoApplyBarAppearance(bar, barBackground, titleC, titleFont);
 }
 
 void StyleGlossyCapsuleLayout(UIButton *button) {
@@ -159,7 +188,7 @@ void StyleGlossyCapsule(UIButton *button, UIColor *top, UIColor *bottom) {
     UIColor *prevBot = objc_getAssociatedObject(button, &SenkoStyleBotKey);
     BOOL sameColors = (prevTop == top && prevBot == bottom);
     BOOL ios26 = SenkoThemeIsIos26();
-/* reuse chrome when size and color pointers match */
+/* reuse avoids adding duplicate chrome layers during repeated layout passes */
     if (sameColors && SenkoStyleSizeMatches(button, b.size) &&
         SenkoNamedGradientLayer(button.layer, @"body")) {
         StyleGlossyCapsuleLayout(button);
@@ -174,7 +203,6 @@ void StyleGlossyCapsule(UIButton *button, UIColor *top, UIColor *bottom) {
     button.layer.masksToBounds = NO;
     BOOL ios16 = SenkoThemeIsIos16();
     if (ios26) {
-/* floating glass control plane (capsule) */
         button.layer.borderWidth = 0.5f;
         button.layer.borderColor = light
             ? [UIColor colorWithWhite:1 alpha:0.90].CGColor
@@ -215,7 +243,6 @@ void StyleGlossyCapsule(UIButton *button, UIColor *top, UIColor *bottom) {
     body.frame = b;
     body.cornerRadius = cr;
     if (ios26) {
-/* keep wash thin so blur shows through */
         body.colors = [NSArray arrayWithObjects:
                        (id)[UIColor colorWithWhite:1 alpha:light ? 0.18f : 0.12f].CGColor,
                        (id)[UIColor colorWithWhite:1 alpha:light ? 0.05f : 0.03f].CGColor, nil];
@@ -247,7 +274,6 @@ void StyleGlossyCapsule(UIButton *button, UIColor *top, UIColor *bottom) {
                         (id)[UIColor colorWithWhite:1 alpha:0.55].CGColor,
                         (id)[UIColor colorWithWhite:1 alpha:0.05].CGColor, nil];
     }
-/* capsule is small: bake after frost install */
     if (b.size.width <= 200.0f && b.size.height <= 48.0f) {
         button.layer.shouldRasterize = YES;
         button.layer.rasterizationScale = [UIScreen mainScreen].scale;
@@ -282,18 +308,33 @@ void StyleGlossyCapsule(UIButton *button, UIColor *top, UIColor *bottom) {
 }
 
 CGFloat GetTopOffset(void) {
-/* ios6: 0; ios7+: status bar height, cap 20 (landscape may swap axes) */
+/* the cap avoids oversized status frames reported during rotation */
     if ([[[UIDevice currentDevice] systemVersion] floatValue] < 7.0f)
         return 0.0f;
     CGRect sb = [UIApplication sharedApplication].statusBarFrame;
     CGFloat h = sb.size.height;
     CGFloat w = sb.size.width;
-/* min edge; landscape may swap status bar frame */
+/* the shorter edge remains the status thickness after landscape axis swaps */
     CGFloat edge = h;
     if (w > 0.0f && w < edge) edge = w;
     if (edge < 1.0f) edge = 20.0f;
     if (edge > 20.0f) edge = 20.0f;
     return edge;
+}
+
+UIEdgeInsets SenkoSafeAreaInsets(UIView *view) {
+    UIEdgeInsets zero = UIEdgeInsetsZero;
+    if (!view) return zero;
+    SEL sel = NSSelectorFromString(@"safeAreaInsets");
+    if (![view respondsToSelector:sel]) return zero;
+    IMP imp = [view methodForSelector:sel];
+    if (!imp) return zero;
+    UIEdgeInsets (*call)(id, SEL) = (UIEdgeInsets (*)(id, SEL))imp;
+    UIEdgeInsets insets = call(view, sel);
+    if (insets.top < 0.0f || insets.left < 0.0f ||
+        insets.bottom < 0.0f || insets.right < 0.0f)
+        return zero;
+    return insets;
 }
 
 CAGradientLayer *AddVGradient(UIView *view, UIColor *top, UIColor *bottom) {
@@ -304,4 +345,3 @@ CAGradientLayer *AddVGradient(UIView *view, UIColor *top, UIColor *bottom) {
     [view.layer insertSublayer:gradient atIndex:0];
     return gradient;
 }
-

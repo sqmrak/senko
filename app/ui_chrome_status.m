@@ -8,7 +8,6 @@ void SenkoApplyBackgroundGradient(CAGradientLayer *g) {
     SenkoApplyBackgroundGradientForState(g, @"idle", NO);
 }
 
-/* wallpaper only - connection tint is the radial glow under connect */
 void SenkoApplyBackgroundGradientForState(CAGradientLayer *g, NSString *state, BOOL animated) {
     if (!g) return;
     (void)state;
@@ -19,7 +18,6 @@ void SenkoApplyBackgroundGradientForState(CAGradientLayer *g, NSString *state, B
     CGPoint end = CGPointMake(0.5f, 1.0f);
 
     if (SenkoThemeIsIos26()) {
-/* soft fallback under photo wallpaper (neutral, not blue) */
         start = CGPointMake(0.5f, 0.0f);
         end = CGPointMake(0.5f, 1.0f);
         if (SenkoThemeIsLight()) {
@@ -77,7 +75,10 @@ void SenkoApplyBackgroundGradientForState(CAGradientLayer *g, NSString *state, B
     }
 }
 
-/* radial glow image for connect-button halo (ios 6 safe, no radial ca type) */
+static UIImage *gStatusGlowImage;
+static NSString *gStatusGlowKey;
+
+/* a raster halo works on ios 6 where radial gradient layers are unavailable */
 static UIImage *SenkoStatusGlowImage(NSString *state, CGFloat side) {
     if (side < 8.0f) return nil;
     NSString *s = state ? [state lowercaseString] : @"idle";
@@ -86,6 +87,15 @@ static UIImage *SenkoStatusGlowImage(NSString *state, CGFloat side) {
     BOOL error = [s isEqualToString:@"error"];
     if (!connecting && !connected && !error) return nil;
 
+    /* state changes are rare, but layout and app activation can request the
+       same halo repeatedly. keep one exact theme-sized bitmap instead of
+       redrawing a full-screen-scale radial gradient on the main thread */
+    NSString *cacheKey = [NSString stringWithFormat:@"%@:%d:%@:%ld",
+                          SenkoThemeCurrentId(), SenkoThemeIsLight() ? 1 : 0,
+                          s, (long)lroundf((float)side)];
+    if (gStatusGlowImage && [gStatusGlowKey isEqualToString:cacheKey])
+        return gStatusGlowImage;
+
     BOOL light = SenkoThemeIsLight();
     BOOL miside = SenkoThemeIsMiside();
     BOOL boy = SenkoThemeIsBoykisser();
@@ -93,7 +103,6 @@ static UIImage *SenkoStatusGlowImage(NSString *state, CGFloat side) {
     CGFloat r, g, b, a0;
     if (connecting) {
         if (miside || boy) {
-/* candy amber-pink */
             r = 1.00f; g = light ? 0.45f : 0.38f; b = light ? 0.55f : 0.48f;
             a0 = light ? 0.52f : 0.60f;
         } else if (aero) {
@@ -104,25 +113,21 @@ static UIImage *SenkoStatusGlowImage(NSString *state, CGFloat side) {
             a0 = light ? 0.55f : 0.62f;
         }
     } else if (error) {
-/* rose / danger around button */
         r = light ? 0.95f : 1.00f;
         g = light ? 0.22f : 0.18f;
         b = light ? 0.26f : 0.22f;
         a0 = light ? 0.52f : 0.60f;
     } else if (miside || boy) {
-/* hot pink connected glow (theme accent) */
         r = light ? 1.00f : 1.00f;
         g = light ? 0.28f : 0.22f;
         b = light ? 0.62f : 0.58f;
         a0 = light ? 0.52f : 0.62f;
     } else if (aero) {
-/* sky cyan */
         r = light ? 0.05f : 0.10f;
         g = light ? 0.78f : 0.72f;
         b = light ? 0.98f : 0.95f;
         a0 = light ? 0.48f : 0.56f;
     } else {
-/* default connected green */
         r = light ? 0.12f : 0.10f;
         g = light ? 0.88f : 0.82f;
         b = light ? 0.32f : 0.28f;
@@ -152,7 +157,11 @@ static UIImage *SenkoStatusGlowImage(NSString *state, CGFloat side) {
     CGColorSpaceRelease(space);
     UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
-    return img;
+    [gStatusGlowImage release];
+    gStatusGlowImage = [img retain];
+    [gStatusGlowKey release];
+    gStatusGlowKey = [cacheKey copy];
+    return gStatusGlowImage;
 }
 
 void SenkoApplyStatusWash(CALayer *layer, NSString *state, CGFloat side, BOOL animated) {

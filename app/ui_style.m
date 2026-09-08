@@ -5,10 +5,63 @@
 
 enum { kSenkoFrostTag = 9107 };
 
-/* sf bold when system has it (ios9+); weight api on 8.2+; else boldsystem */
+static char kSenkoRasterKey;
+
+/* the veil is the previous screen held still while the palette swaps under it */
+static UIView *SenkoThemeVeilForWindow(UIWindow *w) {
+    /* snapshotViewAfterScreenUpdates: landed in ios 7 and copies the existing
+       render tree instead of rasterizing it again. on a modern phone the
+       renderInContext: path allocates a full retina bitmap of the whole window
+       on the main thread, and it also flattens a UIVisualEffectView into an
+       opaque tile */
+    if ([w respondsToSelector:@selector(snapshotViewAfterScreenUpdates:)]) {
+        UIView *snap = ((id (*)(id, SEL, BOOL))objc_msgSend)(
+            w, @selector(snapshotViewAfterScreenUpdates:), NO);
+        if (snap) return [snap retain];
+    }
+
+    CGSize size = w.bounds.size;
+    UIGraphicsBeginImageContextWithOptions(size, YES, 0.0f);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    if (!ctx) {
+        UIGraphicsEndImageContext();
+        return nil;
+    }
+    [w.layer renderInContext:ctx];
+    UIImage *shot = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    if (!shot) return nil;
+    return [[UIImageView alloc] initWithImage:shot];
+}
+
+void SenkoThemeCrossfadeWindows(void) {
+    /* block animation api landed in ios 4, and this runs on theme switches
+       only, never on live palette edits */
+    if (![UIView respondsToSelector:@selector(animateWithDuration:animations:completion:)])
+        return;
+    UIWindow *w = [[UIApplication sharedApplication] keyWindow];
+    if (!w) return;
+    CGSize size = w.bounds.size;
+    if (size.width < 1.0f || size.height < 1.0f) return;
+
+    UIView *veil = SenkoThemeVeilForWindow(w);
+    if (!veil) return;
+    veil.frame = w.bounds;
+    veil.userInteractionEnabled = NO;
+    veil.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [w addSubview:veil];
+    [UIView animateWithDuration:0.30
+                     animations:^{ veil.alpha = 0.0f; }
+                     completion:^(BOOL done) {
+                         (void)done;
+                         [veil removeFromSuperview];
+                         [veil release];
+                     }];
+}
+
+/* runtime lookup keeps font-weight symbols from breaking ios 5 launches */
 static UIFont *SenkoSFBold(CGFloat size) {
     if ([UIFont respondsToSelector:@selector(systemFontOfSize:weight:)]) {
-/* uifontweightbold ~= 0.4 */
         UIFont *f = ((UIFont * (*)(id, SEL, CGFloat, CGFloat))objc_msgSend)(
             [UIFont class], @selector(systemFontOfSize:weight:), size, (CGFloat)0.4);
         if (f) return f;
@@ -18,7 +71,6 @@ static UIFont *SenkoSFBold(CGFloat size) {
 
 static UIFont *SenkoSFSemibold(CGFloat size) {
     if ([UIFont respondsToSelector:@selector(systemFontOfSize:weight:)]) {
-/* uifontweightsemibold ~= 0.3 */
         UIFont *f = ((UIFont * (*)(id, SEL, CGFloat, CGFloat))objc_msgSend)(
             [UIFont class], @selector(systemFontOfSize:weight:), size, (CGFloat)0.3);
         if (f) return f;
@@ -47,31 +99,6 @@ UIFont *SenkoFontBody(CGFloat size, BOOL semibold) {
     return [UIFont systemFontOfSize:size];
 }
 
-void SenkoStyleIos16StatusPill(UILabel *label) {
-    if (!label) return;
-    label.layer.masksToBounds = YES;
-    CGFloat h = label.bounds.size.height;
-    if (h < 1.0f) h = 30.0f;
-    label.layer.cornerRadius = h * 0.5f;
-    if (SenkoThemeIsIos26()) {
-        label.layer.borderWidth = 0.5f;
-        label.layer.borderColor = SenkoThemeIsLight()
-            ? [UIColor colorWithWhite:1 alpha:0.90].CGColor
-            : [UIColor colorWithWhite:1 alpha:0.35].CGColor;
-        label.backgroundColor = SenkoThemeIsLight()
-            ? [UIColor colorWithWhite:1.0 alpha:0.28]
-            : [UIColor colorWithWhite:1.0 alpha:0.10];
-        label.font = SenkoFontBody(13, YES);
-    } else {
-        label.layer.borderWidth = 0;
-        label.layer.borderColor = [UIColor clearColor].CGColor;
-        label.backgroundColor = SenkoThemeIsLight()
-            ? [UIColor colorWithWhite:1.0 alpha:0.55]
-            : [UIColor colorWithWhite:1.0 alpha:0.12];
-        label.font = SenkoFontBody(13, NO);
-    }
-    SenkoStyleInkLabel(label);
-}
 
 void SenkoStyleIos16ListWell(UIView *well) {
     if (!well) return;
@@ -102,7 +129,6 @@ void SenkoRemoveFrost(UIView *host) {
 static UIColor *FrostTintColor(BOOL lite) {
     BOOL light = SenkoThemeIsLight();
     if (SenkoThemeIsIos26()) {
-/* pure white wash; gray wash looks dirty on light bg */
         return light
             ? [UIColor colorWithWhite:1.0 alpha:lite ? 0.62f : 0.48f]
             : [UIColor colorWithWhite:1.0 alpha:lite ? 0.14f : 0.08f];
@@ -116,7 +142,6 @@ static UIColor *FrostTintColor(BOOL lite) {
         : [UIColor colorWithRed:0.12 green:0.14 blue:0.20 alpha:0.78];
 }
 
-/* solid tint only (scroll-safe) */
 void SenkoInstallFrostLite(UIView *host) {
     if (!host) return;
     if (!SenkoThemeUsesFrost() && !SenkoThemeIsIos26()) {
@@ -142,7 +167,6 @@ void SenkoInstallFrostLite(UIView *host) {
     [host insertSubview:v atIndex:0];
 }
 
-/* 1 unknown, 0 no ve, 1 has uivisualeffectview */
 static int gFrostHasVE = -1;
 
 static int SenkoFrostHasVisualEffect(void) {
@@ -152,7 +176,7 @@ static int SenkoFrostHasVisualEffect(void) {
     return gFrostHasVE;
 }
 
-/* liquid glass: real blur on 8+; thin translucent wash on 6/7 (no uitoolbar) */
+/* ios 6 and 7 need a wash because UIVisualEffectView does not exist */
 void SenkoInstallFrost(UIView *host) {
     if (!host) return;
     if (!SenkoThemeIsIos26()) {
@@ -213,7 +237,7 @@ void SenkoInstallFrost(UIView *host) {
         }
     }
 
-/* ios 6/7 wash - reuse existing view */
+/* reusing the wash prevents stacked alpha layers after theme changes */
     if (old && ![old isKindOfClass:[UIToolbar class]]) {
         if (!CGRectEqualToRect(old.frame, host.bounds))
             old.frame = host.bounds;
@@ -237,7 +261,6 @@ void SenkoInstallFrost(UIView *host) {
     [wash release];
 }
 
-/* light text on always-dark surfaces */
 static UIColor *DarkChromeInk(void) {
     return [UIColor colorWithRed:1.00 green:0.92 blue:0.82 alpha:1.0];
 }
@@ -248,7 +271,6 @@ static UIColor *DarkChromeAccent(void) {
     return [UIColor colorWithRed:1.00 green:0.58 blue:0.14 alpha:1.0];
 }
 
-/* label shadow: white offset on light, black offset on dark; none on flat */
 static void ApplyPaperShadow(UILabel *label, CGFloat darkA, CGFloat lightA) {
     if (!label) return;
     if (SenkoThemeIsFlat()) {
@@ -280,7 +302,6 @@ void SenkoStyleInkLabel(UILabel *label) {
 void SenkoStyleMutedLabel(UILabel *label) {
     if (!label) return;
     label.textColor = kInkMuted;
-/* muted secondary: soft emboss only on ios6 light; never on flat/glass/dark */
     if (SenkoThemeIsLight() && !SenkoThemeIsFlat()) {
         label.shadowColor = [UIColor colorWithWhite:1 alpha:0.35f];
         label.shadowOffset = CGSizeMake(0, 1);
@@ -305,7 +326,6 @@ void SenkoStyleInkOnDark(UILabel *label) {
 void SenkoStyleMutedOnDark(UILabel *label) {
     if (!label) return;
     label.textColor = DarkChromeMuted();
-/* secondary on dark: no cut-in */
     label.shadowColor = nil;
     label.shadowOffset = CGSizeZero;
 }
@@ -318,7 +338,6 @@ void SenkoStyleAccentOnDark(UILabel *label) {
 
 void SenkoStyleChromeTitle(UIButton *button) {
     if (!button) return;
-/* white title on filled controls */
     [button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     if (SenkoThemeIsFlat()) {
         button.titleLabel.shadowColor = nil;
@@ -359,9 +378,17 @@ void SenkoFillSectionGradient(CAGradientLayer *g) {
                     (id)[UIColor colorWithRed:0.14 green:0.06 blue:0.20 alpha:0.94].CGColor, nil];
         g.opacity = 1.0f;
     } else if (SenkoThemeIsBoykisser()) {
-        g.colors = [NSArray arrayWithObjects:
-                    (id)[UIColor colorWithRed:1.00 green:0.88 blue:0.93 alpha:0.92].CGColor,
-                    (id)[UIColor colorWithRed:1.00 green:0.78 blue:0.88 alpha:0.92].CGColor, nil];
+        if (SenkoThemeIsLight()) {
+            g.colors = [NSArray arrayWithObjects:
+                        (id)[UIColor colorWithRed:1.00 green:0.88 blue:0.93 alpha:0.92].CGColor,
+                        (id)[UIColor colorWithRed:1.00 green:0.78 blue:0.88 alpha:0.92].CGColor, nil];
+        } else {
+/* the plate keeps its saturation so the header still sits above the cards the
+   way the pink plate does on paper */
+            g.colors = [NSArray arrayWithObjects:
+                        (id)[UIColor colorWithRed:0.310 green:0.110 blue:0.200 alpha:0.94].CGColor,
+                        (id)[UIColor colorWithRed:0.185 green:0.058 blue:0.125 alpha:0.94].CGColor, nil];
+        }
         g.opacity = 1.0f;
     } else if (SenkoThemeIsFrutigeraero()) {
         g.colors = [NSArray arrayWithObjects:
@@ -441,7 +468,6 @@ void SenkoStyleSectionPlate(UIView *plate) {
         plate.layer.shadowOffset = CGSizeMake(0, 1);
         plate.clipsToBounds = YES;
     } else if (SenkoThemeIsIos26()) {
-/* section headers: alpha plate only (few of them; no per-cell frost) */
         BOOL light = SenkoThemeIsLight();
         plate.backgroundColor = [UIColor clearColor];
         plate.opaque = NO;
@@ -453,9 +479,11 @@ void SenkoStyleSectionPlate(UIView *plate) {
         plate.layer.masksToBounds = YES;
         plate.layer.shadowOpacity = 0.0f;
         plate.layer.shadowPath = nil;
-        plate.layer.shouldRasterize = YES;
-        plate.layer.rasterizationScale = [UIScreen mainScreen].scale;
-/* frost only on static chrome outside scroll lists */
+/* a rasterized layer that holds a live UIVisualEffectView is re-rendered
+   offscreen on every blur update, which pins the gpu and starves the rest of
+   the system; the glass caches itself, so the plate must not rasterize */
+        plate.layer.shouldRasterize = NO;
+/* per-row blur overwhelms old gpus, so frost stays outside scrolling lists */
         SenkoInstallFrost(plate);
     } else if (SenkoThemeIsIos16()) {
         SenkoRemoveFrost(plate);
@@ -498,10 +526,11 @@ void SenkoStyleSectionPlate(UIView *plate) {
     }
 }
 
+/* the on-dark pair is the fixed ios6 cream, which fights the pink plate, so the
+   boykisser header takes its own palette ink */
 void SenkoStyleSectionTitle(UILabel *label) {
     if (!label) return;
-/* section title follows light/flat vs dark styles */
-    if (SenkoThemeIsFlat() || SenkoThemeIsLight())
+    if (SenkoThemeIsFlat() || SenkoThemeIsLight() || SenkoThemeIsBoykisser())
         SenkoStyleInkLabel(label);
     else
         SenkoStyleInkOnDark(label);
@@ -509,7 +538,7 @@ void SenkoStyleSectionTitle(UILabel *label) {
 
 void SenkoStyleSectionMeta(UILabel *label) {
     if (!label) return;
-    if (SenkoThemeIsFlat() || SenkoThemeIsLight())
+    if (SenkoThemeIsFlat() || SenkoThemeIsLight() || SenkoThemeIsBoykisser())
         SenkoStyleMutedLabel(label);
     else
         SenkoStyleMutedOnDark(label);
@@ -574,7 +603,7 @@ void SenkoStyleTerminalText(UITextView *tv) {
     }
 }
 
-/* cache glass segment tiles (built once) */
+/* caching avoids redrawing identical glass tiles during scrolling */
 static UIImage *gGlassIdleL, *gGlassIdleD, *gGlassSelL, *gGlassSelD;
 static UIImage *gGlassDivL, *gGlassDivD;
 
@@ -616,14 +645,12 @@ static void SenkoGlassEnsureCache(void) {
     UIGraphicsEndImageContext();
 }
 
-/* tag for full-screen ios26 wallpaper on secondary vcs */
 enum { kSenkoScreenBgTag = 9111 };
 
 CGRect SenkoViewBounds(UIView *view) {
     if (!view) return CGRectZero;
     CGRect b = view.bounds;
     if (b.size.width < 1.0f || b.size.height < 1.0f) {
-/* fall back to screen application frame */
         b = [[UIScreen mainScreen] applicationFrame];
         b.origin = CGPointZero;
     }
@@ -631,12 +658,12 @@ CGRect SenkoViewBounds(UIView *view) {
     BOOL wantLand = UIInterfaceOrientationIsLandscape(o);
     BOOL isLand = b.size.width > b.size.height + 0.5f;
     if (wantLand != isLand) {
-/* bounds still oriented the wrong way - swap axes */
+/* pre-ios 8 reports portrait bounds during rotation, so landscape swaps axes */
         CGFloat t = b.size.width;
         b.size.width = b.size.height;
         b.size.height = t;
     }
-/* prefer superview when it is larger (post-rotation lag) */
+/* the superview reflects the new size before child bounds finish rotating */
     if (view.superview) {
         CGRect sb = view.superview.bounds;
         if (sb.size.width > b.size.width + 1.0f)
@@ -650,7 +677,6 @@ CGRect SenkoViewBounds(UIView *view) {
 void SenkoApplyScreenChrome(UIView *root) {
     if (!root) return;
     UIView *old = [root viewWithTag:kSenkoScreenBgTag];
-/* strip solid gradient layers named bggrad so wallpaper can show */
     NSArray *subs = [NSArray arrayWithArray:root.layer.sublayers];
     for (CALayer *L in subs) {
         if ([L.name isEqualToString:@"bgGrad"] || [L.name isEqualToString:@"vgrad"])
@@ -691,7 +717,7 @@ void SenkoApplyScreenChrome(UIView *root) {
         bg.hidden = NO;
     }
     bg.frame = root.bounds;
-/* opaque cover: gpu skips blending the full-screen photo */
+/* an opaque cover avoids full-screen blending on old gpus */
     bg.opaque = YES;
     bg.backgroundColor = root.backgroundColor;
     [root sendSubviewToBack:bg];
@@ -706,7 +732,7 @@ void SenkoStyleGlassField(UITextField *field) {
         field.textColor = kInk;
         return;
     }
-/* kill system bezel (solid white on ios6) */
+/* removing the system bezel prevents a solid white ios 6 button background */
     field.borderStyle = UITextBorderStyleNone;
     field.opaque = NO;
     field.backgroundColor = light
@@ -775,7 +801,17 @@ void SenkoStyleGlassSegmented(UISegmentedControl *seg) {
     }
 }
 
-/* strip stays on accent so idle/connected match "refreshing..." under every theme */
+void SenkoStyleSelectableCell(UITableViewCell *cell) {
+    if (!cell) return;
+    UIView *selected = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
+    selected.backgroundColor = [kAccentBlue colorWithAlphaComponent:
+        SenkoThemeIsLight() ? 0.13f : 0.20f];
+    selected.opaque = NO;
+    cell.selectedBackgroundView = selected;
+    cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+}
+
+/* a fixed accent prevents status color jumps while refresh changes state */
 void SetStatusDefault(UILabel *label, NSString *text) {
     if (SenkoThemeIsIos26())
         label.font = SenkoFontBody(13, NO);
@@ -802,4 +838,209 @@ void SetStatusRefresh(UILabel *label, NSString *text) {
     label.text = text;
 }
 
-/* cache tinted glyphs: scroll headers re-request the same icons constantly */
+/* caching prevents section headers from retinting identical icons while scrolling */
+
+/* motion helpers. every entry point degrades instead of skipping the movement:
+   ios 5 has block animation but no spring curve, so the fallback plays the
+   overshoot as two timed steps */
+
+void SenkoAnimate(NSTimeInterval duration, void (^animations)(void),
+                  void (^completion)(BOOL finished)) {
+    if (!animations) return;
+    if (![UIView respondsToSelector:@selector(animateWithDuration:animations:completion:)]) {
+        animations();
+        if (completion) completion(YES);
+        return;
+    }
+    [UIView animateWithDuration:duration
+                          delay:0
+                        options:UIViewAnimationOptionBeginFromCurrentState |
+                                UIViewAnimationOptionCurveEaseOut
+                     animations:animations
+                     completion:completion];
+}
+
+void SenkoAnimateSpring(NSTimeInterval duration, NSTimeInterval delay,
+                        void (^animations)(void),
+                        void (^completion)(BOOL finished)) {
+    if (!animations) return;
+    SEL spring = @selector(animateWithDuration:delay:usingSpringWithDamping:
+                           initialSpringVelocity:options:animations:completion:);
+    if ([UIView respondsToSelector:spring]) {
+        /* the armv7 slice builds against an sdk that predates the spring api,
+           so the call goes through a typed send instead of an implicit
+           declaration that would pass the damping floats in the wrong slots */
+        typedef void (*SenkoSpringFn)(id, SEL, NSTimeInterval, NSTimeInterval,
+                                      CGFloat, CGFloat, NSUInteger,
+                                      void (^)(void), void (^)(BOOL));
+        ((SenkoSpringFn)objc_msgSend)([UIView class], spring, duration, delay,
+                                      0.78f, 0.45f,
+                                      UIViewAnimationOptionBeginFromCurrentState,
+                                      animations, completion);
+        return;
+    }
+    if (![UIView respondsToSelector:@selector(animateWithDuration:animations:completion:)]) {
+        animations();
+        if (completion) completion(YES);
+        return;
+    }
+    [UIView animateWithDuration:duration
+                          delay:delay
+                        options:UIViewAnimationOptionBeginFromCurrentState |
+                                UIViewAnimationOptionCurveEaseOut
+                     animations:animations
+                     completion:completion];
+}
+
+/* a rasterized layer rebuilds its cache on every step of a scale, which is what
+   makes a press feel expensive on an armv7 device. the cache is dropped for the
+   duration and restored once the view is at rest again */
+static void SuspendRasterization(UIView *view) {
+    if (!view.layer.shouldRasterize) return;
+    objc_setAssociatedObject(view, &kSenkoRasterKey, [NSNumber numberWithBool:YES],
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    view.layer.shouldRasterize = NO;
+}
+
+static void RestoreRasterization(UIView *view) {
+    if (![objc_getAssociatedObject(view, &kSenkoRasterKey) boolValue]) return;
+    objc_setAssociatedObject(view, &kSenkoRasterKey, nil,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    view.layer.rasterizationScale = [UIScreen mainScreen].scale;
+    view.layer.shouldRasterize = YES;
+}
+
+void SenkoPressPop(UIView *view, BOOL pressed) {
+    if (!view) return;
+    CGAffineTransform target = pressed
+        ? CGAffineTransformMakeScale(0.965f, 0.965f)
+        : CGAffineTransformIdentity;
+    if (CGAffineTransformEqualToTransform(view.transform, target)) return;
+    SuspendRasterization(view);
+    /* the release has to spring, the press must not: a bouncy press feels
+       like lag when the finger is still down */
+    if (pressed) {
+        SenkoAnimate(0.10, ^{ view.transform = target; }, NULL);
+    } else {
+        SenkoAnimateSpring(0.30, 0, ^{ view.transform = target; }, ^(BOOL done) {
+            (void)done;
+            RestoreRasterization(view);
+        });
+    }
+}
+
+void SenkoRevealView(UIView *view, NSUInteger index) {
+    if (!view) return;
+    if (![UIView respondsToSelector:@selector(animateWithDuration:delay:options:animations:completion:)]) {
+        view.alpha = 1.0f;
+        return;
+    }
+    /* the stagger is capped so a long list does not delay its last row by a
+       visible pause after the first paint */
+    NSTimeInterval delay = index > 7 ? 0.28 : index * 0.04;
+    CGAffineTransform rest = view.transform;
+    SuspendRasterization(view);
+    view.alpha = 0.0f;
+    view.transform = CGAffineTransformConcat(CGAffineTransformMakeTranslation(0, 14.0f), rest);
+    [UIView animateWithDuration:0.34
+                          delay:delay
+                        options:UIViewAnimationOptionBeginFromCurrentState |
+                                UIViewAnimationOptionCurveEaseOut
+                     animations:^{
+                         view.alpha = 1.0f;
+                         view.transform = rest;
+                     }
+                     completion:^(BOOL done) {
+                         (void)done;
+                         RestoreRasterization(view);
+                     }];
+}
+
+/* the header wordmark wants a geometric bold close to Rubik. no ios ships that
+   face, so the ladder walks from the roundest system face down to what ios 5
+   actually has and stops at the first one the device can create. every symbol
+   past ios 6 is resolved at runtime because the armv7 slice builds against an
+   sdk that has neither UIFontDescriptor nor the rounded design */
+UIFont *SenkoFontDisplay(CGFloat size) {
+    UIFont *base = [UIFont boldSystemFontOfSize:size];
+    SEL descSel = @selector(fontDescriptor);
+    SEL designSel = NSSelectorFromString(@"fontDescriptorWithDesign:");
+    SEL makeSel = NSSelectorFromString(@"fontWithDescriptor:size:");
+    if ([base respondsToSelector:descSel] && [UIFont respondsToSelector:makeSel]) {
+        id desc = ((id (*)(id, SEL))objc_msgSend)(base, descSel);
+        if ([desc respondsToSelector:designSel]) {
+            id rounded = ((id (*)(id, SEL, NSString *))objc_msgSend)
+                (desc, designSel, @"NSCTFontUIFontDesignRounded");
+            if (rounded) {
+                UIFont *f = ((id (*)(id, SEL, id, CGFloat))objc_msgSend)
+                    ([UIFont class], makeSel, rounded, size);
+                if (f) return f;
+            }
+        }
+    }
+    static NSString * const kFaces[] = {
+        @"AvenirNext-Bold", @"Avenir-Black", @"HelveticaNeue-Bold"
+    };
+    for (size_t i = 0; i < sizeof kFaces / sizeof kFaces[0]; ++i) {
+        UIFont *f = [UIFont fontWithName:kFaces[i] size:size];
+        if (f) return f;
+    }
+    return base;
+}
+
+/* a label lays out text the same way every screen here draws it, and it is the
+   one measurement that exists unchanged from ios 5 to ios 16. the string
+   drawing category cannot be used instead: -sizeWithAttributes: returns a
+   struct through objc_msgSend, which is the wrong call on armv7, and
+   -sizeWithFont:constrainedToSize:lineBreakMode: takes an unbounded height
+   that newer text layout does not accept */
+CGSize SenkoTextSize(NSString *text, UIFont *font, CGFloat width) {
+    static UILabel *gauge = nil;
+    if (![text length] || !font || width < 1.0f) return CGSizeZero;
+    if (!gauge) {
+        gauge = [[UILabel alloc] initWithFrame:CGRectZero];
+        gauge.numberOfLines = 0;
+        gauge.lineBreakMode = NSLineBreakByWordWrapping;
+        gauge.backgroundColor = [UIColor clearColor];
+    }
+    gauge.font = font;
+    gauge.text = text;
+    CGSize fit = [gauge sizeThatFits:CGSizeMake(width, 100000.0f)];
+    if (fit.width > width) fit.width = width;
+    fit.width = ceilf(fit.width);
+    fit.height = ceilf(fit.height);
+    return fit;
+}
+
+/* measuring the string is the only way to stop a control from ellipsing its own
+   title */
+CGFloat SenkoTextWidth(NSString *text, UIFont *font) {
+    return SenkoTextSize(text, font, 100000.0f).width;
+}
+
+/* a palette is free to hand over two nearly identical stops, which paints a
+   flat slab where the design asks for a gradient. these derive the stops from
+   one colour so every theme gets the same amount of relief */
+static void SenkoColorParts(UIColor *c, CGFloat *r, CGFloat *g, CGFloat *b, CGFloat *a) {
+    *r = *g = *b = 0.0f;
+    *a = 1.0f;
+    if ([c respondsToSelector:@selector(getRed:green:blue:alpha:)] &&
+        [c getRed:r green:g blue:b alpha:a])
+        return;
+    CGFloat w = 0.0f;
+    if ([c respondsToSelector:@selector(getWhite:alpha:)] && [c getWhite:&w alpha:a])
+        *r = *g = *b = w;
+}
+
+UIColor *SenkoShadeColor(UIColor *base, CGFloat delta) {
+    if (!base) return nil;
+    CGFloat r, g, b, a;
+    SenkoColorParts(base, &r, &g, &b, &a);
+    CGFloat target = delta > 0.0f ? 1.0f : 0.0f;
+    CGFloat mix = delta < 0.0f ? -delta : delta;
+    if (mix > 1.0f) mix = 1.0f;
+    return [UIColor colorWithRed:r + (target - r) * mix
+                           green:g + (target - g) * mix
+                            blue:b + (target - b) * mix
+                           alpha:a];
+}

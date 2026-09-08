@@ -6,10 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* count set in init by idiom */
 enum { kBoyMaxPhone = 10 };
 enum { kBoyMaxPad   = 16 };
-enum { kBoyMax      = 16 }; /* array capacity = pad max */
+enum { kBoyMax      = 16 };
 
 typedef struct {
     CGFloat x, y;
@@ -31,7 +30,7 @@ typedef struct {
     UIImage *_sprite;
     CGSize _laidSize;
     CFTimeInterval _lastTs;
-    CGFloat _baseH; /* base height before scale */
+    CGFloat _baseH;
 }
 
 static UIImage *gBoySpritePhone;
@@ -55,7 +54,7 @@ UIImage *SenkoBoykisserSprite(CGFloat size) {
     }
     if (!src) return nil;
 
-/* larger bake size so pad upscale is sharp */
+/* larger source images prevent blur when iPad scales the particles */
     CGFloat maxSide = pad ? 180.0f : 112.0f;
     CGFloat scale = maxSide / MAX(src.size.width, src.size.height);
     CGSize outSz = CGSizeMake(src.size.width * scale + 10, src.size.height * scale + 10);
@@ -86,7 +85,6 @@ static CGFloat boy_randf(CGFloat a, CGFloat b) {
     CGFloat bh = self.bounds.size.height;
     if (bw < 1) bw = 320;
     if (bh < 1) bh = 480;
-/* pad: bigger and more opaque so they read on a huge canvas */
     if (_isPad) {
         f->scale = boy_randf(0.85f, 1.45f);
         f->alpha = boy_randf(0.92f, 1.0f);

@@ -2,39 +2,57 @@
 #import "ui_theme.h"
 #import "meow.h"
 #import "app_common.h"
+#import "theme_edit_vc.h"
+#import "theme/theme_custom.h"
 #include <objc/message.h>
 
-/* theme list inside one group (ios / custom /...) */
 @interface ThemeGroupVC : UIViewController <UITableViewDataSource, UITableViewDelegate,
-                                             UIAlertViewDelegate> {
+                                             UIActionSheetDelegate,
+                                             FileImportDelegate> {
     UITableView *_tv;
     NSString *_groupId;
     NSArray *_ids;
-    NSString *_pendingTid; /* ios26 lag warn on old firmware */
+    BOOL _isCustomGroup;
 }
 - (id)initWithGroupId:(NSString *)groupId;
 @end
 
 @implementation ThemeGroupVC
 
-static BOOL SenkoHostIsIos6or7(void) {
-    return [[[UIDevice currentDevice] systemVersion] floatValue] < 8.0f;
-}
-
 - (id)initWithGroupId:(NSString *)groupId {
     if ((self = [super init])) {
         _groupId = [groupId copy];
         _ids = [SenkoThemeIdsInGroup(groupId) retain];
+        _isCustomGroup = [groupId isEqualToString:@SENKO_THEME_GROUP_CUSTOM];
     }
     return self;
 }
 
+- (void)reloadIds {
+    NSArray *fresh = [SenkoThemeIdsInGroup(_groupId) retain];
+    [_ids release];
+    _ids = fresh;
+    [_tv reloadData];
+}
+
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    _tv.dataSource = nil;
+    _tv.delegate = nil;
+    [_tv release];
     [_groupId release];
     [_ids release];
-    [_pendingTid release];
     [super dealloc];
+}
+
+/* ios 5 releases the view of an offscreen controller, so the retained table
+   must go with it instead of pointing into a freed hierarchy */
+- (void)viewDidUnload {
+    _tv.dataSource = nil;
+    _tv.delegate = nil;
+    [_tv release];
+    _tv = nil;
+    [super viewDidUnload];
 }
 
 - (void)viewDidLoad {
@@ -45,8 +63,8 @@ static BOOL SenkoHostIsIos6or7(void) {
     if ([self respondsToSelector:@selector(setExtendedLayoutIncludesOpaqueBars:)])
         ((void (*)(id, SEL, BOOL))objc_msgSend)(self, @selector(setExtendedLayoutIncludesOpaqueBars:), NO);
     self.view.backgroundColor = kBG;
-    _tv = [[[UITableView alloc] initWithFrame:self.view.bounds
-                                        style:UITableViewStyleGrouped] autorelease];
+    _tv = [[UITableView alloc] initWithFrame:self.view.bounds
+                                       style:UITableViewStyleGrouped];
     _tv.dataSource = self;
     _tv.delegate = self;
     _tv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -58,12 +76,99 @@ static BOOL SenkoHostIsIos6or7(void) {
     if ([_tv respondsToSelector:@selector(setBackgroundView:)])
         _tv.backgroundView = nil;
     [self.view addSubview:_tv];
+    if (_isCustomGroup) {
+        UIBarButtonItem *add = [[[UIBarButtonItem alloc]
+            initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
+                                 target:self
+                                 action:@selector(addTapped)] autorelease];
+        self.navigationItem.rightBarButtonItem = add;
+    }
     if (self.navigationController)
         StyleNavBarClassic(self.navigationController);
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(themeDidChange:)
                                                  name:SenkoThemeDidChangeNotification
                                                object:nil];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    if (_isCustomGroup) [self reloadIds];
+}
+
+- (void)showMessage:(NSString *)title body:(NSString *)body {
+    UIAlertView *a = [[UIAlertView alloc] initWithTitle:title
+                                                message:body
+                                               delegate:nil
+                                      cancelButtonTitle:SenkoLocalizedText(@"OK")
+                                      otherButtonTitles:nil];
+    [a show];
+    [a release];
+}
+
+- (void)editThemeId:(NSString *)tid {
+    ThemeEditVC *vc = [[[ThemeEditVC alloc] initWithThemeId:tid] autorelease];
+    [self.navigationController pushViewController:vc animated:YES];
+}
+
+/* a new theme starts as a saved copy of the active one, so the editor always
+   works on stored colors and nothing can be lost half-edited */
+- (void)createFromCurrent {
+    NSMutableDictionary *draft = SenkoCustomDraftFromTheme(SenkoThemeCurrentId());
+    NSString *tid = draft ? SenkoCustomSaveDraft(draft) : nil;
+    if (!tid) {
+        [self showMessage:SenkoLocalizedText(@"Could not create theme")
+                     body:SenkoLocalizedText(@"The custom theme limit is reached.")];
+        return;
+    }
+    [self reloadIds];
+    [self editThemeId:tid];
+}
+
+- (void)importTheme {
+    FileImportVC *files = [[[FileImportVC alloc]
+        initWithPath:SenkoCustomExportDirectory() delegate:self] autorelease];
+    files.title = SenkoLocalizedText(@"Import theme");
+    [self.navigationController pushViewController:files animated:YES];
+}
+
+- (void)addTapped {
+    SenkoThemeSfxPlay();
+    UIActionSheet *sheet = [[UIActionSheet alloc]
+             initWithTitle:SenkoLocalizedText(@"New theme")
+                  delegate:self
+         cancelButtonTitle:SenkoLocalizedText(@"Cancel")
+    destructiveButtonTitle:nil
+         otherButtonTitles:SenkoLocalizedText(@"Copy current theme"),
+                           SenkoLocalizedText(@"Import from Documents"), nil];
+    [sheet showInView:self.view];
+    [sheet release];
+}
+
+- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)idx {
+    if (idx == sheet.cancelButtonIndex) return;
+    if (idx == 0) [self createFromCurrent];
+    else if (idx == 1) [self importTheme];
+}
+
+- (void)fileImportVCDidCancel:(FileImportVC *)vc {
+    (void)vc;
+    [self.navigationController popToViewController:self animated:YES];
+}
+
+- (void)fileImportVC:(FileImportVC *)vc didPickPath:(NSString *)path {
+    (void)vc;
+    [self.navigationController popToViewController:self animated:YES];
+    NSString *err = nil;
+    NSString *tid = SenkoCustomImportFile(path, &err);
+    if (!tid) {
+        [self showMessage:SenkoLocalizedText(@"Import failed")
+                     body:SenkoLocalizedText(err ? err : @"Unknown error")];
+        return;
+    }
+    [self reloadIds];
+    [self showMessage:SenkoLocalizedText(@"Theme imported")
+                 body:SenkoThemeDisplayName(tid)];
 }
 
 - (void)themeDidChange:(NSNotification *)n {
@@ -93,9 +198,8 @@ static BOOL SenkoHostIsIos6or7(void) {
     NSString *blurb = SenkoLocalizedText(SenkoThemeBlurb(tid));
     CGFloat width = tv.bounds.size.width - 76.0f;
     if (width < 160.0f) width = 160.0f;
-    CGSize size = [blurb sizeWithFont:[UIFont systemFontOfSize:12.0f]
-                    constrainedToSize:CGSizeMake(width, 120.0f)
-                        lineBreakMode:NSLineBreakByWordWrapping];
+    CGSize size = SenkoTextSize(blurb, [UIFont systemFontOfSize:12.0f], width);
+    if (size.height > 120.0f) size.height = 120.0f;
     return MAX(52.0f, 22.0f + size.height + 18.0f);
 }
 
@@ -113,13 +217,44 @@ static BOOL SenkoHostIsIos6or7(void) {
     cell.backgroundColor = kCellHi;
     cell.textLabel.backgroundColor = [UIColor clearColor];
     cell.detailTextLabel.backgroundColor = [UIColor clearColor];
+    cell.textLabel.lineBreakMode = NSLineBreakByClipping;
+    cell.textLabel.adjustsFontSizeToFitWidth = YES;
+    cell.textLabel.minimumFontSize = 11.0f;
+    cell.detailTextLabel.lineBreakMode = NSLineBreakByClipping;
+    cell.detailTextLabel.adjustsFontSizeToFitWidth = YES;
+    cell.detailTextLabel.minimumFontSize = 9.0f;
     cell.detailTextLabel.numberOfLines = 0;
     cell.detailTextLabel.lineBreakMode = NSLineBreakByWordWrapping;
     BOOL on = [tid isEqualToString:SenkoThemeCurrentId()];
-    cell.accessoryType = on ? UITableViewCellAccessoryCheckmark
-                            : UITableViewCellAccessoryNone;
-    cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+    if (SenkoCustomIsCustomId(tid))
+        cell.accessoryType = UITableViewCellAccessoryDetailDisclosureButton;
+    else
+        cell.accessoryType = on ? UITableViewCellAccessoryCheckmark
+                                : UITableViewCellAccessoryNone;
+    SenkoStyleSelectableCell(cell);
     return cell;
+}
+
+- (void)tableView:(UITableView *)tv
+        accessoryButtonTappedForRowWithIndexPath:(NSIndexPath *)ip {
+    (void)tv;
+    NSString *tid = [_ids objectAtIndex:ip.row];
+    if (SenkoCustomIsCustomId(tid)) [self editThemeId:tid];
+}
+
+- (BOOL)tableView:(UITableView *)tv canEditRowAtIndexPath:(NSIndexPath *)ip {
+    (void)tv;
+    return SenkoCustomIsCustomId([_ids objectAtIndex:ip.row]);
+}
+
+- (void)tableView:(UITableView *)tv
+        commitEditingStyle:(UITableViewCellEditingStyle)style
+         forRowAtIndexPath:(NSIndexPath *)ip {
+    (void)tv;
+    if (style != UITableViewCellEditingStyleDelete) return;
+    NSString *tid = [_ids objectAtIndex:ip.row];
+    if (!SenkoCustomDelete(tid)) return;
+    [self reloadIds];
 }
 
 - (void)applyThemeId:(NSString *)tid {
@@ -131,31 +266,7 @@ static BOOL SenkoHostIsIos6or7(void) {
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [tv deselectRowAtIndexPath:ip animated:YES];
     SenkoThemeSfxPlay();
-    NSString *tid = [_ids objectAtIndex:ip.row];
-    if ([tid isEqualToString:SenkoThemeCurrentId()]) return;
-
-    if ([tid isEqualToString:@"senko-ios26"] && SenkoHostIsIos6or7()) {
-        [_pendingTid release];
-        _pendingTid = [tid copy];
-        UIAlertView *a = [[UIAlertView alloc]
-            initWithTitle:@"Senko-iOS26"
-                  message:@"This theme will lag on iOS 6/7. Liquid glass is laggy on older device."
-                 delegate:self
-        cancelButtonTitle:@"Cancel"
-        otherButtonTitles:@"Apply anyway", nil];
-        [a show];
-        [a release];
-        return;
-    }
-    [self applyThemeId:tid];
-}
-
-- (void)alertView:(UIAlertView *)alert clickedButtonAtIndex:(NSInteger)idx {
-    (void)alert;
-    if (idx == 1 && _pendingTid)
-        [self applyThemeId:_pendingTid];
-    [_pendingTid release];
-    _pendingTid = nil;
+    [self applyThemeId:[_ids objectAtIndex:ip.row]];
 }
 
 @end
@@ -167,8 +278,21 @@ static BOOL SenkoHostIsIos6or7(void) {
 
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    _tv.dataSource = nil;
+    _tv.delegate = nil;
+    [_tv release];
     [_groups release];
     [super dealloc];
+}
+
+/* ios 5 releases the view of an offscreen controller, so the retained table
+   must go with it instead of pointing into a freed hierarchy */
+- (void)viewDidUnload {
+    _tv.dataSource = nil;
+    _tv.delegate = nil;
+    [_tv release];
+    _tv = nil;
+    [super viewDidUnload];
 }
 
 - (void)viewDidLoad {
@@ -180,8 +304,8 @@ static BOOL SenkoHostIsIos6or7(void) {
     if ([self respondsToSelector:@selector(setExtendedLayoutIncludesOpaqueBars:)])
         ((void (*)(id, SEL, BOOL))objc_msgSend)(self, @selector(setExtendedLayoutIncludesOpaqueBars:), NO);
     self.view.backgroundColor = kBG;
-    _tv = [[[UITableView alloc] initWithFrame:self.view.bounds
-                                        style:UITableViewStyleGrouped] autorelease];
+    _tv = [[UITableView alloc] initWithFrame:self.view.bounds
+                                       style:UITableViewStyleGrouped];
     _tv.dataSource = self;
     _tv.delegate = self;
     _tv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -203,7 +327,6 @@ static BOOL SenkoHostIsIos6or7(void) {
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-/* refresh current style labels after picking inside a group */
     [_tv reloadData];
 }
 
@@ -224,7 +347,6 @@ static BOOL SenkoHostIsIos6or7(void) {
 }
 
 - (void)modeSegChanged:(UISegmentedControl *)seg {
-/* 0 = dark, 1 = light */
     if (!SenkoThemeAllowsDark()) {
         seg.selectedSegmentIndex = SenkoThemeIsMiside() ? 0 : 1;
         return;
@@ -246,7 +368,6 @@ static BOOL SenkoHostIsIos6or7(void) {
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv {
     (void)tv;
-/* style groups | appearance | theme sfx */
     return (SenkoThemeIsBoykisser() || SenkoThemeIsMiside()) ? 3 : 2;
 }
 
@@ -290,7 +411,7 @@ static BOOL SenkoHostIsIos6or7(void) {
         if (SenkoThemeIsMiside())
             lab.text = @"Senko-Miside is Dark only: pattern wallpaper and candy heart ON.";
         else if (SenkoThemeIsBoykisser())
-            lab.text = @"Senko-Boykisser is Light only: pink paper and falling boykissers on the home screen.";
+            lab.text = @"Senko-Boykisser: pink paper or rose ink, with falling boykissers on the home screen.";
         else if (SenkoThemeIsFrutigeraero())
             lab.text = @"Senko-Aero is Light only: sky wallpaper and floating gloss bubbles.";
         else
@@ -409,7 +530,6 @@ static BOOL SenkoHostIsIos6or7(void) {
         return cell;
     }
 
-/* style groups */
     static NSString *cid = @"group";
     UITableViewCell *cell = [tv dequeueReusableCellWithIdentifier:cid];
     if (!cell)
@@ -427,9 +547,15 @@ static BOOL SenkoHostIsIos6or7(void) {
     cell.backgroundColor = kCellHi;
     cell.textLabel.backgroundColor = [UIColor clearColor];
     cell.detailTextLabel.backgroundColor = [UIColor clearColor];
+    cell.textLabel.lineBreakMode = NSLineBreakByClipping;
+    cell.textLabel.adjustsFontSizeToFitWidth = YES;
+    cell.textLabel.minimumFontSize = 11.0f;
+    cell.detailTextLabel.lineBreakMode = NSLineBreakByClipping;
+    cell.detailTextLabel.adjustsFontSizeToFitWidth = YES;
+    cell.detailTextLabel.minimumFontSize = 9.0f;
     cell.accessoryView = nil;
     cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-    cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+    SenkoStyleSelectableCell(cell);
     return cell;
 }
 

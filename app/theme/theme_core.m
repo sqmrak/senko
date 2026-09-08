@@ -84,7 +84,6 @@ const SenkoThemeDef *SenkoThemeFindMigrated(NSString *raw, BOOL *outLight) {
         return SenkoThemeFind(SenkoThemeDefaultId());
     }
 
-/* exact id first */
     const SenkoThemeDef *exact = SenkoThemeFind(raw);
     if (exact) {
         if (outLight) {
@@ -175,7 +174,6 @@ NSString *SenkoThemeGroupTitle(NSString *groupId) {
     if ([groupId isEqualToString:@SENKO_THEME_GROUP_CUSTOM])
         return @"Custom";
     if (![groupId length]) return @"Custom";
-/* fallback: capitalized id */
     return [groupId capitalizedString];
 }
 
@@ -269,6 +267,8 @@ void SenkoThemeApplyId(NSString *themeId) {
     if (!def) def = SenkoThemeFind(SenkoThemeDefaultId());
     NSString *tid = [NSString stringWithUTF8String:def->tid];
     if (gThemeId && [gThemeId isEqualToString:tid]) return;
+    /* only a real switch dissolves; live palette edits repaint in place */
+    SenkoThemeCrossfadeWindows();
     [gThemeId release];
     gThemeId = [tid copy];
     gCur = def;
@@ -277,6 +277,44 @@ void SenkoThemeApplyId(NSString *themeId) {
         gLight = YES;
     else if (gCaps & SenkoThemeCapDarkOnly)
         gLight = NO;
+    ApplyCurrentPalette();
+    PersistAndNotify();
+}
+
+/* the custom theme structs are freed and rebuilt whenever the user saves,
+   imports or deletes one, so a cached def pointer has to be looked up again;
+   without this the next palette apply reads freed memory */
+void SenkoThemeRebindCurrent(void) {
+    if (!gThemeId) return;
+    const SenkoThemeDef *def = SenkoThemeFind(gThemeId);
+    if (def) {
+        if (def == gCur) return;
+        gCur = def;
+        RefreshCaps();
+        return;
+    }
+/* the active theme was deleted, so the default family takes over */
+    def = SenkoThemeFind(SenkoThemeDefaultId());
+    if (!def) return;
+    [gThemeId release];
+    gThemeId = [[NSString stringWithUTF8String:def->tid] copy];
+    gCur = def;
+    RefreshCaps();
+    ApplyCurrentPalette();
+    PersistAndNotify();
+}
+
+void SenkoThemeReapplyCurrent(void) {
+    const SenkoThemeDef *def = SenkoThemeFind(SenkoThemeCurrentId());
+    if (!def) def = SenkoThemeFind(SenkoThemeDefaultId());
+    if (!def) return;
+    NSString *tid = [NSString stringWithUTF8String:def->tid];
+    if (!gThemeId || ![gThemeId isEqualToString:tid]) {
+        [gThemeId release];
+        gThemeId = [tid copy];
+    }
+    gCur = def;
+    RefreshCaps();
     ApplyCurrentPalette();
     PersistAndNotify();
 }
@@ -293,6 +331,7 @@ void SenkoThemeSetLight(BOOL light) {
     }
     BOOL want = light ? YES : NO;
     if (gLight == want) return;
+    SenkoThemeCrossfadeWindows();
     gLight = want;
     ApplyCurrentPalette();
     PersistAndNotify();
