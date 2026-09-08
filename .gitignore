@@ -15,6 +15,9 @@ daemon/senko-kick
 tests/test_*
 !tests/test_*.c
 !tests/test_*.h
+tests/fuzz_*
+!tests/fuzz_*.c
+!tests/fuzz_*.h
 senkotlsfix/*.dylib
 vpnicon/*.dylib
 
