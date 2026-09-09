@@ -572,19 +572,32 @@ static int SenkoSortRank(NSNumber *ms) {
    window, and treating that silence as an answer is what left the plate
    reading "not available yet" for the rest of the session */
 - (void)requestDeviceHWID {
-    if ([_deviceHWID length] || _hwidRetries >= 8) return;
+    if ([_deviceHWID length]) return;
+/* the file is the cheap path and it needs no daemon at all */
+    NSString *shared = SenkoSharedDeviceHWID();
+    if ([shared length]) {
+        [_deviceHWID release];
+        _deviceHWID = [shared copy];
+        [_emptyState setHWID:_deviceHWID];
+        return;
+    }
+    if (_hwidRetries >= 12) return;
     _hwidRetries++;
+/* the next attempt is armed here rather than inside the reply block: the block
+   does not run at all when there is no control object yet, and arming it from
+   in there made the whole chain depend on the first attempt reaching a daemon */
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(requestDeviceHWID)
+                                               object:nil];
+    [self performSelector:@selector(requestDeviceHWID)
+               withObject:nil
+               afterDelay:3.0];
     [_ctl deviceHWID:^(NSString *hwid) {
         NSString *value = [hwid length] ? hwid : SenkoSharedDeviceHWID();
-        if (![value length]) {
-            [NSObject cancelPreviousPerformRequestsWithTarget:self
-                                                     selector:@selector(requestDeviceHWID)
-                                                       object:nil];
-            [self performSelector:@selector(requestDeviceHWID)
-                       withObject:nil
-                       afterDelay:3.0];
-            return;
-        }
+        if (![value length]) return;
+        [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                                 selector:@selector(requestDeviceHWID)
+                                                   object:nil];
         [_deviceHWID release];
         _deviceHWID = [value copy];
         [_emptyState setHWID:_deviceHWID];

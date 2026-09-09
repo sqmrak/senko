@@ -189,6 +189,9 @@
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
     SenkoCrashScreen("server list");
+/* the id used to be asked for only while the empty list was on screen, so a
+   catalog that never arrived meant it was never asked for at all */
+    [self requestDeviceHWID];
     [self applyState];
     [self syncUptimeTicker];
     [self syncBoykisserField];

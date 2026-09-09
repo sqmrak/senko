@@ -66,7 +66,7 @@ NSString *SenkoAboutAppReport(void) {
                  "control socket с токеном · защита подписок от ssrf · скрытие секретов в логах · настоящая проверка транспорта.\n"
                  "общий журнал: /var/log/senko-system.log\n\n"
                  "tls-режим: %@\n\n"
-                 "тестировали: @inraxx, @s3dativee, @rafal_official, @RealPetuh, @QuaIcomm, @belo4kaFLUNI, @Wolfer_QUIC, @fluffynifty, @not_a_modder, @Lineysom, @Lime_iOS6, @fr0n1k, @ogeprint, @CookieValerka",
+                 "тестировали: @inraxx, @s3dativee, @rafal_official, @RealPetuh, @QuaIcomm, @belo4kaFLUNI, @Wolfer_QUIC, @fluffynifty, @not_a_modder, @Lineysom, @Lime_iOS6, @fr0n1k, @ogeprint, @CookieValerka, @ra1n_developer",
                 systemTLS
                     ? @"системный tls (compatibility hook не внедряется)"
                     : tlsfix
@@ -87,7 +87,7 @@ NSString *SenkoAboutAppReport(void) {
              "token-authenticated control socket · subscription ssrf protection · secret redaction · real transport checks.\n"
              "combined log: /var/log/senko-system.log\n\n"
              "tls mode: %@\n\n"
-             "testers: @inraxx, @s3dativee, @rafal_official, @RealPetuh, @QuaIcomm, @belo4kaFLUNI, @Wolfer_QUIC, @fluffynifty, @not_a_modder, @Lineysom, @Lime_iOS6, @fr0n1k, @ogeprint, @CookieValerka",
+             "testers: @inraxx, @s3dativee, @rafal_official, @RealPetuh, @QuaIcomm, @belo4kaFLUNI, @Wolfer_QUIC, @fluffynifty, @not_a_modder, @Lineysom, @Lime_iOS6, @fr0n1k, @ogeprint, @CookieValerka, @ra1n_developer",
             systemTLS
                 ? @"system tls (the compatibility hook is not injected)"
                 : tlsfix

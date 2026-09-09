@@ -168,6 +168,17 @@ void SenkoInstallFrostLite(UIView *host) {
     [host insertSubview:v atIndex:0];
 }
 
+/* UIVisualEffectView owns its subview list and refuses additions to itself.
+   contentView is where anything drawn over the blur has to live; the selector
+   is looked up rather than called directly because the armv7 sdk predates it */
+static UIView *SenkoEffectContentView(UIView *effectView) {
+    if (!effectView) return nil;
+    SEL sel = NSSelectorFromString(@"contentView");
+    if (![effectView respondsToSelector:sel]) return effectView;
+    UIView *content = ((id (*)(id, SEL))objc_msgSend)(effectView, sel);
+    return content ? content : effectView;
+}
+
 static int gFrostHasVE = -1;
 
 static int SenkoFrostHasVisualEffect(void) {
@@ -211,7 +222,8 @@ void SenkoInstallFrost(UIView *host) {
                 if ([old respondsToSelector:NSSelectorFromString(@"setEffect:")])
                     ((void (*)(id, SEL, id))objc_msgSend)(
                         old, NSSelectorFromString(@"setEffect:"), effect);
-                for (UIView *sub in old.subviews) {
+                UIView *oldHost = SenkoEffectContentView(old);
+                for (UIView *sub in oldHost.subviews) {
                     if (sub.tag == 9108)
                         sub.backgroundColor = washColor;
                 }
@@ -235,7 +247,10 @@ void SenkoInstallFrost(UIView *host) {
                                     UIViewAutoresizingFlexibleHeight;
             tint.userInteractionEnabled = NO;
             tint.backgroundColor = washColor;
-            [v addSubview:tint];
+/* uikit raises NSInternalInconsistencyException for a subview added to the
+   effect view itself: everything on top of the blur belongs to its contentView,
+   and this is what killed every launch on the glass theme */
+            [SenkoEffectContentView(v) addSubview:tint];
             [host insertSubview:v atIndex:0];
             [v release];
             return;
