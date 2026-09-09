@@ -95,6 +95,7 @@
     SenkoBackendKind _activeBackend;
     SenkoEmptyStateView *_emptyState;
     NSString      *_deviceHWID;
+    int            _hwidRetries;
 }
 
 - (void)dealloc;
@@ -169,6 +170,7 @@
 - (void)emptyStatePastePressed;
 - (void)emptyStateScanPressed;
 - (void)emptyStateCopyHWID;
+- (void)requestDeviceHWID;
 - (void)rebuildRowNames;
 - (NSArray *)sortedRows:(NSArray *)rows;
 - (void)setListHeaderProgress:(CGFloat)progress;

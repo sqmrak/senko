@@ -95,6 +95,21 @@ NSString *SenkoAboutAppReport(void) {
                 : @"senkotlsfix (safari tls1.3 when mobilesubstrate is installed)"];
 }
 
+/* the daemon writes the id it sends as x-hwid to a file the ui can read too.
+   reading it costs nothing and cannot time out, unlike the control round trip
+   that used to be the only source: a daemon busy under a live tunnel misses
+   the reply window, and the screen was then stuck reading "not available yet"
+   for the rest of the session */
+NSString *SenkoSharedDeviceHWID(void) {
+    NSString *shared = [NSString stringWithContentsOfFile:@SENKO_HWID_PATH
+                                                 encoding:NSUTF8StringEncoding
+                                                    error:NULL];
+    shared = [shared stringByTrimmingCharactersInSet:
+              [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([shared length] >= 10 && [shared length] <= 64) return shared;
+    return nil;
+}
+
 BOOL SenkoVPNBadgeEnabled(void) {
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     if (![d objectForKey:SENKO_VPN_BADGE_KEY]) return YES;

@@ -554,12 +554,39 @@ static int SenkoSortRank(NSNumber *ms) {
     [self bringMainChromeToFront];
     [_emptyState setHWID:_deviceHWID];
     if ([_deviceHWID length]) return;
-/* the daemon owns the id it actually sends, so the ui asks for it instead of
-   inventing a second one */
-    [_ctl deviceHWID:^(NSString *hwid) {
-        if (![hwid length]) return;
+/* the daemon owns the id it actually sends, so the ui never mints a second
+   one. it does not have to ask over the socket to see it though: both
+   processes share a file, and reading that cannot time out */
+    NSString *shared = SenkoSharedDeviceHWID();
+    if ([shared length]) {
         [_deviceHWID release];
-        _deviceHWID = [hwid copy];
+        _deviceHWID = [shared copy];
+        [_emptyState setHWID:_deviceHWID];
+        return;
+    }
+    [self requestDeviceHWID];
+}
+
+/* the shared file is written the first time the daemon is asked for the id, so
+   before that the socket is the only source. a busy daemon misses the reply
+   window, and treating that silence as an answer is what left the plate
+   reading "not available yet" for the rest of the session */
+- (void)requestDeviceHWID {
+    if ([_deviceHWID length] || _hwidRetries >= 8) return;
+    _hwidRetries++;
+    [_ctl deviceHWID:^(NSString *hwid) {
+        NSString *value = [hwid length] ? hwid : SenkoSharedDeviceHWID();
+        if (![value length]) {
+            [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                                     selector:@selector(requestDeviceHWID)
+                                                       object:nil];
+            [self performSelector:@selector(requestDeviceHWID)
+                       withObject:nil
+                       afterDelay:3.0];
+            return;
+        }
+        [_deviceHWID release];
+        _deviceHWID = [value copy];
         [_emptyState setHWID:_deviceHWID];
     }];
 }

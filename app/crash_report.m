@@ -41,6 +41,10 @@ static int  gLaunchDone;
 static int  gInstalled;
 static int  gFailedLaunches;
 static int  gSafeMode;
+/* an uncaught objc exception ends in abort(), so the signal handler runs right
+   after the exception handler. truncating the file there threw away the name
+   and the reason and left nothing but "SIGABRT", which says nothing at all */
+static volatile sig_atomic_t gReportWritten;
 static struct sigaction gPrevious[sizeof kSenkoFatalSignals / sizeof kSenkoFatalSignals[0]];
 static NSUncaughtExceptionHandler *gPreviousExceptionHandler;
 
@@ -105,7 +109,10 @@ static void write_fail_count(int value) {
 
 static int open_report(void) {
     mkdir(kSenkoCrashDir, 0755);
-    return open(kSenkoCrashPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int flags = O_WRONLY | O_CREAT | (gReportWritten ? O_APPEND : O_TRUNC);
+    int fd = open(kSenkoCrashPath, flags, 0644);
+    if (fd >= 0) gReportWritten = 1;
+    return fd;
 }
 
 static const char *signal_name(int number) {
@@ -163,6 +170,13 @@ static void senko_exception_handler(NSException *exception) {
         write_str(fd, [[exception name] UTF8String]);
         write_str(fd, "\nreason: ");
         write_str(fd, [[exception reason] UTF8String]);
+        {
+            NSDictionary *info = [exception userInfo];
+            if ([info count]) {
+                write_str(fd, "\nuser info: ");
+                write_str(fd, [[info description] UTF8String]);
+            }
+        }
         write_str(fd, "\nlaunch stage: ");
         write_str(fd, gStage);
         write_str(fd, "\nscreen: ");

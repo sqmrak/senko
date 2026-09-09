@@ -1,6 +1,6 @@
 Package: com.senko.daemon
 Name: Senko
-Version: 09092026-nightly
+Version: 09092026-patch1-nightly
 Architecture: all
 Description: full-device VLESS and AmneziaWG client for jailbroken iOS 5-15 (armv7 + arm64)
 Maintainer: sqmrak

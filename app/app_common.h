@@ -6,7 +6,7 @@
 #import "control_client.h"
 
 #define SENKO_SOCK @"/var/tmp/senkod.sock"
-#define SENKO_VERSION @"v09092026-nightly"
+#define SENKO_VERSION @"v09092026-patch1-nightly"
 #define SENKO_HIDE_LINKS_KEY @"SenkoHideServerLinks"
 #define SENKO_PINNED_SUB_URL_KEY @"SenkoPinnedSubscriptionURL"
 #define SENKO_AWG_PROFILE_KEY @"SenkoAWGProfilePath"
@@ -37,6 +37,10 @@ NSString *SenkoAboutAppReport(void);
    status bar drops the wifi glyph to make room for it */
 BOOL SenkoVPNBadgeEnabled(void);
 void SenkoVPNBadgeSetEnabled(BOOL enabled);
+
+/* the device id the daemon actually sends, read from the file both processes
+   share. nil until the daemon has written one */
+NSString *SenkoSharedDeviceHWID(void);
 extern NSString * const SenkoLanguageDidChangeNotification;
 BOOL SenkoLanguageIsRussian(void);
 void SenkoSetLanguage(BOOL russian);

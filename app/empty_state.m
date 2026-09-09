@@ -13,11 +13,52 @@
    a button title in the middle by default, which turned a russian caption into
    "Встави...буфера"; the face shrinks instead, and a title that still does not
    fit loses its tail rather than its middle */
+/* the accent is carried as a gradient, the same way the connect pill above
+   these buttons carries it, so the bottom row reads as part of the same family
+   instead of a pair of flat slabs */
+static CAGradientLayer *ActionFill(UIButton *button) {
+    for (CALayer *layer in button.layer.sublayers) {
+        if ([layer.name isEqualToString:@"actionFill"] &&
+            [layer isKindOfClass:[CAGradientLayer class]])
+            return (CAGradientLayer *)layer;
+    }
+    CAGradientLayer *fill = [CAGradientLayer layer];
+    fill.name = @"actionFill";
+/* the layer is repositioned on every layout pass, and an implicit animation on
+   each of those turns a rotation into a visible slide */
+    fill.actions = [NSDictionary dictionaryWithObjectsAndKeys:
+                    [NSNull null], @"colors",
+                    [NSNull null], @"bounds",
+                    [NSNull null], @"position",
+                    [NSNull null], @"cornerRadius",
+                    [NSNull null], @"startPoint",
+                    [NSNull null], @"endPoint", nil];
+    fill.startPoint = CGPointMake(0.0f, 0.5f);
+    fill.endPoint = CGPointMake(1.0f, 0.5f);
+    [button.layer insertSublayer:fill atIndex:0];
+    return fill;
+}
+
+static void SyncActionFill(UIButton *button) {
+    if (!button) return;
+    CGFloat radius = SenkoThemeCardRadius();
+    button.layer.cornerRadius = radius;
+    CAGradientLayer *fill = ActionFill(button);
+    SenkoSetLayerFrame(fill, button.bounds);
+    fill.cornerRadius = radius;
+}
+
 static void StyleActionButton(UIButton *button) {
     UIColor *fill = kAccentBlue ? kAccentBlue : [UIColor colorWithWhite:0.4 alpha:1];
     [button setTitleColor:SenkoPillLabelColor(fill) forState:UIControlStateNormal];
     button.titleLabel.font = SenkoFontBody(15.0f, YES);
-    button.backgroundColor = fill;
+/* the gradient layer is the fill now, so a background colour underneath it
+   would only show through the corner radius */
+    button.backgroundColor = [UIColor clearColor];
+    CAGradientLayer *grad = ActionFill(button);
+    grad.colors = [NSArray arrayWithObjects:
+                   (id)SenkoShadeColor(fill, 0.14f).CGColor,
+                   (id)SenkoShadeColor(fill, -0.14f).CGColor, nil];
     button.layer.cornerRadius = SenkoThemeCardRadius();
     button.layer.masksToBounds = YES;
     button.titleLabel.shadowColor = nil;
@@ -172,6 +213,10 @@ static void StyleActionButton(UIButton *button) {
     pasteButton.frame = CGRectMake(side, bottom - buttonH, buttonW, buttonH);
     scanButton.frame = CGRectMake(side + buttonW + gap, bottom - buttonH,
                                   buttonW, buttonH);
+/* a sublayer does not follow its view, so the fill has to be recut here or it
+   keeps the width the button had before the rotation */
+    SyncActionFill(pasteButton);
+    SyncActionFill(scanButton);
 
     CGFloat headH = SenkoTextSize(headline.text, headline.font, w).height;
     if (headH < 24.0f) headH = 24.0f;

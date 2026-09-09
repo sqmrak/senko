@@ -268,7 +268,8 @@ static int senkoCtlAuth(int fd, NSString *sockPath) {
 }
 
 - (void)deviceHWID:(void (^)(NSString *))done {
-    [self sendCommand:@"HWID" timeoutMs:2000 reply:^(NSString *reply) {
+/* two seconds is a window a daemon under a live tunnel routinely misses */
+    [self sendCommand:@"HWID" timeoutMs:5000 reply:^(NSString *reply) {
         NSString *value = nil;
         if ([reply hasPrefix:@"OK "]) {
             value = [[reply substringFromIndex:3] stringByTrimmingCharactersInSet:
