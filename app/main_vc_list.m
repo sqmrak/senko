@@ -262,6 +262,26 @@ static UIImage *SenkoSectionSnapshot(UIView *view) {
     return [image autorelease];
 }
 
+/* the drag carries a copy of the header under the finger. a layer holding a
+   live UIVisualEffectView cannot be copied with renderInContext:: the backdrop
+   samples the render server's surface, a bitmap context has none, and core
+   image faults reaching for it. snapshotViewAfterScreenUpdates: is the
+   supported copy and it landed in ios 7, so it is asked for by selector; the
+   bitmap above stays for older systems, which have no backdrop views to trip
+   over in the first place */
+static UIView *SenkoSectionDragProxy(UIView *view) {
+    if (!view || view.bounds.size.width < 1.0f || view.bounds.size.height < 1.0f)
+        return nil;
+    if ([view respondsToSelector:@selector(snapshotViewAfterScreenUpdates:)]) {
+        UIView *snap = ((UIView *(*)(id, SEL, BOOL))objc_msgSend)(
+            view, @selector(snapshotViewAfterScreenUpdates:), NO);
+        if (snap) return snap;
+    }
+    UIImage *image = SenkoSectionSnapshot(view);
+    if (!image) return nil;
+    return [[[UIImageView alloc] initWithImage:image] autorelease];
+}
+
 BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
     if (!a || !b) return NO;
     return a->group == b->group &&
@@ -890,10 +910,9 @@ static int SenkoSortRank(NSNumber *ms) {
         NSInteger from = gesture.view.tag - 7000;
         if (from < 0 || from >= (NSInteger)[_sections count]) return;
 
-        UIImage *image = SenkoSectionSnapshot(gesture.view);
-        if (!image) return;
+        UIView *snapshot = SenkoSectionDragProxy(gesture.view);
+        if (!snapshot) return;
         CGRect frame = [_table convertRect:gesture.view.bounds fromView:gesture.view];
-        UIImageView *snapshot = [[[UIImageView alloc] initWithImage:image] autorelease];
         snapshot.frame = frame;
         snapshot.alpha = 0.92f;
         snapshot.layer.cornerRadius = SenkoThemeCardRadius();
