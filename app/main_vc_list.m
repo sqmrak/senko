@@ -842,8 +842,15 @@ static int SenkoSortRank(NSNumber *ms) {
 /* a section reload runs the row and header change inside an update block, and
    the header the table keeps from the outgoing pass stayed on screen at its old
    frame next to the new one. the collapse only changes a row count, so the
-   whole table is rebuilt in place instead */
-    [_table reloadData];
+   whole table is rebuilt in place instead.
+   it cannot be rebuilt from here though: this is the collapse button's own
+   action, the button is a subview of the header the reload throws away, and
+   uikit goes on using the button after the action returns. tearing it down
+   inside its own event dispatch frees it under uikit's feet, so the rebuild
+   waits for the next turn of the main queue */
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [_table reloadData];
+    });
 }
 
 - (void)moveSectionAtIndex:(NSInteger)from toIndex:(NSInteger)to {
@@ -893,7 +900,10 @@ static int SenkoSortRank(NSNumber *ms) {
         snapshot.layer.masksToBounds = YES;
         [_table addSubview:snapshot];
         _sectionDragSnapshot = [snapshot retain];
-        _sectionDragHeader = gesture.view;
+/* a status refresh reloads the table every couple of seconds under a live
+   tunnel, and that frees every header. the drag holds this one itself so the
+   pointer cannot outlive the view it names */
+        _sectionDragHeader = [gesture.view retain];
         _sectionDragGrabOffset = [gesture locationInView:gesture.view].y;
         _sectionDragOrigin = (int)from;
         _dragSection = (int)from;
@@ -952,6 +962,7 @@ static int SenkoSortRank(NSNumber *ms) {
                          [snapshot removeFromSuperview];
                          [snapshot release];
                          _sectionDragActive = NO;
+                         [_sectionDragHeader release];
                          _sectionDragHeader = nil;
                          if (moved) {
                              [self moveSectionAtIndex:sourceSection toIndex:finalSection];

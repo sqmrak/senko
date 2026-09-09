@@ -37,6 +37,9 @@
     [_pendingInsecureURL release];
     [_sectionDragSnapshot removeFromSuperview];
     [_sectionDragSnapshot release];
+    /* a drag that never ended still owns the header it was dragging */
+    [_sectionDragHeader release];
+    _sectionDragHeader = nil;
     [_uptimeTimer invalidate];
     _uptimeTimer = nil;
     [_sheet removeFromSuperview];
