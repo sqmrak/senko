@@ -164,8 +164,15 @@ static NSString *SenkoAppCrashSection(void) {
     NSString *report = SenkoCrashLastReport();
     BOOL safe = SenkoCrashSafeMode();
     if (![report length] && !safe) return @"";
+/* the version the report names is the build that crashed, which is not always
+   the build reading it: an update installed over a crash leaves the old report
+   in place until this one proves it can start */
+    BOOL foreign = [report length] &&
+                   [report rangeOfString:SENKO_VERSION].location == NSNotFound;
     NSMutableString *tagged = [NSMutableString stringWithString:
-                               @"[app] --- previous launch failed ---\n"];
+        foreign ? @"[app] --- an earlier build crashed here; this one has not ---\n"
+                : @"[app] --- previous launch failed ---\n"];
+    [tagged appendFormat:@"[app] running: senko %@\n", SENKO_VERSION];
     if (safe)
         [tagged appendFormat:@"[app] safe mode active: %d launches in a row "
                               "never reached the first frame\n",

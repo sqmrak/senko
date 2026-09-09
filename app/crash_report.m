@@ -292,6 +292,23 @@ void SenkoCrashScreen(const char *name) {
     close(fd);
 }
 
+/* a report outlives the build that wrote it. one left by an older version says
+   nothing about the build now running, and to whoever opens the log it reads
+   exactly like a fresh crash. it is retired as soon as this build has proved
+   it can reach the first frame; a report from this same build is kept, because
+   that is the one worth reading */
+static void retire_foreign_report(void) {
+    int fd = open(kSenkoPrevPath, O_RDONLY);
+    if (fd < 0) return;
+    char head[256];
+    ssize_t got = read(fd, head, sizeof head - 1);
+    close(fd);
+    if (got <= 0) return;
+    head[got] = '\0';
+    if (gVersion[0] && strstr(head, gVersion)) return;
+    unlink(kSenkoPrevPath);
+}
+
 void SenkoCrashLaunchComplete(void) {
     if (gLaunchDone) return;
     SenkoCrashStage("ready");
@@ -301,6 +318,7 @@ void SenkoCrashLaunchComplete(void) {
        views were already built that way, and the count stays in memory so the
        report can still say how many launches it took */
     if (gFailedLaunches) write_fail_count(0);
+    retire_foreign_report();
 }
 
 BOOL SenkoCrashSafeMode(void) {
