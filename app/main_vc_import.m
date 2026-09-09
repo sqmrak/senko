@@ -1,5 +1,9 @@
 #import "main_vc_priv.h"
 
+#include <stdlib.h>
+
+#include "../daemon/core/amnezia_bundle.h"
+
 @implementation MainVC (Import)
 
 - (void)addPressed {
@@ -276,6 +280,46 @@
            [s rangeOfString:@"[Peer]" options:NSCaseInsensitiveSearch].location != NSNotFound;
 }
 
+/* the amnezia client shares a profile as vpn://, as a .vpn file, or as the
+   plain json behind both. the amneziawg config inside is what senko dials, so
+   it goes through the same validate and save path a native .conf takes */
+- (BOOL)importAmneziaBundleData:(NSData *)body {
+    if (![body length]) return NO;
+    static const size_t kConfCap = 64 * 1024;
+    char *conf = malloc(kConfCap);
+    if (!conf) return NO;
+    /* a decoder that runs out of memory returns before it can name a reason,
+       and an uninitialised buffer is not something to hand to NSString */
+    char reason[192] = "amnezia bundle could not be read";
+    size_t len = 0;
+    amz_status_t r = amz_bundle_extract_conf((const char *)[body bytes], [body length],
+                                             conf, kConfCap, &len, reason, sizeof reason);
+    if (r != AMZ_OK) {
+        free(conf);
+        if (r == AMZ_ERR_NOT_BUNDLE) return NO;
+        NSString *why = [NSString stringWithUTF8String:reason];
+        [self setLastErr:[why length] ? why : @"amnezia bundle could not be read"];
+        [self applyState];
+        return YES;
+    }
+    NSString *text = [[[NSString alloc] initWithBytes:conf
+                                               length:len
+                                             encoding:NSUTF8StringEncoding] autorelease];
+    free(conf);
+    if (![text length]) {
+        [self setLastErr:@"amnezia bundle carries no readable config"];
+        [self applyState];
+        return YES;
+    }
+    [self importAWGText:text];
+    return YES;
+}
+
+- (BOOL)looksLikeAmneziaBundle:(NSData *)body {
+    return [body length] &&
+           amz_bundle_looks_like((const char *)[body bytes], [body length]) != 0;
+}
+
 - (void)importAWGText:(NSString *)text {
     if ([text hasPrefix:@"\ufeff"]) text = [text substringFromIndex:1];
     NSString *config = [text stringByAppendingString:[text hasSuffix:@"\n"] ? @"" : @"\n"];
@@ -379,11 +423,9 @@ static BOOL SenkoLooksLikeSubscriptionURL(NSString *s) {
         [self importAWGText:s];
         return;
     }
-    if ([s hasPrefix:@"vpn://"]) {
-        [self setLastErr:@"Amnezia VPN bundle detected. Export a native AmneziaWG .conf from Share"];
-        [self applyState];
+    NSData *utf8 = [s dataUsingEncoding:NSUTF8StringEncoding];
+    if ([self looksLikeAmneziaBundle:utf8] && [self importAmneziaBundleData:utf8])
         return;
-    }
 
     if (SenkoLooksLikeSingleServerLink(s)) {
         [self addServerLink:s];
@@ -456,6 +498,15 @@ static BOOL SenkoLooksLikeSubscriptionURL(NSString *s) {
         [self applyState];
         return;
     }
+/* a .vpn file holds the bare base64 body the vpn:// link carries, which no
+   content sniffer can tell from a base64 subscription feed, so the extension is
+   what offers the file to the amnezia decoder. a file that turns out not to be
+   a bundle keeps going through the ordinary import path */
+    BOOL amneziaExtension =
+        [[path pathExtension] caseInsensitiveCompare:@"vpn"] == NSOrderedSame;
+    if ((amneziaExtension || [self looksLikeAmneziaBundle:body]) &&
+        [self importAmneziaBundleData:body])
+        return;
 /* the text tests only make sense on a decodable file; a clash yaml or an xray
    json is text too, and the daemon parser sorts those out */
     NSString *text = [[[NSString alloc] initWithData:body
@@ -463,11 +514,6 @@ static BOOL SenkoLooksLikeSubscriptionURL(NSString *s) {
     if ([text length]) {
         if ([self isNativeAWGText:text]) {
             [self importAWGText:text];
-            return;
-        }
-        if ([text rangeOfString:@"vpn://"].location != NSNotFound) {
-            [self setLastErr:@"Amnezia VPN bundle detected. Import a native AmneziaWG .conf file"];
-            [self applyState];
             return;
         }
         NSString *trimmed = [text stringByTrimmingCharactersInSet:

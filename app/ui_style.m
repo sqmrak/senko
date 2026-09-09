@@ -1,4 +1,5 @@
 #import "ui_theme.h"
+#import "crash_report.h"
 #include <math.h>
 #include <objc/runtime.h>
 #include <objc/message.h>
@@ -170,6 +171,10 @@ void SenkoInstallFrostLite(UIView *host) {
 static int gFrostHasVE = -1;
 
 static int SenkoFrostHasVisualEffect(void) {
+    /* live glass is the only thing senko does that reaches core image, and the
+       ios 15 fault lands there. safe mode takes the painted wash instead; it
+       looks flatter and it cannot fault in a render server callback */
+    if (SenkoCrashSafeMode()) return 0;
     if (gFrostHasVE < 0)
         gFrostHasVE = (NSClassFromString(@"UIVisualEffectView") &&
                        NSClassFromString(@"UIBlurEffect")) ? 1 : 0;

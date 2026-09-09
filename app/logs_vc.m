@@ -19,6 +19,7 @@
 #import "update_install.h"
 #import "meow.h"
 #import "app_common.h"
+#import "crash_report.h"
 #include "../common/senko_paths.h"
 
 static NSString *SenkoReadLogTail(NSString *path, long maxBytes) {
@@ -76,7 +77,8 @@ static NSString *SenkoTagLegacyLog(NSString *text, NSString *source) {
                                                        action:@selector(loadLogs)] autorelease];
 
     _filter = [[UISegmentedControl alloc] initWithItems:
-               [NSArray arrayWithObjects:SenkoLocalizedText(@"all"), @"senkod", @"awg", nil]];
+               [NSArray arrayWithObjects:SenkoLocalizedText(@"all"), @"senkod", @"awg",
+                                         @"app", nil]];
     _filter.selectedSegmentIndex = 0;
     [_filter addTarget:self action:@selector(filterChanged:)
       forControlEvents:UIControlEventValueChanged];
@@ -118,6 +120,7 @@ static NSString *SenkoTagLegacyLog(NSString *text, NSString *source) {
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
+    SenkoCrashScreen("system logs");
     SenkoApplyScreenChrome(self.view);
     SenkoStyleGlassSegmented(_filter);
     [self layoutLogs];
@@ -155,6 +158,39 @@ static NSString *SenkoTagLegacyLog(NSString *text, NSString *source) {
     [self filterChanged:_filter];
 }
 
+/* the daemon log cannot hold an app crash: the app is dead before it could
+   send one, so the report the crash handler left on disk is folded in here */
+static NSString *SenkoAppCrashSection(void) {
+    NSString *report = SenkoCrashLastReport();
+    BOOL safe = SenkoCrashSafeMode();
+    if (![report length] && !safe) return @"";
+    NSMutableString *tagged = [NSMutableString stringWithString:
+                               @"[app] --- previous launch failed ---\n"];
+    if (safe)
+        [tagged appendFormat:@"[app] safe mode active: %d launches in a row "
+                              "never reached the first frame\n",
+                             SenkoCrashFailedLaunches()];
+    for (NSString *line in [report componentsSeparatedByString:@"\n"]) {
+        if (![line length]) continue;
+        [tagged appendFormat:@"[app] %@\n", line];
+    }
+    [tagged appendString:@"[app] --- end of report ---\n"];
+    return tagged;
+}
+
+/* springboard writes which status bar it found and whether the vpn badge could
+   be shown without touching the wifi glyph; the app cannot see its log */
+static NSString *SenkoVPNIconSection(void) {
+    NSString *line = [NSString stringWithContentsOfFile:
+                      @"/var/mobile/Library/Preferences/com.senko.vpnicon.status"
+                                               encoding:NSUTF8StringEncoding
+                                                  error:NULL];
+    line = [line stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (![line length]) return @"";
+    return [NSString stringWithFormat:@"[app] status bar: %@\n", line];
+}
+
 - (void)loadLogs {
     NSString *content = SenkoReadLogTail(@SENKO_SYSTEM_LOG, 60000);
     if (![content length]) {
@@ -164,8 +200,10 @@ static NSString *SenkoTagLegacyLog(NSString *text, NSString *source) {
                    SenkoTagLegacyLog(core, @"senkod"),
                    SenkoTagLegacyLog(awg, @"awg")];
     }
-    if ([content length]) {
-        [self showLogText:content];
+    NSString *crash = [SenkoVPNIconSection()
+                       stringByAppendingString:SenkoAppCrashSection()];
+    if ([content length] || [crash length]) {
+        [self showLogText:[crash stringByAppendingString:content ? content : @""]];
         return;
     }
 /* the app runs as mobile and on some jailbreaks cannot open /var/log at all,
@@ -173,7 +211,9 @@ static NSString *SenkoTagLegacyLog(NSString *text, NSString *source) {
     _textView.text = SenkoLocalizedText(@"Loading logs...");
     if (!_ctl) _ctl = [[SenkoControl alloc] initWithSocketPath:SENKO_SOCK];
     [_ctl daemonLogTail:^(NSString *text) {
-        [self showLogText:text];
+        [self showLogText:[[SenkoVPNIconSection()
+                            stringByAppendingString:SenkoAppCrashSection()]
+                           stringByAppendingString:text ? text : @""]];
     }];
 }
 
@@ -188,11 +228,16 @@ static NSString *SenkoTagLegacyLog(NSString *text, NSString *source) {
     } else {
         NSMutableString *shown = [NSMutableString string];
         for (NSString *line in [_allLogs componentsSeparatedByString:@"\n"]) {
-            BOOL isAWG = [line rangeOfString:@"senkoawgd:" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-                         [line hasPrefix:@"[AWG]"] || [line hasPrefix:@"[awg]"];
-            if ((selected == 2 && isAWG) || (selected == 1 && !isAWG))
+            BOOL isApp = [line hasPrefix:@"[app]"];
+            BOOL isAWG = !isApp &&
+                         ([line rangeOfString:@"senkoawgd:" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                          [line hasPrefix:@"[AWG]"] || [line hasPrefix:@"[awg]"]);
+            if ((selected == 3 && isApp) || (selected == 2 && isAWG) ||
+                (selected == 1 && !isAWG && !isApp))
                 [shown appendFormat:@"%@\n", line];
         }
+        if (selected == 3 && ![shown length])
+            [shown appendString:SenkoLocalizedText(@"No app fault report")];
         _textView.text = shown;
     }
     if ([_textView.text length] > 0) {

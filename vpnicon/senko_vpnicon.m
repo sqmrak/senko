@@ -10,6 +10,15 @@
 
 static const char kSenkoVPNIconStatePath[] =
     "/var/mobile/Library/Preferences/com.senko.vpnicon.state";
+/* springboard is the only process that can see which status bar this firmware
+   has, and the app cannot read its log. one line here is what the logs screen
+   shows, so the mode never has to be guessed from the outside again */
+static const char kSenkoVPNIconStatusPath[] =
+    "/var/mobile/Library/Preferences/com.senko.vpnicon.status";
+/* the app writes this when the user turns the badge off, because the status bar
+   on some firmwares drops the wifi glyph to make room for it */
+static const char kSenkoVPNIconOffPath[] =
+    "/var/mobile/Library/Preferences/com.senko.vpnicon.off";
 static const CFStringRef kSenkoVPNIconNotify =
     CFSTR("com.senko.vpnicon.changed");
 
@@ -18,6 +27,18 @@ static BOOL gSenkoQueued = NO;
 static BOOL gSenkoDidApply = NO;
 static BOOL gSenkoLastState = NO;
 static unsigned gSenkoRetries = 0;
+
+static void SenkoWriteStatus(NSString *line) {
+    if (![line length]) return;
+    const char *text = [line UTF8String];
+    if (!text) return;
+    int fd = open(kSenkoVPNIconStatusPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    (void)write(fd, text, strlen(text));
+    (void)write(fd, "\n", 1);
+    close(fd);
+    NSLog(@"senko vpnicon: %@", line);
+}
 
 static BOOL SenkoIsIOS5(void) {
     NSDictionary *system = [NSDictionary dictionaryWithContentsOfFile:
@@ -61,22 +82,84 @@ static BOOL SenkoCallVoid(id obj, SEL sel) {
 }
 
 static BOOL gSenkoVPNForced = NO;
+/* set once when this firmware exposes no vpn item to scope the answer to */
+static BOOL gSenkoBadgeDisabled = NO;
 static BOOL (*gSenkoOrigUsingVPN)(id, SEL) = NULL;
+static void (*gSenkoOrigUpdateVPNItem)(id, SEL) = NULL;
+/* set only while the status bar is recomputing its vpn item */
+static BOOL gSenkoInVPNItemUpdate = NO;
 
+static NSString * const kSenkoAggregators[] = {
+    @"SBStatusBarStateAggregator", @"STStatusBarStateAggregator"
+};
+
+/* the tunnel is not a system vpn, so somebody has to answer for it. on ios 13
+   and later the status bar derives the wifi glyph from the same telephony
+   manager, and answering yes to every caller told it the link was a vpn rather
+   than wifi: the glyph went away for as long as the tunnel was up. the forced
+   answer is now scoped to the one method that paints the vpn item */
 static BOOL SenkoUsingVPNConnection(id self, SEL _cmd) {
-    if (gSenkoVPNForced) return YES;
-    if (gSenkoOrigUsingVPN) return gSenkoOrigUsingVPN(self, _cmd);
+    BOOL original = gSenkoOrigUsingVPN ? gSenkoOrigUsingVPN(self, _cmd) : NO;
+    if (!gSenkoVPNForced || !gSenkoInVPNItemUpdate) return original;
+    return YES;
+}
+
+/* springboard recomputes the item on its own whenever the network changes, and
+   it walks through here every time, so the icon survives a rebuild without the
+   answer leaking to the rest of the status bar */
+static void SenkoUpdateVPNItem(id self, SEL _cmd) {
+    BOOL outer = gSenkoInVPNItemUpdate;
+    gSenkoInVPNItemUpdate = YES;
+    if (gSenkoOrigUpdateVPNItem) gSenkoOrigUpdateVPNItem(self, _cmd);
+    gSenkoInVPNItemUpdate = outer;
+}
+
+/* ios 6 and 7 keep the same item on the data manager instead of an aggregator */
+static NSString * const kSenkoItemOwners[] = {
+    @"SBStatusBarStateAggregator", @"STStatusBarStateAggregator",
+    @"SBStatusBarDataManager"
+};
+
+static BOOL SenkoInstallItemHook(void) {
+    static const char *names[] = { "_updateVPNItem", "updateVPNItem", NULL };
+    if (gSenkoOrigUpdateVPNItem) return YES;
+    for (size_t i = 0; i < sizeof kSenkoItemOwners / sizeof kSenkoItemOwners[0]; ++i) {
+        Class cls = NSClassFromString(kSenkoItemOwners[i]);
+        if (!cls) continue;
+        for (size_t n = 0; names[n]; ++n) {
+            Method method = class_getInstanceMethod(cls, sel_registerName(names[n]));
+            if (!method) continue;
+            const char *types = method_getTypeEncoding(method);
+            if (types && types[0] != 'v') continue;
+            gSenkoOrigUpdateVPNItem = (void (*)(id, SEL))
+                method_setImplementation(method, (IMP)SenkoUpdateVPNItem);
+            SenkoWriteStatus([NSString stringWithFormat:
+                @"badge scoped to -[%@ %s]; wifi glyph untouched",
+                kSenkoItemOwners[i], names[n]]);
+            return YES;
+        }
+    }
     return NO;
 }
 
-/* springboard rebuilds the status bar from SBTelephonyManager whenever the
-   network changes, so a value written into the manager was overwritten within
-   seconds and writing its ivar by offset also cleared the neighbouring wifi
-   state. answering the getter keeps every rebuild reporting the tunnel */
 static BOOL SenkoInstallVPNHook(void) {
     static const char *names[] = {
         "isUsingVPNConnection", "usingVPNConnection", "isVPNActive", NULL
     };
+    /* the item hook decides whether the forced answer can be contained, so it
+       goes in before the getter can be asked anything. without it the answer
+       would reach every consumer of the getter, and on ios 13 and later that
+       includes the data network item the wifi glyph is drawn from. a decorative
+       badge is not worth replacing system network state, so senko goes without
+       the badge instead */
+    if (!SenkoInstallItemHook()) {
+        if (!gSenkoBadgeDisabled) {
+            gSenkoBadgeDisabled = YES;
+            SenkoWriteStatus(@"no vpn item update on this firmware; badge stays "
+                             @"off so the wifi glyph is not replaced");
+        }
+        return NO;
+    }
     if (gSenkoOrigUsingVPN) return YES;
     Class cls = NSClassFromString(@"SBTelephonyManager");
     if (!cls) return NO;
@@ -97,29 +180,48 @@ static BOOL SenkoInstallVPNHook(void) {
 }
 
 static BOOL SenkoApplyVPNIcon(BOOL enabled) {
-    if (!SenkoInstallVPNHook()) return NO;
+    /* a firmware without the item is a settled answer, not a transient failure,
+       so the caller must not keep retrying it once a second */
+    if (gSenkoBadgeDisabled) return YES;
+    if (!SenkoInstallVPNHook()) return gSenkoBadgeDisabled;
     gSenkoVPNForced = enabled;
 
 /* the aggregator was renamed when statuskit took over the status bar, so both
    names are tried and whichever one the system has answers. only the vpn item
    is refreshed: rebuilding the data network or service items dropped the wifi
    glyph until the next system update */
-    static NSString * const kAggregators[] = {
-        @"SBStatusBarStateAggregator", @"STStatusBarStateAggregator"
-    };
-    for (size_t i = 0; i < sizeof kAggregators / sizeof kAggregators[0]; ++i) {
-        id aggregator = SenkoSharedObject(kAggregators[i],
+    BOOL refreshed = NO;
+    for (size_t i = 0; i < sizeof kSenkoAggregators / sizeof kSenkoAggregators[0]; ++i) {
+        id aggregator = SenkoSharedObject(kSenkoAggregators[i],
                                           @selector(sharedInstance),
                                           @selector(sharedAggregator));
         if (!aggregator) continue;
-        if (!SenkoCallVoid(aggregator, NSSelectorFromString(@"_updateVPNItem")))
-            SenkoCallVoid(aggregator, NSSelectorFromString(@"updateVPNItem"));
+        if (SenkoCallVoid(aggregator, NSSelectorFromString(@"_updateVPNItem")) ||
+            SenkoCallVoid(aggregator, NSSelectorFromString(@"updateVPNItem")))
+            refreshed = YES;
     }
 
-    id telephony = SenkoSharedObject(@"SBTelephonyManager",
-                                     @selector(sharedTelephonyManager),
-                                     @selector(sharedInstance));
-    SenkoCallVoid(telephony, @selector(updateSpringBoard));
+/* ios 6 and 7 have no aggregator; the data manager owns the same item there */
+    if (!refreshed) {
+        id data = SenkoSharedObject(@"SBStatusBarDataManager",
+                                    @selector(sharedDataManager),
+                                    @selector(sharedInstance));
+        if (SenkoCallVoid(data, NSSelectorFromString(@"_updateVPNItem")) ||
+            SenkoCallVoid(data, NSSelectorFromString(@"updateVPNItem")))
+            refreshed = YES;
+    }
+
+/* SBTelephonyManager republishes the data network type, and the wifi glyph is
+   that item: with the tunnel up telephony reports no data service and the glyph
+   went away until the next real network change. it is the last resort, for a
+   springboard that exposes neither item refresh */
+    if (!refreshed) {
+        id telephony = SenkoSharedObject(@"SBTelephonyManager",
+                                         @selector(sharedTelephonyManager),
+                                         @selector(sharedInstance));
+        if (!SenkoCallVoid(telephony, @selector(updateSpringBoard)))
+            return NO;
+    }
 
     return YES;
 }
@@ -151,7 +253,7 @@ static BOOL SenkoApplyVPNIcon(BOOL enabled) {
     gSenkoQueued = NO;
     if (!gSenkoReady) return;
 
-    BOOL enabled = SenkoReadVPNState();
+    BOOL enabled = SenkoReadVPNState() && access(kSenkoVPNIconOffPath, F_OK) != 0;
     if (gSenkoDidApply && gSenkoLastState == enabled) return;
     if (SenkoApplyVPNIcon(enabled)) {
         gSenkoDidApply = YES;

@@ -26,6 +26,7 @@ LDFLAGS := $(ARCH) -isysroot $(SDK) \
            -framework AudioToolbox \
            -weak_framework AVFoundation \
            -weak_framework CoreMedia -weak_framework CoreVideo \
+           -lz \
            $(if $(CRT),-nostartfiles $(CRT),)
 
 QUIRC   := third_party/quirc
@@ -48,6 +49,7 @@ THEME_SRC := \
 # ui chrome/style + screens (main_vc / ui_chrome split into modules)
 APP_SRC := \
 	app_main.m \
+	crash_report.m \
 	localization.m \
 	main_vc.m \
 	main_vc_decor.m \
@@ -80,6 +82,8 @@ APP_SRC := \
 	themes_vc.m \
 	meow.m \
 	../daemon/core/b64.c \
+	../daemon/core/amnezia_bundle.c \
+	../daemon/core/third_party/cJSON.c \
 	$(THEME_SRC)
 
 QUIRC_SRC := $(QUIRC)/quirc.c $(QUIRC)/decode.c $(QUIRC)/identify.c $(QUIRC)/version_db.c
@@ -96,7 +100,7 @@ $(OBJDIR)/quirc_%.o: $(QUIRC)/%.c
 	mkdir -p $(OBJDIR)
 	$(CC) $(ARCH) -isysroot $(SDK) -O2 -w -I$(QUIRC) -c $< -o $@
 
-$(BIN): $(APP_SRC) $(QUIRC_OBJ) $(FLAG_SRC) $(ICON_SRC) control_client.h qr_scan.h Info.plist app_common.h ui_theme.h theme/theme_def.h
+$(BIN): $(APP_SRC) $(QUIRC_OBJ) $(FLAG_SRC) $(ICON_SRC) control_client.h qr_scan.h Info.plist app_common.h ui_theme.h theme/theme_def.h crash_report.h
 	@mkdir -p $(dir $(BIN))
 	$(CC) $(CFLAGS) $(APP_SRC) $(QUIRC_OBJ) -o $(BIN) $(LDFLAGS)
 	@if [ "$(BIN)" = "$(APP)/senko" ]; then \

@@ -411,16 +411,21 @@ static void set_reason(char *reason, size_t cap, const char *text) {
     if (reason && cap) snprintf(reason, cap, "%s", text);
 }
 
-static awg_hs_status_t send_obfuscation(int fd, const awg_config_t *cfg,
-                                        char *reason, size_t reason_cap) {
-    static uint8_t packet[AWG_DATAGRAM_MAX];
-    for (size_t i = 0; i < 5; ++i) {
-        if (!cfg->signature[i][0]) continue;
+/* the junk train goes out in one fixed order: the i1-i5 special packets first,
+   then the j1-j3 controlled ones, then the jc random ones, and only then the
+   handshake initiation. a server configured for awg 1.5 counts on that order */
+static awg_hs_status_t send_signature_list(int fd, const char (*list)[AWG_MAX_SIGNATURE],
+                                           size_t count, char tag,
+                                           uint8_t *packet, size_t packet_cap,
+                                           char *reason, size_t reason_cap) {
+    for (size_t i = 0; i < count; ++i) {
+        if (!list[i][0]) continue;
         size_t len = 0;
-        awg_hs_status_t r = awg_signature_expand(cfg->signature[i], packet, sizeof packet, &len);
+        awg_hs_status_t r = awg_signature_expand(list[i], packet, packet_cap, &len);
         if (r != AWG_HS_OK) {
             if (reason && reason_cap)
-                snprintf(reason, reason_cap, "signature I%zu cannot be expanded", i + 1);
+                snprintf(reason, reason_cap, "signature %c%zu cannot be expanded",
+                         tag, i + 1);
             return r;
         }
         if (len && send(fd, packet, len, 0) != (ssize_t)len) {
@@ -428,6 +433,18 @@ static awg_hs_status_t send_obfuscation(int fd, const awg_config_t *cfg,
             return AWG_HS_ERR_IO;
         }
     }
+    return AWG_HS_OK;
+}
+
+static awg_hs_status_t send_obfuscation(int fd, const awg_config_t *cfg,
+                                        char *reason, size_t reason_cap) {
+    static uint8_t packet[AWG_DATAGRAM_MAX];
+    awg_hs_status_t sig = send_signature_list(fd, cfg->signature, 5, 'I',
+                                              packet, sizeof packet, reason, reason_cap);
+    if (sig != AWG_HS_OK) return sig;
+    sig = send_signature_list(fd, cfg->controlled, 3, 'J',
+                              packet, sizeof packet, reason, reason_cap);
+    if (sig != AWG_HS_OK) return sig;
     uint32_t span = cfg->jmax - cfg->jmin + 1;
     for (uint32_t i = 0; i < cfg->jc; ++i) {
         size_t len = cfg->jmin + (span > 1 ? random_u32() % span : 0);
@@ -471,7 +488,22 @@ awg_hs_status_t awg_handshake_establish_fd(int fd, const awg_config_t *cfg,
         r = AWG_HS_ERR_IO;
 
     long deadline = now_ms() + (timeout_ms > 0 ? timeout_ms : 5000);
+    /* itime is how often awg 1.5 re-emits the junk train while a handshake is
+       still unanswered. a repeat of the same initiation would be refused as a
+       replayed timestamp, so the initiation is rebuilt with it */
+    long resend_at = cfg->itime ? now_ms() + (long)cfg->itime * 1000L : 0;
     while (r == AWG_HS_OK && now_ms() < deadline) {
+        if (resend_at && now_ms() >= resend_at) {
+            r = send_obfuscation(fd, cfg, reason, reason_cap);
+            if (r == AWG_HS_OK)
+                r = awg_handshake_build_initiation(hs, initial, AWG_DATAGRAM_MAX,
+                                                   &initial_len);
+            if (r == AWG_HS_OK &&
+                send(fd, initial, initial_len, 0) != (ssize_t)initial_len)
+                r = AWG_HS_ERR_IO;
+            if (r != AWG_HS_OK) break;
+            resend_at = now_ms() + (long)cfg->itime * 1000L;
+        }
         long remaining = deadline - now_ms();
         struct pollfd pfd = { fd, POLLIN, 0 };
         int pr = poll(&pfd, 1, remaining > 250 ? 250 : (int)remaining);

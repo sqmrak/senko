@@ -36,7 +36,14 @@ typedef struct {
     uint32_t padding[4];
     uint32_t header_min[4];
     uint32_t header_max[4];
+    /* i1-i5, the special junk packets awg 1.5 sends before the handshake */
     char signature[5][AWG_MAX_SIGNATURE];
+    /* j1-j3, the controlled junk packets that follow i1-i5 in the same train.
+       awg 2.0 dropped them, so a 2.0 profile simply leaves them empty */
+    char controlled[3][AWG_MAX_SIGNATURE];
+    /* seconds between two emissions of the junk train while a handshake is
+       still unanswered. 0 keeps the single emission awg 1.0 used */
+    uint32_t itime;
 } awg_config_t;
 
 typedef enum {
@@ -46,7 +53,10 @@ typedef enum {
     AWG_CFG_ERR_RANGE = -3,
     AWG_CFG_ERR_KEY = -4,
     AWG_CFG_ERR_MISSING = -5,
-    AWG_CFG_ERR_SPACE = -6
+    AWG_CFG_ERR_SPACE = -6,
+    /* the profile is well formed but asks for a wire feature this build cannot
+       produce, which is not the same as a broken file */
+    AWG_CFG_ERR_UNSUPPORTED = -7
 } awg_cfg_status_t;
 
 void awg_config_init(awg_config_t *cfg);

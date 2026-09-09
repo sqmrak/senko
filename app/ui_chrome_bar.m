@@ -284,8 +284,10 @@ void StyleGlossyCapsule(UIButton *button, UIColor *top, UIColor *bottom) {
 
     if (ios26) {
         SenkoInstallFrost(button);
-        button.layer.shouldRasterize = YES;
-        button.layer.rasterizationScale = [UIScreen mainScreen].scale;
+/* the glass caches itself, and rasterizing the layer that holds it makes core
+   animation rebuild the blur offscreen on every frame through coreui and core
+   image. the same pairing is refused on the section plate for this reason */
+        button.layer.shouldRasterize = NO;
         button.titleLabel.font = SenkoFontBody(13, YES);
         [button setTitleColor:light ? kInk : [UIColor whiteColor]
                      forState:UIControlStateNormal];

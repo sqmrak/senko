@@ -20,11 +20,16 @@ extern NSString * const SenkoServerSheetActionDelete;
          serverIndex:(int)index;
 @end
 
-@interface SenkoServerSheet : UIView {
+@interface SenkoServerSheet : UIView <UIGestureRecognizerDelegate> {
     SenkoServer *_server;
     id<SenkoServerSheetDelegate> _delegate; /* assigned, the owner outlives the sheet */
     UIView   *_backdrop;
     UIView   *_card;
+    /* a phone on its side has under 200pt left for the card, which is less than
+       the rows plus the connect pill need, so the body scrolls inside it */
+    UIScrollView *_scroll;
+    UIView   *_content;
+    UIPanGestureRecognizer *_pan;
     UIView   *_grabber;
     UIButton *_close;
     UIImageView *_badge;
@@ -43,6 +48,7 @@ extern NSString * const SenkoServerSheetActionDelete;
     BOOL      _active;
     BOOL      _canMutate;
     BOOL      _dismissing;
+    BOOL      _scrollHeldForDrag;
     CGFloat   _dragStart;
 }
 

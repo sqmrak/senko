@@ -26,7 +26,7 @@ static void SenkoBuildTranslations(void) {
     gEnglishToRussian = [[NSMutableDictionary alloc] init];
     gRussianToEnglish = [[NSMutableDictionary alloc] init];
 
-    SenkoAddTranslation(@"about", @"о приложении");
+    SenkoAddTranslation(@"About", @"О приложении");
     SenkoAddTranslation(@"iOS 5 cannot use the kernel firewall safely. Install MobileSubstrate and reinstall Senko so the application proxy can carry traffic.",
                         @"На iOS 5 нельзя безопасно использовать сетевой фильтр ядра. Установите MobileSubstrate и переустановите Senko, чтобы трафик пошёл через прокси приложений.");
     SenkoAddTranslation(@"Add", @"Добавить");
@@ -120,12 +120,21 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"Camera access could not be requested", @"Не удалось запросить доступ к камере");
     SenkoAddTranslation(@"Camera access is disabled\nEnable it in Settings > Privacy > Camera", @"Доступ к камере отключён\nРазрешите его в Настройки > Конфиденциальность > Камера");
     SenkoAddTranslation(@"No daemon logs available", @"Логи демона недоступны");
+    SenkoAddTranslation(@"VPN badge in status bar", @"Значок VPN в статус-баре");
+    SenkoAddTranslation(@"Turn off if the wifi glyph disappears", @"Выключите, если пропадает значок wi-fi");
+    SenkoAddTranslation(@"No app fault report", @"Отчётов о сбоях нет");
     SenkoAddTranslation(@"Loading logs...", @"Загрузка логов...");
     SenkoAddTranslation(@"reading content...", @"чтение содержимого...");
     SenkoAddTranslation(@"removing manual servers...", @"удаление серверов...");
     SenkoAddTranslation(@"manual servers removed", @"серверы удалены");
     SenkoAddTranslation(@"Add subscription", @"Добавить подписку");
     SenkoAddTranslation(@"Paste from clipboard", @"Вставить из буфера");
+    SenkoAddTranslation(@"Paste", @"Вставить");
+    SenkoAddTranslation(@"Safe mode", @"Безопасный режим");
+    SenkoAddTranslation(@"Senko failed to start %d times and is running with "
+                         "the stock theme. The report is in Logs.",
+                        @"Senko не смог запуститься %d раза и работает со "
+                         "стандартной темой. Отчёт — в разделе «Логи».");
     SenkoAddTranslation(@"QR code", @"QR-код");
     SenkoAddTranslation(@"Import from file", @"Импорт из файла");
     SenkoAddTranslation(@"Delete all servers", @"Удалить все серверы");

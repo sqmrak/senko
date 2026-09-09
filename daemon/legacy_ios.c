@@ -39,6 +39,23 @@ int senko_ios_major_from_plist(const char *xml) {
     return parse_major(version);
 }
 
+int senko_ios_major_from_darwin(const char *release) {
+    if (!release) return 0;
+    int darwin = parse_major(release);
+    /* darwin 15 and later track the ios major exactly six versions behind.
+       below that the mapping is a table: darwin 14 covers both ios 7 and ios 8,
+       which share every branch this answer selects */
+    switch (darwin) {
+        case 0:  return 0;
+        case 11: return 5;
+        case 12: return 5;
+        case 13: return 6;
+        case 14: return 7;
+        default: break;
+    }
+    return darwin >= 15 ? darwin - 6 : 0;
+}
+
 int senko_ios_major(void) {
     FILE *f = fopen("/System/Library/CoreServices/SystemVersion.plist", "r");
     if (f) {
@@ -53,9 +70,13 @@ int senko_ios_major(void) {
     }
 
 #if defined(__APPLE__)
+    /* the plist is a binary property list on some builds, and the xml scan
+       above then reads nothing. the kernel version is always readable, and
+       answering 0 here left the ios 12 branches that disable the legacy tls
+       shim switched off on exactly the systems they exist for */
     struct utsname uts;
-    if (uname(&uts) == 0 && strncmp(uts.release, "11.", 3) == 0)
-        return 5;
+    if (uname(&uts) == 0)
+        return senko_ios_major_from_darwin(uts.release);
 #endif
     return 0;
 }

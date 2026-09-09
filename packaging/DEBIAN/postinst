@@ -124,11 +124,17 @@ firmware_major() {
   fi
   if [ -z "$version" ]; then
     # SystemVersion.plist is a binary plist on some builds and the sed above
-    # reads nothing. darwin 11 is only ever ios 5, and ios 5 is the one branch
-    # below whose behaviour differs, so guessing 6 there would disable the only
-    # routing backend that device has
-    case "$(uname -r 2>/dev/null)" in
-      11.*) version=5 ;;
+    # reads nothing. the kernel version is always readable: darwin 15 and later
+    # run six versions ahead of the ios major, and below that it is a table.
+    # guessing 6 here injected the legacy tls shim on ios 12, which is the one
+    # system the branches below exist to keep it off
+    darwin="$(uname -r 2>/dev/null | sed -n 's/^\([0-9][0-9]*\)\..*/\1/p')"
+    case "$darwin" in
+      11|12) version=5 ;;
+      13) version=6 ;;
+      14) version=7 ;;
+      "") ;;
+      *) [ "$darwin" -ge 15 ] 2>/dev/null && version=$((darwin - 6)) ;;
     esac
   fi
   [ -n "$version" ] || version=6

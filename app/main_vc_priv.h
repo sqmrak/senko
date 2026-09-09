@@ -139,6 +139,8 @@
 - (void)editSubscriptionVC:(EditSubscriptionVC *)vc saveSubWithIndex:(int)idx name:(NSString *)name url:(NSString *)url header:(NSString *)header;
 - (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)idx;
 - (BOOL)isNativeAWGText:(NSString *)s;
+- (BOOL)looksLikeAmneziaBundle:(NSData *)body;
+- (BOOL)importAmneziaBundleData:(NSData *)body;
 - (void)importAWGText:(NSString *)text;
 - (void)importText:(NSString *)s;
 - (void)importContentData:(NSData *)data;

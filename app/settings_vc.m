@@ -19,6 +19,7 @@
 #import "update_install.h"
 #import "meow.h"
 #import "app_common.h"
+#import "crash_report.h"
 
 /* a backup is the config file itself, so there is no magic to check for and no
    format version to compare: the file is ours when one of its first lines is a
@@ -216,6 +217,7 @@ static NSString *SenkoSortModeName(void) {
 }
 
 - (void)viewWillAppear:(BOOL)animated {
+    SenkoCrashScreen("settings");
     [super viewWillAppear:animated];
     if (self.navigationController)
         StyleNavBarClassic(self.navigationController);
@@ -263,7 +265,7 @@ static NSString *SenkoSortModeName(void) {
 
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
     if (s == 0) return 4;
-    return 9;
+    return 10;
 }
 
 - (NSString *)headerTextForSection:(NSInteger)s {
@@ -400,47 +402,62 @@ static NSString *SenkoSortModeName(void) {
             cell.accessoryView = sw;
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
         } else if (ip.row == 1) {
+            cell.textLabel.text = SenkoLocalizedText(@"VPN badge in status bar");
+            cell.detailTextLabel.text = SenkoLocalizedText(@"Turn off if the wifi glyph disappears");
+            UISwitch *badge = [[[UISwitch alloc] initWithFrame:CGRectZero] autorelease];
+            badge.on = SenkoVPNBadgeEnabled();
+            [badge addTarget:self action:@selector(vpnBadgeChanged:)
+            forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView = badge;
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        } else if (ip.row == 2) {
             cell.textLabel.text = @"Sort servers";
             cell.detailTextLabel.text = SenkoSortModeName();
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             SenkoStyleSelectableCell(cell);
-        } else if (ip.row == 2) {
+        } else if (ip.row == 3) {
             cell.textLabel.text = @"Themes";
             cell.detailTextLabel.text = SenkoThemeStatusLine();
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             SenkoStyleSelectableCell(cell);
-        } else if (ip.row == 3) {
+        } else if (ip.row == 4) {
             cell.textLabel.text = @"System Logs";
             cell.detailTextLabel.text = SenkoLocalizedText(@"senkod + awg combined");
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             SenkoStyleSelectableCell(cell);
-        } else if (ip.row == 4) {
+        } else if (ip.row == 5) {
             cell.textLabel.text = SenkoLocalizedText(@"Export backup");
             cell.detailTextLabel.text = SenkoLocalizedText(@"Save a config file to Documents");
             SenkoStyleSelectableCell(cell);
-        } else if (ip.row == 5) {
+        } else if (ip.row == 6) {
             cell.textLabel.text = SenkoLocalizedText(@"Restore backup");
             cell.detailTextLabel.text = SenkoLocalizedText(@"Validate, then replace configuration");
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             SenkoStyleSelectableCell(cell);
-        } else if (ip.row == 6) {
+        } else if (ip.row == 7) {
             cell.textLabel.text = @"Update Senko";
             cell.detailTextLabel.text = SenkoLocalizedText(@"Choose a Senko .deb package");
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             SenkoStyleSelectableCell(cell);
-        } else if (ip.row == 7) {
+        } else if (ip.row == 8) {
             cell.textLabel.text = SenkoLocalizedText(@"Language");
             cell.detailTextLabel.text = SenkoLanguageName();
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             SenkoStyleSelectableCell(cell);
         } else {
-            cell.textLabel.text = SenkoLocalizedText(@"about");
+            cell.textLabel.text = SenkoLocalizedText(@"About");
             cell.detailTextLabel.text = nil;
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             SenkoStyleSelectableCell(cell);
         }
     }
     return cell;
+}
+
+/* springboard cannot read the app defaults domain, so the switch is mirrored as
+   a marker file next to the state file the tweak already watches */
+- (void)vpnBadgeChanged:(UISwitch *)sw {
+    SenkoVPNBadgeSetEnabled(sw.on);
 }
 
 - (void)hideLinksChanged:(UISwitch *)sw {
@@ -611,25 +628,25 @@ static NSString *SenkoSortModeName(void) {
         return;
     }
     if (ip.section == 1) {
-        if (ip.row == 1) {
+        if (ip.row == 2) {
             [self showSortMenu];
-        } else if (ip.row == 2) {
+        } else if (ip.row == 3) {
             ThemesVC *vc = [[[ThemesVC alloc] init] autorelease];
             [self.navigationController pushViewController:vc animated:YES];
-        } else if (ip.row == 3) {
+        } else if (ip.row == 4) {
             LogsVC *vc = [[[LogsVC alloc] init] autorelease];
             [self.navigationController pushViewController:vc animated:YES];
-        } else if (ip.row == 4) {
+        } else if (ip.row == 5) {
             [_ctl exportBackup:^(NSString *reply) {
                 NSString *msg = [reply hasPrefix:@"OK "] ?
                     SenkoLocalizedText(@"Saved to Documents/senko-backup.senko") : reply;
                 [self showBackupMessage:msg ?: SenkoLocalizedText(@"Backup export failed")];
             }];
-        } else if (ip.row == 5) {
-            [self openBackupBrowser];
         } else if (ip.row == 6) {
-            [self openUpdateBrowser];
+            [self openBackupBrowser];
         } else if (ip.row == 7) {
+            [self openUpdateBrowser];
+        } else if (ip.row == 8) {
             UIAlertView *language = [[[UIAlertView alloc]
                 initWithTitle:SenkoLocalizedText(@"Language")
                       message:SenkoLanguageName()
@@ -638,7 +655,7 @@ static NSString *SenkoSortModeName(void) {
             otherButtonTitles:@"English", @"Русский", nil] autorelease];
             language.tag = 4202;
             [language show];
-        } else if (ip.row == 8) {
+        } else if (ip.row == 9) {
             AboutVC *vc = [[[AboutVC alloc] init] autorelease];
             [self.navigationController pushViewController:vc animated:YES];
         }

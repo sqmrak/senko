@@ -47,15 +47,25 @@ remove_rootful_layout() {
   remove_rootful_link /usr/bin/head "${PAYLOAD_ROOT}/usr/lib/senko/head"
 }
 
+KILLALL=${JBROOT}/usr/bin/killall
+[ -x "$KILLALL" ] || KILLALL=/usr/bin/killall
+[ -x "$KILLALL" ] || KILLALL=/bin/killall
+
 case "$1" in
   remove|purge)
+    # prerm already stopped everything; this is the last chance to catch a core
+    # that outlived a failed or skipped prerm, and it is what frees the utun the
+    # default route still points at
+    "$KILLALL" -9 senkod senkoawgd senko-core >/dev/null 2>&1 || true
     rm -f /var/tmp/senkod.sock >/dev/null 2>&1 || true
     rm -f /var/mobile/Library/Preferences/Senko/import.dat >/dev/null 2>&1 || true
     rm -f /var/run/senko-pf.conf >/dev/null 2>&1 || true
     rm -f "${JBROOT}/usr/bin/redsocks-senko" /var/run/senko-redsocks.conf >/dev/null 2>&1 || true
     rm -f "${SUBSTRATE_DIR}/senkovpnicon.dylib" \
           "${SUBSTRATE_DIR}/senkovpnicon.plist" \
-          /var/mobile/Library/Preferences/com.senko.vpnicon.state >/dev/null 2>&1 || true
+          /var/mobile/Library/Preferences/com.senko.vpnicon.state \
+          /var/mobile/Library/Preferences/com.senko.vpnicon.status \
+          /var/mobile/Library/Preferences/com.senko.vpnicon.off >/dev/null 2>&1 || true
     # stale icon records survive after SpringBoard loses the bundle path
     "$UICACHE" >/dev/null 2>&1 || true
     remove_rootful_layout

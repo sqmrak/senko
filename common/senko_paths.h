@@ -25,4 +25,16 @@
    fixed path keeps the privileged reader free of any caller supplied path */
 #define SENKO_IMPORT_STAGE "/var/mobile/Library/Preferences/Senko/import.dat"
 
+/* a launch that dies before the first frame leaves nothing a user can reach,
+   because the only reader of the report used to be the app that will not
+   start. these paths are fixed so senkoctl can print them over ssh instead */
+#define SENKO_CRASH_DIR    "/var/mobile/Library/Preferences/Senko"
+#define SENKO_CRASH_LAST   SENKO_CRASH_DIR "/last-crash.log"
+#define SENKO_CRASH_PREV   SENKO_CRASH_DIR "/previous-crash.log"
+#define SENKO_CRASH_STAGE  SENKO_CRASH_DIR "/launch-stage.log"
+#define SENKO_CRASH_SCREEN SENKO_CRASH_DIR "/screen.log"
+/* consecutive launches that never reached the first frame; two of them turn
+   the next launch into safe mode */
+#define SENKO_CRASH_FAILS  SENKO_CRASH_DIR "/launch-fails.log"
+
 #endif

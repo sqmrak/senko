@@ -6,12 +6,16 @@
 #import "control_client.h"
 
 #define SENKO_SOCK @"/var/tmp/senkod.sock"
-#define SENKO_VERSION @"v2.0.0-stable"
+#define SENKO_VERSION @"v09092026-nightly"
 #define SENKO_HIDE_LINKS_KEY @"SenkoHideServerLinks"
 #define SENKO_PINNED_SUB_URL_KEY @"SenkoPinnedSubscriptionURL"
 #define SENKO_AWG_PROFILE_KEY @"SenkoAWGProfilePath"
 #define SENKO_AWG_PROFILE_PATH @"/var/mobile/Library/Preferences/Senko/amneziawg.conf"
 #define SENKO_SELECTED_BACKEND_KEY @"SenkoSelectedBackend"
+#define SENKO_VPN_BADGE_KEY @"SenkoVPNStatusBarBadge"
+/* springboard reads this marker instead of the app defaults, which live in a
+   domain it cannot see. present means the badge is turned off */
+#define SENKO_VPN_BADGE_OFF_PATH "/var/mobile/Library/Preferences/com.senko.vpnicon.off"
 #define SENKO_LANGUAGE_KEY @"SenkoLanguage"
 /* 0 keeps the order the daemon stores, 1 sorts by name, 2 by latency */
 #define SENKO_SERVER_SORT_KEY @"SenkoServerSort"
@@ -29,6 +33,10 @@ typedef NS_ENUM(NSInteger, SenkoBackendKind) {
 };
 
 NSString *SenkoAboutAppReport(void);
+/* the springboard badge is a user choice because on some firmwares the
+   status bar drops the wifi glyph to make room for it */
+BOOL SenkoVPNBadgeEnabled(void);
+void SenkoVPNBadgeSetEnabled(BOOL enabled);
 extern NSString * const SenkoLanguageDidChangeNotification;
 BOOL SenkoLanguageIsRussian(void);
 void SenkoSetLanguage(BOOL russian);

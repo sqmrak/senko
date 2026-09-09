@@ -8,4 +8,8 @@ int senko_is_ios5(void);
    file read so the tag scan can be host tested */
 int senko_ios_major_from_plist(const char *xml);
 
+/* map a darwin kernel release onto the ios major it ships with, for the builds
+   whose SystemVersion.plist is a binary property list */
+int senko_ios_major_from_darwin(const char *release);
+
 #endif

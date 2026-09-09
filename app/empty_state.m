@@ -9,6 +9,10 @@
     BOOL      _showingCopied;
 }
 
+/* two buttons share the row, so each gets half a 320pt screen. uikit truncates
+   a button title in the middle by default, which turned a russian caption into
+   "Встави...буфера"; the face shrinks instead, and a title that still does not
+   fit loses its tail rather than its middle */
 static void StyleActionButton(UIButton *button) {
     UIColor *fill = kAccentBlue ? kAccentBlue : [UIColor colorWithWhite:0.4 alpha:1];
     [button setTitleColor:SenkoPillLabelColor(fill) forState:UIControlStateNormal];
@@ -18,6 +22,17 @@ static void StyleActionButton(UIButton *button) {
     button.layer.masksToBounds = YES;
     button.titleLabel.shadowColor = nil;
     button.titleLabel.shadowOffset = CGSizeZero;
+    button.titleLabel.numberOfLines = 1;
+    button.titleLabel.textAlignment = NSTextAlignmentCenter;
+    button.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    button.titleLabel.adjustsFontSizeToFitWidth = YES;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    button.titleLabel.minimumFontSize = 11.0f;
+#pragma clang diagnostic pop
+    if ([button.titleLabel respondsToSelector:@selector(setMinimumScaleFactor:)])
+        button.titleLabel.minimumScaleFactor = 0.72f;
+    button.contentEdgeInsets = UIEdgeInsetsMake(0.0f, 8.0f, 0.0f, 8.0f);
 }
 
 - (id)initWithFrame:(CGRect)frame {
@@ -109,8 +124,9 @@ static void StyleActionButton(UIButton *button) {
 
     SenkoStyleSectionPlate(hwidPlate);
 
-    [pasteButton setTitle:SenkoLocalizedText(@"Paste from clipboard")
-                 forState:UIControlStateNormal];
+    /* the sentence above already says what to paste, so the button carries the
+       verb alone and fits without shrinking */
+    [pasteButton setTitle:SenkoLocalizedText(@"Paste") forState:UIControlStateNormal];
     [scanButton setTitle:SenkoLocalizedText(@"QR code") forState:UIControlStateNormal];
     StyleActionButton(pasteButton);
     StyleActionButton(scanButton);

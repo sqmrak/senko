@@ -2,6 +2,7 @@
 #import "ui_theme.h"
 #import "meow.h"
 #import "app_common.h"
+#import "crash_report.h"
 #import "theme_edit_vc.h"
 #import "theme/theme_custom.h"
 #include <objc/message.h>
@@ -92,6 +93,7 @@
 }
 
 - (void)viewWillAppear:(BOOL)animated {
+    SenkoCrashScreen("themes");
     [super viewWillAppear:animated];
     if (_isCustomGroup) [self reloadIds];
 }

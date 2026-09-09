@@ -65,6 +65,12 @@ static int parse_u16(const char *start, const char *end, uint16_t *out) {
     return 0;
 }
 
+static int key_is_zero(const uint8_t key[AWG_KEY_LEN]) {
+    uint8_t acc = 0;
+    for (size_t i = 0; i < AWG_KEY_LEN; ++i) acc = (uint8_t)(acc | key[i]);
+    return acc == 0;
+}
+
 static int parse_key(const char *start, const char *end, uint8_t key[AWG_KEY_LEN]) {
     size_t out_len = 0;
     size_t len = (size_t)(end - start);
@@ -140,10 +146,33 @@ static int signature_syntax_ok(const char *text) {
     return 1;
 }
 
-static int key_accepts_empty_value(awg_section_t section,
-                                   const char *key_start, const char *key_end) {
-    return section == AWG_SECTION_INTERFACE && key_end - key_start == 2 &&
-           key_start[0] == 'I' && key_start[1] >= '1' && key_start[1] <= '5';
+/* an exporter that has no value for an optional field still writes the key, and
+   refusing the whole profile over "PresharedKey = " threw away a working
+   config. the required fields are checked once at the end instead */
+static int key_is_required(awg_section_t section,
+                           const char *key_start, const char *key_end) {
+    if (section == AWG_SECTION_INTERFACE)
+        return span_equals(key_start, key_end, "PrivateKey") ||
+               span_equals(key_start, key_end, "Address");
+    return span_equals(key_start, key_end, "PublicKey") ||
+           span_equals(key_start, key_end, "Endpoint");
+}
+
+/* awg 2.0 knobs that change what goes on the wire. senko cannot produce them,
+   and a tunnel built while ignoring one never completes a handshake, so the
+   profile is refused naming the field that caused it. the two switches are only
+   fatal when they are actually turned on */
+static const char *unsupported_wire_key(const char *key_start, const char *key_end,
+                                        const char *value_start, const char *value_end) {
+    if (span_equals(key_start, key_end, "HeaderProtectionKey"))
+        return "HeaderProtectionKey";
+    if (span_equals(key_start, key_end, "RandomTrailers") &&
+        span_equals(value_start, value_end, "on"))
+        return "RandomTrailers";
+    if (span_equals(key_start, key_end, "ContentPaddingAddition") &&
+        !span_equals(value_start, value_end, "0"))
+        return "ContentPaddingAddition";
+    return NULL;
 }
 
 static awg_cfg_status_t assign_interface(awg_config_t *cfg,
@@ -162,7 +191,14 @@ static awg_cfg_status_t assign_interface(awg_config_t *cfg,
         if (parse_u16(value_start, value_end, &cfg->mtu) != 0 || cfg->mtu < 576)
             goto bad_value;
     } else if (span_equals(key_start, key_end, "Jc")) {
-        if (parse_u32(value_start, value_end, &cfg->jc) != 0 || cfg->jc > 128) goto bad_value;
+        /* amnezia documents the junk count as a uint16, and 128 refused
+           profiles the amnezia client itself generates */
+        if (parse_u32(value_start, value_end, &cfg->jc) != 0 || cfg->jc > 65535)
+            goto bad_value;
+    } else if (span_equals(key_start, key_end, "Itime")) {
+        if (parse_u32(value_start, value_end, &cfg->itime) != 0 ||
+            cfg->itime > 86400)
+            goto bad_value;
     } else if (span_equals(key_start, key_end, "Jmin")) {
         if (parse_u32(value_start, value_end, &cfg->jmin) != 0) goto bad_value;
     } else if (span_equals(key_start, key_end, "Jmax")) {
@@ -182,6 +218,12 @@ static awg_cfg_status_t assign_interface(awg_config_t *cfg,
         size_t i = (size_t)(key_start[1] - '1');
         if (copy_span(cfg->signature[i], sizeof cfg->signature[i], value_start, value_end) != 0 ||
             !signature_syntax_ok(cfg->signature[i]))
+            goto bad_value;
+    } else if (key_end - key_start == 2 && key_start[0] == 'J' &&
+               key_start[1] >= '1' && key_start[1] <= '3') {
+        size_t i = (size_t)(key_start[1] - '1');
+        if (copy_span(cfg->controlled[i], sizeof cfg->controlled[i], value_start, value_end) != 0 ||
+            !signature_syntax_ok(cfg->controlled[i]))
             goto bad_value;
     }
     return AWG_CFG_OK;
@@ -209,7 +251,10 @@ static awg_cfg_status_t assign_peer(awg_config_t *cfg,
         if (copy_span(cfg->allowed_ips, sizeof cfg->allowed_ips, value_start, value_end) != 0)
             goto bad_value;
     } else if (span_equals(key_start, key_end, "PersistentKeepalive")) {
-        if (parse_u16(value_start, value_end, &cfg->persistent_keepalive) != 0)
+        /* wg-quick spells a disabled keepalive "off" */
+        if (span_equals(value_start, value_end, "off"))
+            cfg->persistent_keepalive = 0;
+        else if (parse_u16(value_start, value_end, &cfg->persistent_keepalive) != 0)
             goto bad_value;
     }
     return AWG_CFG_OK;
@@ -251,7 +296,8 @@ awg_cfg_status_t awg_config_parse(const char *text, size_t len, awg_config_t *cf
                 have_interface = 1;
             } else if (span_equals(start, finish, "[Peer]")) {
                 if (have_peer) {
-                    set_reason(reason, reason_cap, "multiple peers are not supported");
+                    set_reason(reason, reason_cap,
+                               "profile has more than one peer, senko routes one");
                     return AWG_CFG_ERR_FORMAT;
                 }
                 section = AWG_SECTION_PEER;
@@ -268,11 +314,28 @@ awg_cfg_status_t awg_config_parse(const char *text, size_t len, awg_config_t *cf
                 const char *value_end = finish;
                 trim_span(&key_start, &key_end);
                 trim_span(&value_start, &value_end);
-                if (key_start == key_end ||
-                    (value_start == value_end &&
-                     !key_accepts_empty_value(section, key_start, key_end))) {
-                    set_reason(reason, reason_cap, "empty config value");
+                if (key_start == key_end) {
+                    set_reason(reason, reason_cap, "config line has no key");
                     return AWG_CFG_ERR_FORMAT;
+                }
+                /* a key written with no value is unset, including the wire
+                   options below, so emptiness is decided before they are */
+                if (value_start == value_end) {
+                    if (key_is_required(section, key_start, key_end)) {
+                        set_reason(reason, reason_cap, "empty required config value");
+                        return AWG_CFG_ERR_FORMAT;
+                    }
+                    p = line_end < end ? line_end + 1 : end;
+                    continue;
+                }
+                const char *unsupported = unsupported_wire_key(key_start, key_end,
+                                                                value_start, value_end);
+                if (unsupported) {
+                    if (reason && reason_cap)
+                        snprintf(reason, reason_cap,
+                                 "%s is an amneziawg 2.0 wire option senko cannot produce",
+                                 unsupported);
+                    return AWG_CFG_ERR_UNSUPPORTED;
                 }
                 awg_cfg_status_t r = section == AWG_SECTION_INTERFACE
                     ? assign_interface(cfg, key_start, key_end, value_start, value_end, reason, reason_cap)
@@ -285,6 +348,20 @@ awg_cfg_status_t awg_config_parse(const char *text, size_t len, awg_config_t *cf
 
     if (!have_interface || !have_peer || !cfg->endpoint_host[0] || !cfg->endpoint_port) {
         set_reason(reason, reason_cap, "missing interface, peer, or endpoint");
+        return AWG_CFG_ERR_MISSING;
+    }
+    /* an all-zero key is what an absent or blank key line leaves behind, and it
+       would only fail much later as a handshake nobody can explain */
+    if (key_is_zero(cfg->private_key)) {
+        set_reason(reason, reason_cap, "missing interface private key");
+        return AWG_CFG_ERR_MISSING;
+    }
+    if (key_is_zero(cfg->peer_public_key)) {
+        set_reason(reason, reason_cap, "missing peer public key");
+        return AWG_CFG_ERR_MISSING;
+    }
+    if (cfg->address_count == 0) {
+        set_reason(reason, reason_cap, "missing interface address");
         return AWG_CFG_ERR_MISSING;
     }
     if (cfg->jmin > cfg->jmax || cfg->jmax > 65507) {

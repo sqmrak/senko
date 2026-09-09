@@ -1,4 +1,5 @@
 #import "main_vc_priv.h"
+#import "crash_report.h"
 
 @implementation MainVC
 
@@ -51,6 +52,7 @@
 
 - (void)themeDidChange:(NSNotification *)n {
     (void)n;
+    SenkoCrashTheme([SenkoThemeCurrentId() UTF8String]);
     self.view.backgroundColor = kBG;
     [self applyBackgroundForCurrentState:NO];
     SenkoThemeSfxPrepare();
@@ -183,6 +185,7 @@
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
+    SenkoCrashScreen("server list");
     [self applyState];
     [self syncUptimeTicker];
     [self syncBoykisserField];
@@ -295,6 +298,7 @@
                                                object:nil];
 
     _revealedRows = [[NSMutableSet alloc] init];
+    SenkoCrashTheme([SenkoThemeCurrentId() UTF8String]);
 
     UILabel *title = [[[UILabel alloc] initWithFrame:CGRectZero] autorelease];
     title.tag = SenkoHomeTagTitle;

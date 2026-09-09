@@ -15,6 +15,7 @@ int main(void) {
     static const char config_text[] =
         "[Interface]\n"
         "PrivateKey = AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n"
+        "Address = 10.0.0.2/32\n"
         "S1 = 11\nS2 = 0\nJc = 0\nJmin = 0\nJmax = 0\n"
         "H1 = 7\nH2 = 8\nH3 = 9\nH4 = 10\nMTU = 1280\n"
         "I1 = <b 0x0102><r 3><rd 4><rc 5><t>\n"
@@ -74,6 +75,7 @@ int main(void) {
 
     static const char defaults_text[] =
         "[Interface]\nPrivateKey = AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n"
+        "Address = 10.0.0.2/32\n"
         "[Peer]\nPublicKey = CQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n"
         "Endpoint = 127.0.0.1:51820\n";
     bad |= expect(awg_config_parse(defaults_text, sizeof defaults_text - 1, &cfg,

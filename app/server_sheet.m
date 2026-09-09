@@ -75,6 +75,16 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     caption.backgroundColor = [UIColor clearColor];
     caption.textColor = tint;
     caption.font = SenkoFontBody(11.0f, NO);
+    /* four captions share the card width, so on a 320pt screen each gets about
+       53pt: a russian verb has to shrink rather than lose its ending */
+    caption.adjustsFontSizeToFitWidth = YES;
+    caption.lineBreakMode = NSLineBreakByTruncatingTail;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    caption.minimumFontSize = 8.0f;
+#pragma clang diagnostic pop
+    if ([caption respondsToSelector:@selector(setMinimumScaleFactor:)])
+        caption.minimumScaleFactor = 0.7f;
     caption.userInteractionEnabled = NO;
     [b addSubview:caption];
     b.backgroundColor = [tint colorWithAlphaComponent:0.10f];
@@ -129,9 +139,22 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     _card = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
     _card.layer.masksToBounds = YES;
     [self addSubview:_card];
-    UIPanGestureRecognizer *pan = [[[UIPanGestureRecognizer alloc]
-                                    initWithTarget:self action:@selector(panned:)] autorelease];
-    [_card addGestureRecognizer:pan];
+    _pan = [[[UIPanGestureRecognizer alloc]
+             initWithTarget:self action:@selector(panned:)] autorelease];
+    _pan.delegate = self;
+    [_card addGestureRecognizer:_pan];
+
+    _scroll = [[[UIScrollView alloc] initWithFrame:CGRectZero] autorelease];
+    _scroll.backgroundColor = [UIColor clearColor];
+    _scroll.showsHorizontalScrollIndicator = NO;
+    _scroll.alwaysBounceHorizontal = NO;
+    _scroll.alwaysBounceVertical = NO;
+    _scroll.scrollEnabled = NO;
+    [_card addSubview:_scroll];
+
+    _content = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
+    _content.backgroundColor = [UIColor clearColor];
+    [_scroll addSubview:_content];
 
     _grabber = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
     _grabber.layer.cornerRadius = 2.5f;
@@ -153,22 +176,22 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     /* a drawn globe stands in for the missing flag, so a server without a
        country marker still gets the same badge geometry */
     _badge.image = flag ? flag : SenkoIconGlobe(30.0f, kAccentBlue);
-    [_card addSubview:_badge];
+    [_content addSubview:_badge];
 
     _title = [self makeLabel:19.0f bold:YES muted:NO];
     NSString *plain = SenkoServerDisplayName(server->remark);
     _title.text = [plain length] ? plain : (server->host ? server->host : @"server");
-    [_card addSubview:_title];
+    [_content addSubview:_title];
 
     _subtitle = [self makeLabel:13.0f bold:NO muted:YES];
     _subtitle.text = [NSString stringWithFormat:@"%@ · %@ · %@",
                       server->proto ? server->proto : @"?",
                       [server->net length] ? server->net : @"tcp",
                       [server->security length] ? server->security : @"none"];
-    [_card addSubview:_subtitle];
+    [_content addSubview:_subtitle];
 
     _rows = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
-    [_card addSubview:_rows];
+    [_content addSubview:_rows];
 
     [self addRowTitle:@"Host"
                 value:[NSString stringWithFormat:@"%@:%d",
@@ -188,7 +211,7 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
         warn.numberOfLines = 2;
         warn.textColor = [UIColor colorWithRed:0.87f green:0.31f blue:0.29f alpha:1.0f];
         warn.text = SenkoLocalizedText(@"This build cannot dial this profile");
-        [_card addSubview:warn];
+        [_content addSubview:warn];
     }
 
     _primary = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -228,7 +251,7 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     [_primary addTarget:self action:@selector(buttonUp:)
        forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside |
                         UIControlEventTouchCancel];
-    [_card addSubview:_primary];
+    [_content addSubview:_primary];
 
     NSMutableArray *actions = [NSMutableArray array];
     [actions addObject:[self makeActionButton:GaugeIcon(20.0f, kAccentBlue)
@@ -250,7 +273,7 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
                                               sel:@selector(deleteTapped)
                                       destructive:YES]];
     }
-    for (UIButton *b in actions) [_card addSubview:b];
+    for (UIButton *b in actions) [_content addSubview:b];
     _actionButtons = [actions copy];
 
     [self applyTheme];
@@ -294,10 +317,12 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
         : SenkoLocalizedText(@"unreachable");
 }
 
-- (CGFloat)cardHeightForWidth:(CGFloat)width {
-    (void)width;
+/* everything below the grabber band, at its natural height. the card clamps to
+   the screen and scrolls this block, so the connect pill and the action row
+   stay reachable on a 320pt landscape screen */
+- (CGFloat)naturalContentHeight {
     NSUInteger rowCount = [_rows.subviews count] / 2;
-    CGFloat height = 16.0f          /* grabber band */
+    CGFloat height = 4.0f           /* gap under the grabber band */
                    + 46.0f          /* header */
                    + 14.0f
                    + rowCount * (CGFloat)kRowHeight
@@ -321,7 +346,9 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     CGFloat maxW = 520.0f;
     CGFloat cardW = b.size.width - safe.left - safe.right - side * 2.0f;
     if (cardW > maxW) cardW = maxW;
-    CGFloat cardH = [self cardHeightForWidth:cardW] + safe.bottom;
+    CGFloat band = 16.0f; /* grabber strip, always visible above the body */
+    CGFloat contentH = [self naturalContentHeight];
+    CGFloat cardH = band + contentH + safe.bottom;
     CGFloat cardX = (b.size.width - cardW) * 0.5f;
     CGFloat cardY = b.size.height - cardH - side;
     /* a tall sheet on a 480pt screen would otherwise start above the header;
@@ -341,7 +368,20 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     _close.frame = CGRectMake(cardW - 44.0f, 12.0f, 32.0f, 32.0f);
     _close.layer.cornerRadius = 16.0f;
 
-    CGFloat y = 20.0f;
+    CGFloat viewportH = cardH - band - safe.bottom;
+    if (viewportH < 1.0f) viewportH = 1.0f;
+    _scroll.frame = CGRectMake(0.0f, band, cardW, viewportH);
+    _content.frame = CGRectMake(0.0f, 0.0f, cardW, contentH);
+    _scroll.contentSize = CGSizeMake(cardW, contentH);
+    /* a body that fits leaves scrolling off, so the drag to dismiss keeps the
+       whole card as its handle instead of fighting the scroll view */
+    if (!_scrollHeldForDrag) {
+        _scroll.scrollEnabled = contentH > viewportH + 0.5f;
+        if (!_scroll.scrollEnabled && _scroll.contentOffset.y != 0.0f)
+            _scroll.contentOffset = CGPointZero;
+    }
+
+    CGFloat y = 4.0f;
     _badge.frame = CGRectMake(pad, y + 2.0f, 34.0f, 34.0f);
     CGFloat headTextX = pad + 34.0f + 12.0f;
     CGFloat headTextW = cardW - headTextX - 48.0f;
@@ -362,7 +402,7 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     }
     y += rowCount * (CGFloat)kRowHeight;
 
-    UIView *warn = [_card viewWithTag:771];
+    UIView *warn = [_content viewWithTag:771];
     if (warn) {
         warn.frame = CGRectMake(pad, y, innerW, 30.0f);
         y += 32.0f;
@@ -428,10 +468,39 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     });
 }
 
+/* the body scrolls and the card drags with the same finger, so exactly one of
+   the two may own a gesture: the card only takes over a downward drag that
+   starts with the body already at its top */
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gesture {
+    if (gesture != _pan) return YES;
+    if (!_scroll.scrollEnabled) return YES;
+    CGPoint v = [_pan velocityInView:self];
+    if (fabsf((float)v.y) <= fabsf((float)v.x)) return NO;
+    return v.y > 0.0f && _scroll.contentOffset.y <= 0.0f;
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gesture
+        shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other {
+    (void)gesture; (void)other;
+    return NO;
+}
+
+- (void)releaseScrollAfterDrag {
+    if (!_scrollHeldForDrag) return;
+    _scrollHeldForDrag = NO;
+    [self setNeedsLayout];
+}
+
 - (void)panned:(UIPanGestureRecognizer *)pan {
     CGFloat dy = [pan translationInView:self].y;
     if (pan.state == UIGestureRecognizerStateBegan) {
         _dragStart = _card.transform.ty;
+        /* the scroll view would otherwise keep tracking the same touch and the
+           card and the body moved against each other */
+        if (_scroll.scrollEnabled) {
+            _scrollHeldForDrag = YES;
+            _scroll.scrollEnabled = NO;
+        }
     } else if (pan.state == UIGestureRecognizerStateChanged) {
         CGFloat offset = _dragStart + dy;
         /* dragging up is resisted rather than blocked, so the sheet still
@@ -447,6 +516,7 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
                pan.state == UIGestureRecognizerStateCancelled) {
         CGFloat offset = _card.transform.ty;
         CGFloat velocity = [pan velocityInView:self].y;
+        [self releaseScrollAfterDrag];
         if (offset > 90.0f || velocity > 700.0f) {
             [self dismiss];
             return;

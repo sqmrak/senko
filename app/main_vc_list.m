@@ -1,5 +1,102 @@
 #import "main_vc_priv.h"
 
+/* the table hands a section header its real frame after the delegate builds it,
+   and it hands it a new one on every reload and rotation. measuring the plate
+   once from the table bounds left the header at the width the table had before
+   the reload, which is how collapsing a subscription pushed its plate past the
+   right edge. the header owns its geometry instead */
+@interface SenkoSectionHeader : UIView {
+@public
+    UIView          *plate;
+    CAGradientLayer *fill;
+    UIButton        *collapse;
+    UILabel         *title;
+    UILabel         *meta;
+    UIButton        *refresh;
+    UIButton        *ping;
+    UIButton        *more;
+    BOOL             compact;
+    CGSize           styledSize;
+}
+- (void)stylePlate;
+@end
+
+@implementation SenkoSectionHeader
+
+/* the ios16 drop shadow and the ios26 glass are both cut for the plate bounds,
+   so they have to be recut whenever the plate actually gets a size */
+- (void)stylePlate {
+    if (!plate) return;
+    SenkoStyleSectionPlate(plate);
+    if (SenkoThemeIsIos16() || SenkoThemeIsIos26()) {
+/* keep the shadow outside the plate */
+        plate.layer.masksToBounds = NO;
+        plate.clipsToBounds = NO;
+    }
+/* cache section chrome, except under ios26 where the plate holds a live blur
+   that would be re-rendered offscreen on every frame */
+    plate.layer.shouldRasterize = !SenkoThemeIsIos26();
+    plate.layer.rasterizationScale = [UIScreen mainScreen].scale;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat w = self.bounds.size.width;
+    CGFloat h = self.bounds.size.height;
+    if (w < 1.0f || h < 1.0f || !plate) return;
+
+    CGFloat side = compact ? 8.0f : 10.0f;
+    CGFloat plateW = w - side * 2.0f;
+    if (plateW < 40.0f) plateW = 40.0f;
+    CGFloat plateH = h - 6.0f;
+    if (plateH < 20.0f) plateH = 20.0f;
+    plate.frame = CGRectMake(side, 4.0f, plateW, plateH);
+    if (!CGSizeEqualToSize(styledSize, plate.bounds.size)) {
+        styledSize = plate.bounds.size;
+        [self stylePlate];
+    }
+    CGFloat cr = SenkoThemeCardRadius();
+    plate.layer.cornerRadius = cr;
+/* a sublayer does not follow its view, so the section fill kept the old width
+   and left a bare strip along the plate after any resize */
+    SenkoSetLayerFrame(fill, plate.bounds);
+    fill.cornerRadius = cr;
+    collapse.frame = plate.bounds;
+
+    CGFloat actionW = compact ? 30.0f : 32.0f;
+    CGFloat actionGap = compact ? 3.0f : 4.0f;
+    CGFloat actionRight = (SenkoThemeIsIos16() ? cr * 0.55f : 8.0f) + (compact ? 2.0f : 0.0f);
+    if (actionRight < 10.0f) actionRight = 10.0f;
+    CGFloat actionH = plateH - 8.0f;
+    if (actionH < 28.0f) actionH = 28.0f;
+    CGFloat actionY = floorf((plateH - actionH) * 0.5f);
+
+    CGFloat cursor = plateW - actionRight - actionW;
+    CGFloat textRight = plateW - 12.0f;
+    if (more) {
+        CGFloat x = cursor < 0.0f ? 0.0f : cursor;
+        more.frame = CGRectMake(x, actionY, actionW, actionH);
+        cursor -= actionGap + actionW;
+        textRight = x;
+    }
+    if (ping) {
+        ping.frame = CGRectMake(cursor, actionY, actionW, actionH);
+        cursor -= actionGap + actionW;
+    }
+    if (refresh) {
+        refresh.frame = CGRectMake(cursor, actionY, actionW, actionH);
+        textRight = cursor;
+    }
+
+    CGFloat textX = 12.0f;
+    CGFloat labelWidth = textRight - textX;
+    if (labelWidth < 42.0f) labelWidth = 42.0f;
+    title.frame = CGRectMake(textX, 3.0f, labelWidth, 29.0f);
+    meta.frame = CGRectMake(textX, 31.0f, labelWidth, 24.0f);
+}
+
+@end
+
 static BOOL SenkoRegional(unichar c) {
     return c >= 0xDDE6 && c <= 0xDDFF;
 }
@@ -66,68 +163,6 @@ static NSString *SenkoFlagInText(NSString *text) {
     NSRange range = SenkoFlagRange(text);
     if (range.location == NSNotFound) return nil;
     return [text substringWithRange:range];
-}
-
-static NSString *SenkoFlagCode(NSString *flag) {
-    if ([flag length] != 4) return nil;
-    unichar a = [flag characterAtIndex:1];
-    unichar b = [flag characterAtIndex:3];
-    if (!SenkoRegional(a) || !SenkoRegional(b)) return nil;
-    return [NSString stringWithFormat:@"%c%c",
-            (char)('a' + a - 0xDDE6),
-            (char)('a' + b - 0xDDE6)];
-}
-
-static UIImage *SenkoFlagImage(NSString *flag) {
-    NSString *code = SenkoFlagCode(flag);
-    if (![code length]) return nil;
-    return [UIImage imageNamed:[NSString stringWithFormat:@"flag-%@.png", code]];
-}
-
-static UIView *SenkoFlagBadge(NSString *flag, CGRect frame) {
-    UIView *badge = [[[UIView alloc] initWithFrame:frame] autorelease];
-    badge.backgroundColor = SenkoThemeIsLight()
-        ? [UIColor colorWithWhite:1.0f alpha:0.92f]
-        : [UIColor colorWithWhite:0.0f alpha:0.20f];
-    badge.layer.cornerRadius = 7.0f;
-    badge.layer.borderWidth = 0.8f;
-    badge.layer.borderColor = SenkoThemeIsLight()
-        ? [UIColor colorWithWhite:1.0f alpha:0.95f].CGColor
-        : [UIColor colorWithWhite:1.0f alpha:0.28f].CGColor;
-    badge.layer.shadowColor = [UIColor blackColor].CGColor;
-    badge.layer.shadowOpacity = 0.28f;
-    badge.layer.shadowOffset = CGSizeMake(0.0f, 1.0f);
-    badge.layer.shadowRadius = 1.5f;
-
-    CAGradientLayer *gloss = [CAGradientLayer layer];
-    gloss.frame = badge.bounds;
-    gloss.cornerRadius = 6.0f;
-    gloss.colors = [NSArray arrayWithObjects:
-                    (id)[UIColor colorWithWhite:1.0f alpha:0.42f].CGColor,
-                    (id)[UIColor colorWithWhite:1.0f alpha:0.0f].CGColor, nil];
-    [badge.layer insertSublayer:gloss atIndex:0];
-
-    UIImageView *imageView = [[[UIImageView alloc]
-                               initWithFrame:CGRectMake(3.0f, 6.0f,
-                                                        frame.size.width - 6.0f,
-                                                        frame.size.height - 12.0f)] autorelease];
-    imageView.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.88f];
-    imageView.layer.cornerRadius = 3.0f;
-    imageView.layer.masksToBounds = YES;
-    imageView.layer.borderWidth = 0.5f;
-    imageView.layer.borderColor = [UIColor colorWithWhite:0.0f alpha:0.20f].CGColor;
-    imageView.contentMode = UIViewContentModeScaleAspectFill;
-    imageView.image = SenkoFlagImage(flag);
-    if (!imageView.image) {
-        UILabel *fallback = [[[UILabel alloc] initWithFrame:imageView.bounds] autorelease];
-        fallback.backgroundColor = [UIColor clearColor];
-        fallback.textAlignment = NSTextAlignmentCenter;
-        fallback.font = [UIFont systemFontOfSize:16.0f];
-        fallback.text = flag;
-        [imageView addSubview:fallback];
-    }
-    [badge addSubview:imageView];
-    return badge;
 }
 
 static NSString *SenkoServerFlag(SenkoServer *server) {
@@ -605,6 +640,27 @@ static int SenkoSortRank(NSNumber *ms) {
         BOOL vlessUp = [vlessState isEqualToString:@"connecting"] ||
                        [vlessState isEqualToString:@"connected"];
         BOOL vlessErr = [vlessState isEqualToString:@"error"];
+/* the daemon answers STATUS within two seconds or not at all, and a slow
+   device under a live tunnel misses that window. a missing answer is not a
+   disconnect: reporting idle here dropped a running tunnel back to the grey
+   idle card until the next refresh happened to succeed */
+        BOOL vlessAnswered = [vlessState length] > 0;
+        BOOL awgAnswered = [awg length] > 0;
+        if (!vlessAnswered && !awgAnswered) {
+            [vlessState release];
+            [awgState release];
+            vlessState = nil;
+            awgState = nil;
+            /* nothing was learned, so the poll that drives a connecting card
+               has to be kept alive by hand */
+            if ([self isTunnelActive]) {
+                [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                                         selector:@selector(refresh)
+                                                           object:nil];
+                [self performSelector:@selector(refresh) withObject:nil afterDelay:2.0];
+            }
+            return;
+        }
 
         if (awgUp) {
             _activeBackend = SenkoBackendAmneziaWG;
@@ -630,6 +686,9 @@ static int SenkoSortRank(NSNumber *ms) {
             _state = [@"idle" copy];
             if (!_lastErr || ![_lastErr length])
                 [self setLastErr:@"connection failed"];
+        } else if (!vlessAnswered && [self isTunnelActive]) {
+/* the server backend stayed silent while the card still shows a live tunnel,
+   so the old state is the only trustworthy one */
         } else {
             _activeBackend = SenkoBackendNone;
             [_state release];
@@ -658,9 +717,12 @@ static int SenkoSortRank(NSNumber *ms) {
     [_ctl statusStateWithUptime:^(NSString *state, long uptime) {
         if (generation != _catalogGeneration) return;
         /* the daemon owns the clock, so the elapsed time survives the app being
-           closed and reopened over a live tunnel */
-        _tunnelUptime = uptime;
-        _tunnelUptimeAt = uptime > 0 ? CACurrentMediaTime() : 0.0;
+           closed and reopened over a live tunnel. a dropped reply carries no
+           clock at all and must not reset the one already on screen */
+        if ([state length]) {
+            _tunnelUptime = uptime;
+            _tunnelUptimeAt = uptime > 0 ? CACurrentMediaTime() : 0.0;
+        }
         vlessState = [state copy];
         applyBackendState();
     }];
@@ -777,20 +839,11 @@ static int SenkoSortRank(NSNumber *ms) {
     else
         [_collapsedSubs addObject:key];
 
-    NSInteger section = NSNotFound;
-    for (NSInteger i = 0; i < (NSInteger)[_sections count]; ++i) {
-        NSDictionary *sec = [_sections objectAtIndex:i];
-        if ([[sec objectForKey:@"subIdx"] intValue] == subIdx) {
-            section = i;
-            break;
-        }
-    }
-    if (section == NSNotFound) return;
-/* reload without animation */
-    [_table beginUpdates];
-    [_table reloadSections:[NSIndexSet indexSetWithIndex:section]
-          withRowAnimation:UITableViewRowAnimationNone];
-    [_table endUpdates];
+/* a section reload runs the row and header change inside an update block, and
+   the header the table keeps from the outgoing pass stayed on screen at its old
+   frame next to the new one. the collapse only changes a row count, so the
+   whole table is rebuilt in place instead */
+    [_table reloadData];
 }
 
 - (void)moveSectionAtIndex:(NSInteger)from toIndex:(NSInteger)to {
@@ -965,37 +1018,22 @@ static int SenkoSortRank(NSNumber *ms) {
 }
 
 - (UIView *)tableView:(UITableView *)tv viewForHeaderInSection:(NSInteger)s {
+    if (!_sections || s < 0 || s >= (NSInteger)[_sections count]) return nil;
     BOOL pad = ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad);
     CGFloat scrH = [UIScreen mainScreen].bounds.size.height;
     CGFloat scrW = [UIScreen mainScreen].bounds.size.width;
     if (scrW > scrH) { CGFloat t = scrH; scrH = scrW; scrW = t; } /* use the short side */
     BOOL compact = (!pad && scrH <= 568.0f);
-    CGFloat side = compact ? 8.0f : 10.0f;
-    /* use the current table width for the header plate */
+    CGFloat hh = pad ? 68.0f : 64.0f;
     CGFloat w = CGRectGetWidth(tv.bounds);
     if (w < 1.0f) w = CGRectGetWidth(tv.frame);
     if (w < 160.0f) w = 160.0f;
-    CGFloat plateW = w - side * 2.0f;
-    CGFloat hh = pad ? 68.0f : 64.0f;
-    CGFloat plateH = hh - 6.0f;
     CGFloat cr = SenkoThemeCardRadius();
-/* keep actions inside the plate */
-    CGFloat actionW = compact ? 30.0f : 32.0f;
-    CGFloat actionGap = compact ? 3.0f : 4.0f;
-    CGFloat actionRight = (SenkoThemeIsIos16() ? cr * 0.55f : 8.0f) + (compact ? 2.0f : 0.0f);
-    if (actionRight < 10.0f) actionRight = 10.0f;
-    CGFloat actionH = plateH - 8.0f;
-    if (actionH < 28.0f) actionH = 28.0f;
-    CGFloat actionY = floorf((plateH - actionH) * 0.5f);
     CGFloat iconPx = compact ? 18.0f : 20.0f;
 
-    if (!_sections || s < 0 || s >= (NSInteger)[_sections count]) return nil;
     NSDictionary *sec = [_sections objectAtIndex:s];
     int subIdx = [[sec objectForKey:@"subIdx"] intValue];
     NSString *title = [sec objectForKey:@"title"];
-    NSString *flag = [sec objectForKey:@"flag"];
-    /* subscription headers are text-only; flags stay on server rows */
-    BOOL showFlag = NO;
     NSString *metaText = [sec objectForKey:@"meta"];
     NSUInteger n = [[sec objectForKey:@"rows"] count];
     BOOL manualHasAwg = (subIdx < 0 && [self hasAWGProfile]);
@@ -1008,10 +1046,11 @@ static int SenkoSortRank(NSNumber *ms) {
         metaText = [NSString stringWithFormat:@"%lu single config%@", (unsigned long)shown,
                     shown == 1 ? @"" : @"s"];
 
-    UIView *wrap = [[[UIView alloc] initWithFrame:CGRectMake(0, 0, w, hh)] autorelease];
+    SenkoSectionHeader *wrap = [[[SenkoSectionHeader alloc]
+                                 initWithFrame:CGRectMake(0, 0, w, hh)] autorelease];
+    wrap->compact = compact;
     wrap.backgroundColor = [UIColor clearColor];
     wrap.clipsToBounds = YES;
-    wrap.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     wrap.userInteractionEnabled = YES;
     wrap.tag = 7000 + s;
     UILongPressGestureRecognizer *drag = [[[UILongPressGestureRecognizer alloc]
@@ -1019,93 +1058,55 @@ static int SenkoSortRank(NSNumber *ms) {
     drag.minimumPressDuration = 0.45;
     [wrap addGestureRecognizer:drag];
 
-    UIView *plate = [[[UIView alloc] initWithFrame:CGRectMake(side, 4, plateW, plateH)] autorelease];
-    plate.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    UIView *plate = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
     plate.layer.cornerRadius = cr;
     plate.layer.borderWidth = 0;
     plate.layer.borderColor = [UIColor clearColor].CGColor;
     plate.clipsToBounds = YES;
     CAGradientLayer *g = [CAGradientLayer layer];
-    g.frame = plate.bounds;
     g.cornerRadius = cr;
     g.masksToBounds = YES;
     SenkoFillSectionGradient(g);
-    SenkoStyleSectionPlate(plate);
-/* keep the shadow outside the plate */
-    if (SenkoThemeIsIos16() || SenkoThemeIsIos26()) {
-        plate.layer.masksToBounds = NO;
-        plate.clipsToBounds = NO;
-    }
     [plate.layer insertSublayer:g atIndex:0];
-/* cache section chrome, except under ios26 where the plate holds a live blur
-   that would be re-rendered offscreen on every frame */
-    plate.layer.shouldRasterize = !SenkoThemeIsIos26();
-    plate.layer.rasterizationScale = [UIScreen mainScreen].scale;
     [wrap addSubview:plate];
+    wrap->plate = plate;
+    wrap->fill = g;
 
     if (subIdx >= 0) {
         UIButton *collapse = [UIButton buttonWithType:UIButtonTypeCustom];
-        collapse.frame = plate.bounds;
-        collapse.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         collapse.tag = 4000 + subIdx;
         [collapse addTarget:self action:@selector(sectionToggleTapped:)
            forControlEvents:UIControlEventTouchUpInside];
         [plate addSubview:collapse];
+        wrap->collapse = collapse;
     }
 
-    CGFloat moreX = 0, pingX = 0, refreshX = 0;
-    CGFloat textW;
+    UILabel *lab = [[[UILabel alloc] initWithFrame:CGRectZero] autorelease];
+    lab.backgroundColor = [UIColor clearColor];
+    lab.font = SenkoThemeIsIos16() ? SenkoFontBody(14, YES) : [UIFont boldSystemFontOfSize:14];
+    SenkoStyleSectionTitle(lab);
+    lab.text = title;
+    lab.numberOfLines = 2;
+    lab.lineBreakMode = NSLineBreakByWordWrapping;
+    [plate addSubview:lab];
+    wrap->title = lab;
+
+    UILabel *meta = [[[UILabel alloc] initWithFrame:CGRectZero] autorelease];
+    meta.backgroundColor = [UIColor clearColor];
+    meta.font = SenkoThemeIsIos16() ? SenkoFontBody(10, NO) : [UIFont systemFontOfSize:10];
+    SenkoStyleSectionMeta(meta);
+    meta.text = metaText;
+    meta.numberOfLines = 2;
+    meta.lineBreakMode = NSLineBreakByWordWrapping;
+    [plate addSubview:meta];
+    wrap->meta = meta;
+
     /* refresh and ping belong to a subscription or to the amneziawg profile */
     BOOL showActions = (subIdx >= 0) || manualHasAwg;
     /* the manual group keeps its own menu for the delete-all action */
     BOOL showMore = showActions || (subIdx < 0 && n > 0);
     BOOL subPingBusy = subIdx >= 0 &&
         [_pingingSubs containsObject:[NSNumber numberWithInt:subIdx]];
-    CGFloat cursor = CGRectGetWidth(plate.bounds) - actionRight - actionW;
-    if (showMore) {
-        moreX = cursor;
-        if (moreX < 0.0f) moreX = 0.0f;
-        cursor -= actionGap + actionW;
-    }
-    if (showActions) {
-        /* keep the action slots stable while a group is being pinged */
-        pingX = cursor;
-        cursor -= actionGap + actionW;
-        refreshX = cursor;
-        textW = refreshX - 12.0f;
-    } else if (showMore) {
-        textW = moreX - 12.0f;
-    } else {
-        textW = plateW - 24.0f;
-    }
-    if (textW < 48.0f) textW = 48.0f;
-
-    CGFloat textX = showFlag ? 48.0f : 12.0f;
-    if (showFlag) {
-        [plate addSubview:SenkoFlagBadge(flag, CGRectMake(10.0f, 6.0f, 30.0f, 28.0f))];
-    }
-    CGFloat labelWidth = textW - textX + 12.0f;
-    if (labelWidth < 42.0f) labelWidth = 42.0f;
-    UILabel *lab = [[[UILabel alloc] initWithFrame:CGRectMake(textX, 3,
-                                                               labelWidth, 29)] autorelease];
-    lab.backgroundColor = [UIColor clearColor];
-    lab.font = SenkoThemeIsIos16() ? SenkoFontBody(14, YES) : [UIFont boldSystemFontOfSize:14];
-    SenkoStyleSectionTitle(lab);
-    lab.text = title;
-    lab.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    lab.numberOfLines = 2;
-    lab.lineBreakMode = NSLineBreakByWordWrapping;
-    [plate addSubview:lab];
-
-    UILabel *meta = [[[UILabel alloc] initWithFrame:CGRectMake(textX, 31, labelWidth, 24)] autorelease];
-    meta.backgroundColor = [UIColor clearColor];
-    meta.font = SenkoThemeIsIos16() ? SenkoFontBody(10, NO) : [UIFont systemFontOfSize:10];
-    SenkoStyleSectionMeta(meta);
-    meta.text = metaText;
-    meta.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    meta.numberOfLines = 2;
-    meta.lineBreakMode = NSLineBreakByWordWrapping;
-    [plate addSubview:meta];
 
     if (showMore) {
         UIColor *iconTint = (SenkoThemeIsBoykisser() || SenkoThemeIsMiside())
@@ -1113,8 +1114,6 @@ static int SenkoSortRank(NSNumber *ms) {
             : kAccentBlue;
         if (showActions) {
             UIButton *ref = [UIButton buttonWithType:UIButtonTypeCustom];
-            ref.frame = CGRectMake(refreshX, actionY, actionW, actionH);
-            ref.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
             ref.contentMode = UIViewContentModeCenter;
             ref.imageView.contentMode = UIViewContentModeScaleAspectFit;
             [ref setImage:SenkoIconRefresh(iconPx, iconTint)
@@ -1128,10 +1127,9 @@ static int SenkoSortRank(NSNumber *ms) {
               forControlEvents:UIControlEventTouchUpInside];
             }
             [plate addSubview:ref];
+            wrap->refresh = ref;
 
             UIButton *ping = [UIButton buttonWithType:UIButtonTypeCustom];
-            ping.frame = CGRectMake(pingX, actionY, actionW, actionH);
-            ping.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
             ping.contentMode = UIViewContentModeCenter;
             ping.imageView.contentMode = UIViewContentModeScaleAspectFit;
             ping.hidden = NO;
@@ -1148,14 +1146,13 @@ static int SenkoSortRank(NSNumber *ms) {
                forControlEvents:UIControlEventTouchUpInside];
             }
             [plate addSubview:ping];
+            wrap->ping = ping;
         }
 
         UIButton *more = [UIButton buttonWithType:UIButtonTypeCustom];
-        more.frame = CGRectMake(moreX, actionY, actionW, actionH);
-        more.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
         more.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
         more.contentVerticalAlignment = UIControlContentVerticalAlignmentCenter;
-        [more setTitle:@"\u2022\u2022\u2022" forState:UIControlStateNormal];
+        [more setTitle:@"•••" forState:UIControlStateNormal];
         more.titleLabel.font = [UIFont boldSystemFontOfSize:compact ? 14.0f : 16.0f];
         SenkoStyleSectionGlyph(more);
         [more setTitleColor:iconTint forState:UIControlStateNormal];
@@ -1172,6 +1169,7 @@ static int SenkoSortRank(NSNumber *ms) {
            forControlEvents:UIControlEventTouchUpInside];
         }
         [plate addSubview:more];
+        wrap->more = more;
     }
     return wrap;
 }

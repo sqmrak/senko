@@ -5,6 +5,8 @@
 #import <arpa/inet.h>
 #import <dlfcn.h>
 #import <unistd.h>
+#include <fcntl.h>
+#include <notify.h>
 #include <math.h>
 #include <objc/message.h>
 #import "control_client.h"
@@ -18,6 +20,7 @@
 #import "update_install.h"
 #import "meow.h"
 #import "app_common.h"
+#import "crash_report.h"
 #include "../common/senko_paths.h"
 
 @interface UIViewController (SenkoRotation)
@@ -92,36 +95,108 @@ NSString *SenkoAboutAppReport(void) {
                 : @"senkotlsfix (safari tls1.3 when mobilesubstrate is installed)"];
 }
 
+BOOL SenkoVPNBadgeEnabled(void) {
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    if (![d objectForKey:SENKO_VPN_BADGE_KEY]) return YES;
+    return [d boolForKey:SENKO_VPN_BADGE_KEY];
+}
+
+void SenkoVPNBadgeSetEnabled(BOOL enabled) {
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    [d setBool:enabled forKey:SENKO_VPN_BADGE_KEY];
+    [d synchronize];
+    if (enabled) {
+        unlink(SENKO_VPN_BADGE_OFF_PATH);
+    } else {
+        int fd = open(SENKO_VPN_BADGE_OFF_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) close(fd);
+    }
+    /* the same darwin name senkod posts, so springboard repaints at once */
+    (void)notify_post("com.senko.vpnicon.changed");
+}
+
 /* uikit looks the main window up through the delegate on systems that expect a
    scene manifest, so the property is part of the launch contract, not decor */
 @interface AppDelegate : UIResponder <UIApplicationDelegate> {
     UIWindow *_window;
 }
 @property (nonatomic, retain) UIWindow *window;
+- (void)senkoLaunchSettled;
+- (void)senkoOfferSafeModeReport;
 @end
 
 @implementation AppDelegate
 @synthesize window = _window;
 - (BOOL)application:(UIApplication *)app didFinishLaunchingWithOptions:(NSDictionary *)opts {
     (void)app; (void)opts;
+    SenkoCrashStage("window");
     UIWindow *w = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
+    SenkoCrashStage("main controller");
     MainVC *vc = [[[MainVC alloc] init] autorelease];
     w.rootViewController = vc;
     self.window = w;
     [w release];
+    /* the launch is not over when this method returns: the first frame is
+       rendered by the commit that follows it, and that render is where a
+       core image or core ui fault lands. marking the launch good here would
+       call every one of those crashes a clean start */
+    SenkoCrashStage("first frame");
+    [CATransaction begin];
+    [CATransaction setCompletionBlock:^{
+        SenkoCrashLaunchComplete();
+        [self senkoOfferSafeModeReport];
+    }];
     [_window makeKeyAndVisible];
+    [CATransaction commit];
+    /* a screen that never finishes its first commit would stay in safe mode
+       forever, so a plain run loop backstop releases it either way */
+    [self performSelector:@selector(senkoLaunchSettled)
+               withObject:nil
+               afterDelay:6.0];
     return YES;
 }
+
+- (void)senkoLaunchSettled {
+    SenkoCrashLaunchComplete();
+    [self senkoOfferSafeModeReport];
+}
+
+/* safe mode is worth nothing if the person holding the phone cannot tell it
+   happened, so the run that recovers says so and offers the report */
+- (void)senkoOfferSafeModeReport {
+    static BOOL shown = NO;
+    if (shown || !SenkoCrashSafeMode()) return;
+    shown = YES;
+    NSString *body = [NSString stringWithFormat:
+                      SenkoLocalizedText(@"Senko failed to start %d times and "
+                                          "is running with the stock theme. The "
+                                          "report is in Logs."),
+                      SenkoCrashFailedLaunches()];
+    UIAlertView *a = [[[UIAlertView alloc]
+                       initWithTitle:SenkoLocalizedText(@"Safe mode")
+                             message:body
+                            delegate:nil
+                   cancelButtonTitle:SenkoLocalizedText(@"OK")
+                   otherButtonTitles:nil] autorelease];
+    [a show];
+}
+
 - (void)dealloc { [_window release]; [super dealloc]; }
 @end
 
 int main(int argc, char **argv) {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    SenkoCrashInstall();
+    SenkoCrashStage("tlsfix dlopen");
     if (!ExternalTlsfixInstalled())
         (void)dlopen(SENKO_USR_LIB "/senkotlsfix.dylib", RTLD_NOW | RTLD_GLOBAL);
+    SenkoCrashStage("localization");
     SenkoLocalizationInstall();
+    SenkoCrashStage("palette");
     InitPalette();
+    SenkoCrashStage("sfx hooks");
     SenkoMeowInstallHooks();
+    SenkoCrashStage("uikit");
     int rc = UIApplicationMain(argc, argv, nil, @"AppDelegate");
     [pool release];
     return rc;

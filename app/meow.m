@@ -264,11 +264,15 @@ static void SenkoMeowSwizzle(Class cls, SEL orig, SEL neo) {
 }
 
 @implementation UIApplication (SenkoMeow)
+/* the sender is classified before the action runs, never after: the edit menu
+   tears its callout bar down while performing cut, copy or paste, so the button
+   that sent the action is already deallocated when the original returns, and
+   asking a dead object for its class crashed the app on every paste */
 - (BOOL)senko_sendAction:(SEL)action to:(id)target from:(id)sender forEvent:(UIEvent *)event {
+    BOOL fromControl = sender && ([sender isKindOfClass:[UIControl class]] ||
+                                  [sender isKindOfClass:[UIBarButtonItem class]]);
     BOOL ok = [self senko_sendAction:action to:target from:sender forEvent:event];
-    if (sender && ([sender isKindOfClass:[UIControl class]] ||
-                   [sender isKindOfClass:[UIBarButtonItem class]]))
-        SenkoThemeSfxPlay();
+    if (fromControl) SenkoThemeSfxPlay();
     return ok;
 }
 @end

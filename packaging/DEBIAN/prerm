@@ -10,18 +10,26 @@ else
 fi
 PLIST=${JBROOT}/Library/LaunchDaemons/com.senko.senkod.plist
 KICK=/var/jb/usr/bin/senko-kick
+SENKOCTL=/var/jb/usr/bin/senkoctl
+KILLALL=${JBROOT}/usr/bin/killall
+[ -x "$KILLALL" ] || KILLALL=/usr/bin/killall
+[ -x "$KILLALL" ] || KILLALL=/bin/killall
 VPNICON_STATE=/var/mobile/Library/Preferences/com.senko.vpnicon.state
 AWG_ACTIVE_CONFIG=/var/run/senkoawgd.config
 UPDATE_AWG_MARKER=/var/run/senkoawgd.upgrade
+PF_CONF=/var/run/senko-pf.conf
 
-preserve_awg_for_upgrade() {
-  [ "$1" = upgrade ] || return 0
-  [ -x "$KICK" ] || return 0
+awg_is_up() {
+  [ -x "$KICK" ] || return 1
   status="$("$KICK" --awg-status 2>/dev/null || true)"
   case "$status" in
-    connecting*|connected*) ;;
-    *) return 0 ;;
+    connecting*|connected*) return 0 ;;
   esac
+  return 1
+}
+
+remember_awg_for_upgrade() {
+  [ "$1" = upgrade ] || return 0
   [ -s "$AWG_ACTIVE_CONFIG" ] || return 0
   config="$(sed -n '1p' "$AWG_ACTIVE_CONFIG" 2>/dev/null || true)"
   case "$config" in
@@ -29,17 +37,57 @@ preserve_awg_for_upgrade() {
       printf '%s\n' "$config" > "$UPDATE_AWG_MARKER"
       ;;
   esac
-  "$KICK" --awg-stop >/dev/null 2>&1 || true
+}
+
+# routes, the pf anchor and the utun belong to the daemon, and dpkg deletes the
+# binaries that know how to undo them moments after this script returns. asking
+# the daemon to disconnect while it is still on disk is the only clean teardown;
+# removing the package over a live tunnel used to leave the device with a
+# default route into a utun nobody owned any more, and nothing left installed
+# could turn it off again
+stop_tunnel() {
+  if awg_is_up; then
+    remember_awg_for_upgrade "$1"
+    "$KICK" --awg-stop >/dev/null 2>&1 || true
+  fi
+  if [ -S /var/tmp/senkod.sock ] && [ -x "$SENKOCTL" ]; then
+    "$SENKOCTL" DISCONNECT >/dev/null 2>&1 || true
+  fi
+}
+
+stop_daemon() {
+  launchctl unload "$PLIST" >/dev/null 2>&1 || true
+  launchctl remove com.senko.senkod >/dev/null 2>&1 || true
+  # SIGTERM lets senkod drop routes and rules before it exits
+  "$KILLALL" -TERM senkod >/dev/null 2>&1 || true
+  sleep 1
+  "$KILLALL" -TERM senkod >/dev/null 2>&1 || true
+  sleep 1
+  "$KILLALL" -9 senkod senkoawgd >/dev/null 2>&1 || true
+  # the go core holds the tunnel descriptor; the kernel drops every route bound
+  # to that utun as soon as the last descriptor closes
+  "$KILLALL" -9 senko-core >/dev/null 2>&1 || true
+}
+
+# only for a daemon that was already dead or wedged when this ran: the anchor is
+# senko's own and an empty one is exactly what a clean teardown leaves
+flush_pf_anchor() {
+  [ -f "$PF_CONF" ] || return 0
+  for pfctl in /var/jb/sbin/pfctl /var/jb/usr/sbin/pfctl /sbin/pfctl /usr/sbin/pfctl; do
+    [ -x "$pfctl" ] || continue
+    "$pfctl" -q -a com.apple/senko -F all >/dev/null 2>&1 || true
+    break
+  done
+  rm -f "$PF_CONF" >/dev/null 2>&1 || true
 }
 
 if [ "${SENKO_UPDATE:-0}" != "1" ]; then
-  preserve_awg_for_upgrade "$1"
+  stop_tunnel "$1"
+  stop_daemon
+  flush_pf_anchor
 fi
 
 printf '0\n' > "$VPNICON_STATE" 2>/dev/null || true
-if [ "${SENKO_UPDATE:-0}" != "1" ]; then
-  launchctl unload "$PLIST" >/dev/null 2>&1 || true
-fi
 
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
   # plain removal preserves user servers for a later reinstall

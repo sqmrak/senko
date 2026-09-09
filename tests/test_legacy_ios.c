@@ -1,5 +1,6 @@
 #include "legacy_ios.h"
 
+#include <stddef.h>
 #include <stdio.h>
 
 static int failed;
@@ -38,6 +39,22 @@ int main(void) {
     expect(NULL, 0, "null");
     expect("<key>ProductVersion</key><string></string>", 0, "empty value");
     expect("<key>ProductVersion</key><string>beta</string>", 0, "non-numeric value");
+
+    /* the binary plist fallback: only the kernel version is readable there */
+    struct { const char *release; int want; } darwin[] = {
+        { "11.0.0", 5 }, { "13.0.0", 6 }, { "14.0.0", 7 },
+        { "15.6.0", 9 }, { "16.7.0", 10 }, { "17.7.0", 11 },
+        { "18.7.0", 12 }, { "19.6.0", 13 }, { "21.6.0", 15 },
+        { "", 0 }, { "beta", 0 }, { NULL, 0 }
+    };
+    for (size_t i = 0; i < sizeof darwin / sizeof darwin[0]; ++i) {
+        int got = senko_ios_major_from_darwin(darwin[i].release);
+        if (got == darwin[i].want) continue;
+        fprintf(stderr, "FAIL darwin %s: want %d got %d\n",
+                darwin[i].release ? darwin[i].release : "(null)",
+                darwin[i].want, got);
+        failed = 1;
+    }
 
     if (failed) return 1;
     puts("all legacy_ios checks passed");

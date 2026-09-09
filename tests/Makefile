@@ -24,7 +24,7 @@ HOST_TESTS = test_ctl_server test_session_direct test_config_compat \
              test_transport_pick test_awg_config test_awg_handshake test_awg_tunnel test_awg_route \
              test_xray_json test_url_headers test_grpc_core test_transport_grpc test_hpack \
              test_app_proxy test_go_config test_net_safe test_legacy_ios \
-             test_subinfo test_profiles
+             test_subinfo test_profiles test_amnezia_bundle
 
 all: test
 
@@ -58,6 +58,7 @@ test: $(HOST_TESTS)
 	./test_legacy_ios
 	./test_subinfo
 	./test_profiles
+	./test_amnezia_bundle
 
 test_go_config: test_go_config.c $(DAEMON)/go_config.c $(CFG_SRC)
 	$(CC) $(CFLAGS) $(TLS_CFLAGS) -I$(DAEMON) test_go_config.c \
@@ -82,6 +83,11 @@ test_grpc_core: test_grpc_core.c $(CORE)/grpc_core.c $(CORE)/grpc_core.h
 
 test_awg_config: test_awg_config.c $(CORE)/awg_config.c $(CORE)/awg_config.h $(CORE)/b64.c $(CORE)/b64.h
 	$(CC) $(CFLAGS) test_awg_config.c $(CORE)/awg_config.c $(CORE)/b64.c -o $@
+
+test_amnezia_bundle: test_amnezia_bundle.c amnezia_fixture.inc $(CORE)/amnezia_bundle.c \
+                     $(CORE)/amnezia_bundle.h $(CORE)/awg_config.c $(CORE)/b64.c $(CJSON)
+	$(CC) $(CFLAGS) test_amnezia_bundle.c $(CORE)/amnezia_bundle.c $(CORE)/awg_config.c \
+	  $(CORE)/b64.c $(CJSON) -o $@ -lz
 
 test_awg_handshake: test_awg_handshake.c $(CORE)/awg_handshake.c $(CORE)/awg_handshake.h \
                     $(CORE)/awg_config.c $(CORE)/b64.c $(CORE)/reality_crypto.c

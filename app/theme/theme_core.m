@@ -1,5 +1,6 @@
 #import "theme_def.h"
 #import "ui_theme.h"
+#import "../crash_report.h"
 
 #include <string.h>
 
@@ -338,6 +339,26 @@ void SenkoThemeSetLight(BOOL light) {
 }
 
 void InitPalette(void) {
+    /* two launches in a row died before the first frame, so the theme is the
+       first thing to take out of the picture: it is what decides whether the
+       ui asks uikit for live glass and custom decor. the choice on disk is
+       deliberately left alone, so the user gets their theme back as soon as
+       one launch succeeds */
+    if (SenkoCrashSafeMode()) {
+        const SenkoThemeDef *plain = SenkoThemeFind(SenkoThemeDefaultId());
+        if (plain) {
+            [gThemeId release];
+            gThemeId = [[NSString stringWithUTF8String:plain->tid] copy];
+            gCur = plain;
+            RefreshCaps();
+            gLight = NO;
+            if (gCaps & SenkoThemeCapLightOnly) gLight = YES;
+            if (gCaps & SenkoThemeCapDarkOnly) gLight = NO;
+            ApplyCurrentPalette();
+            return;
+        }
+    }
+
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     NSString *saved = [d stringForKey:SenkoThemeIdKey];
     const SenkoThemeDef *def = NULL;

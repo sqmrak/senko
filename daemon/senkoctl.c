@@ -1,6 +1,7 @@
 #define _DEFAULT_SOURCE
 
 #include "core/b64.h"
+#include "../common/senko_paths.h"
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -259,10 +260,40 @@ static int join_args(char **argv, int start, int argc, char *dst, size_t cap) {
 static void usage(const char *a0) {
     fprintf(stderr,
         "usage: %s [-s sock] <command>\n"
-        "  status | list | disconnect\n"
+        "  status | list | disconnect | crash\n"
         "  connect <idx> | ping <idx> | refresh <sub-idx> | del <idx>\n"
         "  fetch <url> | addsrv <link> | addsub <url> <name...> | raw <verb...>\n"
         "sock defaults to $SENKOD_SOCK or " DEFAULT_SOCK "\n", a0);
+}
+
+static int dump_file(const char *label, const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    printf("=== %s (%s)\n", label, path);
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0)
+        fwrite(buf, 1, n, stdout);
+    fclose(f);
+    printf("\n");
+    return 1;
+}
+
+/* the ui used to be the only reader of these files, which is useless on a
+   device where the ui is what will not start. this needs no daemon and no
+   socket, so it answers even when nothing else on the device does */
+static int run_crash(void) {
+    int found = 0;
+    found |= dump_file("last crash", SENKO_CRASH_LAST);
+    found |= dump_file("previous crash", SENKO_CRASH_PREV);
+    found |= dump_file("launch stage", SENKO_CRASH_STAGE);
+    found |= dump_file("last screen", SENKO_CRASH_SCREEN);
+    found |= dump_file("failed launches", SENKO_CRASH_FAILS);
+    if (!found) {
+        printf("no crash report under %s\n", SENKO_CRASH_DIR);
+        return 1;
+    }
+    return 0;
 }
 
 int main(int argc, char **argv) {
@@ -279,6 +310,8 @@ int main(int argc, char **argv) {
 
     const char *cmd = argv[i++];
     char line[1200];
+
+    if (strcmp(cmd, "crash") == 0) return run_crash();
 
     if (strcmp(cmd, "fetch") == 0) {
         if (i >= argc) { usage(argv[0]); return 2; }

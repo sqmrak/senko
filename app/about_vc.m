@@ -3,6 +3,7 @@
 #include <objc/message.h>
 #import "ui_theme.h"
 #import "app_common.h"
+#import "crash_report.h"
 
 @implementation AboutVC {
 
@@ -20,7 +21,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = SenkoLocalizedText(@"about");
+    self.title = SenkoLocalizedText(@"About");
     if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
         ((void (*)(id, SEL, NSUInteger))objc_msgSend)(self, @selector(setEdgesForExtendedLayout:), 0);
     SenkoApplyScreenChrome(self.view);
@@ -234,6 +235,7 @@
 }
 
 - (void)viewWillAppear:(BOOL)animated {
+    SenkoCrashScreen("about");
     [super viewWillAppear:animated];
     SenkoApplyScreenChrome(self.view);
     [self layoutAbout];

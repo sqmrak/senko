@@ -21,8 +21,19 @@ senko classifies and handles the following links pasted or scanned into the inte
   * `vless + tcp + tls + xtls-rprx-vision` (flow optional for plain tls)
   * `vless + websocket` (none / tls / reality; no vision/flow on ws)
   * `vless + xhttp` (modes: auto, stream-one, stream-up, packet-up; over none / tls / reality)
-* **amneziawg** imported from standard `.conf` files
+* **amneziawg** imported from standard `.conf` files, and from the amnezia
+  client's own share: a `vpn://` link, a `.vpn` file, or the plain json behind
+  both. the amneziawg config inside the bundle is what senko dials
 * **grpc** over the bundled http/2 transport core
+
+amneziawg profiles follow the amneziawg 1.5 and 2.0 field set: `Jc`, `Jmin`,
+`Jmax`, `S1`-`S4`, `H1`-`H4` with ranges, the `I1`-`I5` special junk packets,
+and the `J1`-`J3` controlled junk packets with `Itime`, which 1.5 added and 2.0
+dropped. the junk train goes out in that order and the initiation follows it.
+`HeaderProtectionKey`, `RandomTrailers = on` and a non-zero
+`ContentPaddingAddition` change the wire in ways this build does not produce, so
+a profile carrying one is refused by name instead of failing later as a
+handshake nobody can explain.
 
 ### subscription formats
 
@@ -59,6 +70,10 @@ compressed grpc messages and unsupported transports stay rejected at validation.
 * **control socket**: `/var/tmp/senkod.sock` (`0660`, root/mobile); every command requires the per-launch token in `/var/tmp/senkod.token`
 * **system log**: `/var/log/senko-system.log` (combined `senkod` + `senkoawgd`, filterable in the ui; the ui reads it through the control socket when the app is not allowed to open `/var/log`)
 * **device id**: `/var/mobile/Library/Preferences/com.senko.hwid` (removed only on `purge`)
+* **app fault report**: `/var/mobile/Library/Preferences/Senko/previous-crash.log`
+  and `launch-stage.log`. a jailbroken app reaches no crash service, so the ui
+  writes its own fatal signal or exception there and shows it on the next launch
+  under the `app` filter of the logs screen
 
 subscription fetches and proxy probes reject loopback, private, link-local,
 documentation, multicast, cgnat and mixed public/private dns answers for both
