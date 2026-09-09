@@ -1,5 +1,6 @@
 #import "app_common.h"
 #import "ui_theme.h"
+#import "crash_report.h"
 #include "../daemon/core/b64.h"
 #include <math.h>
 #include <string.h>
@@ -30,6 +31,11 @@ static NSString *SenkoBytes(unsigned long long value) {
     return [NSString stringWithFormat:@"%@ %@", number, [units objectAtIndex:unit]];
 }
 
+@interface SubscriptionInfoVC ()
+- (void)applyChrome;
+- (void)themeDidChange:(NSNotification *)n;
+@end
+
 @implementation SubscriptionInfoVC {
     SenkoSub *_sub;
 }
@@ -40,6 +46,7 @@ static NSString *SenkoBytes(unsigned long long value) {
 }
 
 - (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     [_sub release];
     [super dealloc];
 }
@@ -47,10 +54,43 @@ static NSString *SenkoBytes(unsigned long long value) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = SenkoLocalizedText(@"Subscription details");
-    self.tableView.backgroundColor = kBG;
     self.navigationItem.leftBarButtonItem = [[[UIBarButtonItem alloc]
         initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self
         action:@selector(donePressed)] autorelease];
+    [self applyChrome];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(themeDidChange:)
+                                                 name:SenkoThemeDidChangeNotification
+                                               object:nil];
+}
+
+/* this screen set a background colour and nothing else, so it kept the system
+   chrome: a grouped table paints its own backgroundView over whatever colour
+   sits underneath, and an unstyled navigation bar stays light with a blue
+   button. the dark cells against all of that is what looked broken on ipad,
+   where the sheet is large enough to show most of it */
+- (void)applyChrome {
+    UITableView *tv = self.tableView;
+    if ([tv respondsToSelector:@selector(setBackgroundView:)])
+        tv.backgroundView = nil;
+    tv.backgroundColor = kBG;
+    tv.separatorColor = SenkoThemeIsLight()
+        ? [UIColor colorWithWhite:0 alpha:0.14f]
+        : [UIColor colorWithWhite:1 alpha:0.16f];
+    if (self.navigationController)
+        StyleNavBarClassic(self.navigationController);
+}
+
+- (void)themeDidChange:(NSNotification *)n {
+    (void)n;
+    [self applyChrome];
+    [self.tableView reloadData];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    SenkoCrashScreen("subscription details");
+    [self applyChrome];
 }
 
 - (void)donePressed {

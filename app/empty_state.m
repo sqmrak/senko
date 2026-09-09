@@ -209,9 +209,14 @@ static void StyleActionButton(UIButton *button) {
     CGFloat buttonH = 44.0f;
     CGFloat gap = 10.0f;
     CGFloat bottom = b.size.height - gap;
-    CGFloat buttonW = (w - gap) * 0.5f;
-    pasteButton.frame = CGRectMake(side, bottom - buttonH, buttonW, buttonH);
-    scanButton.frame = CGRectMake(side + buttonW + gap, bottom - buttonH,
+/* a pair of 44pt buttons stretched across an ipad reads as two slabs rather
+   than two buttons, so the row keeps a sane width and centres itself */
+    CGFloat rowW = w;
+    if (rowW > 420.0f) rowW = 420.0f;
+    CGFloat rowX = (b.size.width - rowW) * 0.5f;
+    CGFloat buttonW = (rowW - gap) * 0.5f;
+    pasteButton.frame = CGRectMake(rowX, bottom - buttonH, buttonW, buttonH);
+    scanButton.frame = CGRectMake(rowX + buttonW + gap, bottom - buttonH,
                                   buttonW, buttonH);
 /* a sublayer does not follow its view, so the fill has to be recut here or it
    keeps the width the button had before the rotation */

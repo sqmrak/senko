@@ -549,7 +549,25 @@ static int SenkoSortRank(NSNumber *ms) {
     _emptyState.hidden = !empty;
     if (!empty) return;
 
-    _emptyState.frame = _table.frame;
+/* a subscription with no servers in it still draws its section header, and the
+   panel used to be laid over the whole table: on a screen tall enough to show
+   both, its text landed on top of those headers. it starts below whatever the
+   list has actually drawn instead */
+    CGRect area = _table.frame;
+    CGFloat used = _table.contentSize.height - _table.contentOffset.y;
+    if (used < 0.0f) used = 0.0f;
+    if (used > 0.0f) {
+        CGFloat room = area.size.height - used;
+        /* under a list that already fills the screen there is nowhere to put
+           the panel that would not cover it */
+        if (room < 180.0f) {
+            _emptyState.hidden = YES;
+            return;
+        }
+        area.origin.y += used;
+        area.size.height = room;
+    }
+    _emptyState.frame = area;
     [self.view bringSubviewToFront:_emptyState];
     [self bringMainChromeToFront];
     [_emptyState setHWID:_deviceHWID];
