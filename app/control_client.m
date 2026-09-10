@@ -366,9 +366,46 @@ static NSString *senkoDecodeBlobReply(NSString *reply) {
     }];
 }
 
+/* the helper writes its own account with mode 0644, so the app can read it
+   without a daemon: when the daemon is what failed to start, that file is the
+   only thing that knows why, and telling the user to go and open it is not an
+   answer on a phone */
+static NSString *SenkoKickLogTail(void) {
+    NSData *blob = [NSData dataWithContentsOfFile:@"/var/log/senko-kick.log"];
+    if (![blob length]) return nil;
+    NSUInteger want = [blob length] > 4096 ? 4096 : [blob length];
+    NSData *slice = [blob subdataWithRange:NSMakeRange([blob length] - want, want)];
+    NSString *text = [[[NSString alloc] initWithData:slice
+                                            encoding:NSUTF8StringEncoding] autorelease];
+    if (![text length]) return nil;
+    NSArray *lines = [text componentsSeparatedByString:@"\n"];
+    for (NSInteger i = (NSInteger)[lines count] - 1; i >= 0; --i) {
+        NSString *line = [[lines objectAtIndex:i] stringByTrimmingCharactersInSet:
+                          [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (![line length]) continue;
+        if ([line hasPrefix:@"senko-kick: "]) line = [line substringFromIndex:12];
+        return [line length] ? line : nil;
+    }
+    return nil;
+}
+
 /* senko-kick answers with the reason it gave up, and a bare number in the
-   alert told the user nothing they could act on */
-static NSString *SenkoKickFailureText(int code) {
+   alert told the user nothing they could act on. it only ever returns 0, 1, 2,
+   3 or 5: anything else means it never got to return at all */
+static NSString *SenkoKickFailureText(int status, pid_t reaped) {
+    NSString *tail = SenkoKickLogTail();
+    if (reaped <= 0)
+        return @"senko-kick could not be waited for";
+    if (WIFSIGNALED(status)) {
+        int sig = WTERMSIG(status);
+        if (![tail length])
+            return [NSString stringWithFormat:
+                    @"senko-kick was killed (signal %d) before it logged anything: "
+                     "this jailbreak did not let it run as root", sig];
+        return [NSString stringWithFormat:@"senko-kick was killed (signal %d): %@",
+                sig, tail];
+    }
+    int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
     switch (code) {
         case 1: return @"senko-kick is not setuid root: reinstall the package";
         case 2: return @"senkod is missing: reinstall the package";
@@ -376,6 +413,8 @@ static NSString *SenkoKickFailureText(int code) {
         case 5: return @"senkod did not open its control socket";
         default: break;
     }
+    if ([tail length])
+        return [NSString stringWithFormat:@"daemon start failed (%d): %@", code, tail];
     return [NSString stringWithFormat:@"daemon start failed (%d)", code];
 }
 
@@ -408,8 +447,7 @@ static NSString *SenkoKickFailureText(int code) {
                     ok = YES;
                     detail = @"daemon started";
                 } else {
-                    int code = waited > 0 && WIFEXITED(st) ? WEXITSTATUS(st) : -1;
-                    detail = SenkoKickFailureText(code);
+                    detail = SenkoKickFailureText(st, waited);
                     break;
                 }
             }

@@ -129,6 +129,16 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"Paste from clipboard", @"Вставить из буфера");
     SenkoAddTranslation(@"Paste", @"Вставить");
     SenkoAddTranslation(@"Safe mode", @"Безопасный режим");
+    SenkoAddTranslation(@"senko-kick could not be waited for",
+                        @"не удалось дождаться senko-kick");
+    SenkoAddTranslation(@"senko-kick is not setuid root: reinstall the package",
+                        @"у senko-kick нет бита setuid root: переустановите пакет");
+    SenkoAddTranslation(@"senkod is missing: reinstall the package",
+                        @"senkod отсутствует: переустановите пакет");
+    SenkoAddTranslation(@"another daemon start is still running",
+                        @"другой запуск демона ещё выполняется");
+    SenkoAddTranslation(@"senkod did not open its control socket",
+                        @"senkod не открыл управляющий сокет");
     SenkoAddTranslation(@"This address only hands back a link to itself: the provider has not published a subscription feed behind it. Ask them for the real subscription link.",
                         @"По этому адресу отдаётся ссылка на него же: провайдер не опубликовал за ним подписку. Попросите у него настоящую ссылку на подписку.");
     SenkoAddTranslation(@"The Happ crypt5 bundle on this page could not be opened. It is either damaged or sealed with a key this build does not carry.",
