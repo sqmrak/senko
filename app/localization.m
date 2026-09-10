@@ -403,6 +403,7 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"Transport", @"Транспорт");
     SenkoAddTranslation(@"Security", @"Защита");
     SenkoAddTranslation(@"Latency", @"Задержка");
+    SenkoAddTranslation(@"TCP latency", @"Задержка TCP");
     SenkoAddTranslation(@"Source", @"Источник");
     SenkoAddTranslation(@"Link", @"Ссылка");
     SenkoAddTranslation(@"loading", @"загрузка");

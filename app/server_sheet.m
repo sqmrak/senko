@@ -200,7 +200,10 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     [self addRowTitle:@"Protocol" value:server->proto store:NULL];
     [self addRowTitle:@"Transport" value:server->net store:NULL];
     [self addRowTitle:@"Security" value:server->security store:NULL];
-    [self addRowTitle:@"Latency"
+/* the row carries a tcp handshake to the server's own address, not a request
+   carried through the tunnel the way happ and v2ray report theirs, and a bare
+   "latency" made the two look like the same measurement */
+    [self addRowTitle:@"TCP latency"
                 value:ping ? [NSString stringWithFormat:@"%d ms", [ping intValue]] : nil
                 store:&_pingValue];
     [self addRowTitle:@"Source" value:source store:NULL];

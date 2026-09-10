@@ -120,9 +120,10 @@
 
     _sponsorCopy = [[UIButton buttonWithType:UIButtonTypeCustom] retain];
     _sponsorCopy.titleLabel.font = [UIFont boldSystemFontOfSize:12.0f];
+    _sponsorCopy.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
     [_sponsorCopy setTitleColor:kAccentBlue forState:UIControlStateNormal];
     _sponsorCopy.backgroundColor = [kAccentBlue colorWithAlphaComponent:0.12f];
-    _sponsorCopy.layer.cornerRadius = 12.0f;
+    _sponsorCopy.layer.cornerRadius = 14.0f;
     _sponsorCopy.layer.borderWidth = 0.5f;
     _sponsorCopy.layer.borderColor = [kAccentBlue colorWithAlphaComponent:0.30f].CGColor;
     [_sponsorCopy addTarget:self action:@selector(sponsorCopyPressed)
@@ -235,7 +236,8 @@
 
     CGFloat sponsorH = 34.0f;
     CGFloat linkH = 30.0f;
-    CGFloat infoH = bodySz.height + sponsorH + linkH + 34.0f;
+    CGFloat copyH = 28.0f;
+    CGFloat infoH = bodySz.height + sponsorH + linkH + copyH + 40.0f;
     CGFloat infoY = CGRectGetMaxY(_card.frame) + 12.0f;
     _info.frame = CGRectMake(contentX + side, infoY, cardW, infoH);
     _infoGrad.frame = CGRectMake(0, 0, cardW, infoH);
@@ -244,14 +246,14 @@
                                       14.0f + bodySz.height,
                                       textW,
                                       sponsorH);
-    CGFloat copyW = 108.0f;
-    if (copyW > textW - 60.0f) copyW = textW * 0.4f;
+/* the button used to sit beside the address and clip its own russian title to
+   "Копиро...ссылку"; the address gets the full width and the button its own row */
     _sponsorLink.frame = CGRectMake(textPad,
                                     14.0f + bodySz.height + sponsorH,
-                                    textW - copyW - 8.0f, linkH);
-    _sponsorCopy.frame = CGRectMake(textPad + textW - copyW,
-                                    16.0f + bodySz.height + sponsorH,
-                                    copyW, 24.0f);
+                                    textW, linkH);
+    _sponsorCopy.frame = CGRectMake(textPad,
+                                    14.0f + bodySz.height + sponsorH + linkH + 4.0f,
+                                    textW, copyH);
 
     BOOL light = SenkoThemeIsLight();
     if (SenkoThemeIsIos26()) {
