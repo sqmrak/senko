@@ -17,16 +17,50 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>09102026-patch3-nightly</string>
+    <string>09102026-patch4-nightly</string>
 	<key>CFBundleVersion</key>
-	<string>36</string>
+	<string>37</string>
     <key>CFBundleIconFile</key>
     <string>Icon.png</string>
+    <!-- one file per slot: springboard scales anything else into place and
+         then draws the pressed state at the slot's own rect, which leaves the
+         icon sitting outside its own highlight -->
     <key>CFBundleIconFiles</key>
     <array>
         <string>Icon.png</string>
         <string>Icon@2x.png</string>
+        <string>Icon-72.png</string>
+        <string>Icon-72@2x.png</string>
+        <string>Icon-60@2x.png</string>
+        <string>Icon-60@3x.png</string>
+        <string>Icon-76.png</string>
+        <string>Icon-76@2x.png</string>
+        <string>Icon-83.5@2x.png</string>
     </array>
+    <key>CFBundleIcons</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>Icon-60@2x.png</string>
+                <string>Icon-60@3x.png</string>
+            </array>
+        </dict>
+    </dict>
+    <key>CFBundleIcons~ipad</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>Icon-60@2x.png</string>
+                <string>Icon-76.png</string>
+                <string>Icon-76@2x.png</string>
+                <string>Icon-83.5@2x.png</string>
+            </array>
+        </dict>
+    </dict>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>NSCameraUsageDescription</key>
