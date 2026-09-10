@@ -81,9 +81,7 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"Save a config file to Documents", @"Сохранить файл конфигурации в Documents");
     SenkoAddTranslation(@"Validate, then replace configuration", @"Проверить и заменить конфигурацию");
     SenkoAddTranslation(@"Choose a Senko .deb package", @"Выбрать пакет Senko .deb");
-    SenkoAddTranslation(@"All apps and system traffic", @"Все приложения и системный трафик");
     SenkoAddTranslation(@"Manually added profiles only", @"Только добавленные вручную профили");
-    SenkoAddTranslation(@"Senko sends device traffic through the selected profile. The local proxy is available only on this device.", @"Senko направляет трафик устройства через выбранный профиль. Локальный прокси доступен только на этом устройстве.");
     SenkoAddTranslation(@"Hide links only changes what is shown on screen. Backups keep the complete configuration.", @"Скрытие ссылок влияет только на экран. В резервной копии сохраняется полная конфигурация.");
     SenkoAddTranslation(@"validated import", @"импорт с проверкой");
     SenkoAddTranslation(@"Configuration backup", @"Резервная копия");
@@ -131,6 +129,20 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"Paste from clipboard", @"Вставить из буфера");
     SenkoAddTranslation(@"Paste", @"Вставить");
     SenkoAddTranslation(@"Safe mode", @"Безопасный режим");
+    SenkoAddTranslation(@"Copy link", @"Копировать ссылку");
+    SenkoAddTranslation(@"Copied", @"Скопировано");
+    SenkoAddTranslation(@"Whole device, set up by the root daemon",
+                        @"Всё устройство, настраивает root-демон");
+    SenkoAddTranslation(@"Routing is not a switch. Senko always carries every app "
+                         "and every system connection, because senkod runs as root on "
+                         "the jailbreak and rewrites the system routes itself, so there "
+                         "is nothing to configure outside this app. The local proxy is "
+                         "reachable only from this device.",
+                        @"Маршрутизация — не переключатель. Senko всегда ведёт весь "
+                         "трафик приложений и системы, потому что senkod работает от "
+                         "root на джейлбрейке и сам переписывает системные маршруты: "
+                         "настраивать что-то вне приложения не нужно. Локальный прокси "
+                         "доступен только с этого устройства.");
     SenkoAddTranslation(@"Senko failed to start %d times and is running with "
                          "the stock theme. The report is in Logs.",
                         @"Senko не смог запуститься %d раза и работает со "

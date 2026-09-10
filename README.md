@@ -40,7 +40,11 @@ handshake nobody can explain.
 refresh / add-subscription accepts:
 
 * classic uri lists (`vless://…` one per line, optionally base64-wrapped)
-* `happ://crypt` … `happ://crypt4` deep links (rsa unwrap to vless/socks/http; `crypt5` not yet)
+* `happ://crypt` … `happ://crypt4` deep links (rsa unwrap to vless/socks/http; `crypt5` not yet). the
+  action word the share buttons put in front of the payload (`happ://add/…`,
+  `happ://install-config/…`, `happ://subscription/…`) is stripped before decoding.
+  a deep link that unwraps to nothing but a panel url is registered as a
+  subscription and pulled once, instead of being rejected as a node nobody can dial
 * **xray-core / v2rayn json** - a single config object or an array of configs with `outbounds` (liberty vpn and similar panels). supported vless outbounds are imported; freedom/blackhole/dns and unsupported transports (hysteria, …) are skipped
 * **clash / clash-meta yaml** - the `proxies:` block, block and flow style. `vless`, `socks5`, `http` and `https` entries are imported with their `reality-opts`, `ws-opts` and `grpc-opts`; `ss`, `vmess`, `trojan` and `hysteria` entries are skipped because there is no transport for them
 * **shadowrocket / surge ini** - the `[Proxy]` section, same supported set
@@ -52,6 +56,11 @@ type` when it is none of the above.
 node names are kept whole up to 255 bytes and shortened on a codepoint boundary.
 panels that stamp the same banner in front of every node have that shared opening
 dropped from the row label, so a section does not read as one repeated server.
+
+refreshes go out as `Happ/3.26.1` so panels that only answer known clients answer
+at all. a panel that replies to that name with a happ bundle senko cannot open
+(`crypt5`) is asked once more as `Senko/2`, which is what makes it serve the plain
+feed; a subscription carrying its own `User-Agent` header is left alone.
 
 panels that bind a subscription to a device (remnawave and similar) are sent
 `x-hwid`, `x-device-os`, `x-ver-os` and `x-device-model`. the id lives in

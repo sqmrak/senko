@@ -6,7 +6,7 @@
 #import "control_client.h"
 
 #define SENKO_SOCK @"/var/tmp/senkod.sock"
-#define SENKO_VERSION @"v09092026-patch4-nightly"
+#define SENKO_VERSION @"v09102026-nightly"
 #define SENKO_HIDE_LINKS_KEY @"SenkoHideServerLinks"
 #define SENKO_PINNED_SUB_URL_KEY @"SenkoPinnedSubscriptionURL"
 #define SENKO_AWG_PROFILE_KEY @"SenkoAWGProfilePath"
@@ -33,6 +33,9 @@ typedef NS_ENUM(NSInteger, SenkoBackendKind) {
 };
 
 NSString *SenkoAboutAppReport(void);
+/* one place for the shop address, so the about screen can print it, copy it and
+   open it without three copies of the same string drifting apart */
+NSString *SenkoSponsorURL(void);
 /* the springboard badge is a user choice because on some firmwares the
    status bar drops the wifi glyph to make room for it */
 BOOL SenkoVPNBadgeEnabled(void);

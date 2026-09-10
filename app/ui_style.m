@@ -697,8 +697,12 @@ CGRect SenkoViewBounds(UIView *view) {
 void SenkoApplyScreenChrome(UIView *root) {
     if (!root) return;
     UIView *old = [root viewWithTag:kSenkoScreenBgTag];
+/* builds before the backdrop view left the gradient as a bare sublayer, and a
+   theme change would otherwise stack a second one on top of it. a layer that
+   backs a view has a delegate and must never be pulled out from under it */
     NSArray *subs = [NSArray arrayWithArray:root.layer.sublayers];
     for (CALayer *L in subs) {
+        if (L.delegate) continue;
         if ([L.name isEqualToString:@"bgGrad"] || [L.name isEqualToString:@"vgrad"])
             [L removeFromSuperlayer];
     }
@@ -708,6 +712,7 @@ void SenkoApplyScreenChrome(UIView *root) {
         AddVGradient(root, kBG, kBGBot);
         return;
     }
+    [[root viewWithTag:kSenkoBackdropTag] removeFromSuperview];
     BOOL light = SenkoThemeIsLight();
     NSString *name = light ? @"ios26-bg-light" : @"ios26-bg-dark";
     UIImage *img = [UIImage imageNamed:[name stringByAppendingString:@".jpg"]];

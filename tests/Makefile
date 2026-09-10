@@ -24,7 +24,7 @@ HOST_TESTS = test_ctl_server test_session_direct test_config_compat \
              test_transport_pick test_awg_config test_awg_handshake test_awg_tunnel test_awg_route \
              test_xray_json test_url_headers test_grpc_core test_transport_grpc test_hpack \
              test_app_proxy test_go_config test_net_safe test_legacy_ios \
-             test_subinfo test_profiles test_amnezia_bundle
+             test_subinfo test_profiles test_amnezia_bundle test_happ_links
 
 all: test
 
@@ -58,6 +58,7 @@ test: $(HOST_TESTS)
 	./test_legacy_ios
 	./test_subinfo
 	./test_profiles
+	./test_happ_links
 	./test_amnezia_bundle
 
 test_go_config: test_go_config.c $(DAEMON)/go_config.c $(CFG_SRC)
@@ -205,6 +206,9 @@ test_ctl_server: test_ctl_server.c $(DAEMON)/ctl_server.c $(CORE)/ctl_engine.c \
 
 test_profiles: test_profiles.c $(CFG_SRC)
 	$(CC) $(CFLAGS) $(TLS_CFLAGS) test_profiles.c $(CFG_SRC) -o $@ $(TLS_LDFLAGS)
+
+test_happ_links: test_happ_links.c $(CFG_SRC)
+	$(CC) $(CFLAGS) $(TLS_CFLAGS) test_happ_links.c $(CFG_SRC) -o $@ $(TLS_LDFLAGS)
 
 clean:
 	rm -f $(HOST_TESTS) sub_audit fuzz_uri fuzz_json fuzz_http fuzz_h2_grpc fuzz_wire fuzz_ws fuzz_ws

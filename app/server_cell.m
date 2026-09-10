@@ -284,6 +284,21 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
     CGFloat detailW = chevronX - textX - 10.0f;
     if (textW < 42.0f) textW = 42.0f;
     if (detailW < 42.0f) detailW = 42.0f;
+    if (plateW >= 520.0f) {
+/* a wide ipad row left a third of its width empty under the name, so the
+   endpoint and the transport share one line there instead of stacking, and the
+   whole block sits centred rather than pinned to the top edge */
+        CGFloat extra = _unsupported.hidden ? 0.0f : 13.0f;
+        CGFloat blockH = 24.0f + 16.0f + extra;
+        CGFloat top = floorf((plateH - blockH) * 0.5f);
+        if (top < 2.0f) top = 2.0f;
+        CGFloat split = floorf(detailW * 0.56f);
+        _title.frame = CGRectMake(textX, top, textW, 22);
+        _detail.frame = CGRectMake(textX, top + 24.0f, split - 10.0f, 15);
+        _transport.frame = CGRectMake(textX + split, top + 24.0f, detailW - split, 15);
+        _unsupported.frame = CGRectMake(textX, top + 41.0f, detailW, 12);
+        return;
+    }
     _title.frame = CGRectMake(textX, 2, textW, 22);
     _detail.frame = CGRectMake(textX, 24, detailW, 14);
     _transport.frame = CGRectMake(textX, 38, detailW, 13);

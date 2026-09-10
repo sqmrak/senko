@@ -267,6 +267,11 @@
     [self.view setNeedsLayout];
     [self.view layoutIfNeeded];
     [self layoutMainChrome];
+    /* the spacer the collapse is measured against is a different height in the
+       new orientation, and the two column layout has none at all, so the stored
+       progress belongs to a screen that no longer exists */
+    _listHeaderProgress = 0.0f;
+    [self scrollViewDidScroll:_table];
     [_revealedRows removeAllObjects];
     if (_boyField && SenkoThemeIsBoykisser())
         [self syncBoykisserField];
@@ -297,9 +302,10 @@
                                                  name:SenkoThemeDidChangeNotification
                                                object:nil];
     /* core animation drops layer animations when the app is backgrounded, so
-       the connecting pulse has to be reinstalled on the way back */
+       the connecting pulse has to be reinstalled on the way back. the notify
+       centre passes the notification, which -applyState does not take */
     [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(applyState)
+                                             selector:@selector(appDidBecomeActive:)
                                                  name:UIApplicationDidBecomeActiveNotification
                                                object:nil];
 
@@ -460,6 +466,11 @@
     }];
 }
 
+
+- (void)appDidBecomeActive:(NSNotification *)n {
+    (void)n;
+    [self applyState];
+}
 
 - (void)settingsPressed {
     [self dismissCurrentActionSheetAnimated:YES];

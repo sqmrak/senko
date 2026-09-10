@@ -72,15 +72,40 @@ static void SetFrame(UIView *view, CGRect frame) {
     view.center = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
 }
 
+/* a landscape ipad has room for the card and the list next to each other. the
+   stacked phone layout left 300pt of screen empty on both sides and collapsed
+   the card for a list that had never run out of height */
+static BOOL IsSplit(CGFloat width, CGFloat height) {
+    return IsPad() && width > height && width >= 900.0f;
+}
+
 static CGFloat ContentWidth(CGFloat width, CGFloat height) {
     BOOL land = width > height;
     if (IsPad()) {
-        CGFloat cap = land ? 720.0f : 640.0f;
+        if (IsSplit(width, height)) {
+            CGFloat want = width - 56.0f;
+            return want < 320.0f ? width : want;
+        }
+        CGFloat cap = land ? 720.0f : 700.0f;
         CGFloat want = width - (land ? 80.0f : 56.0f);
         return want > cap ? cap : want;
     }
     if (land && width > 640.0f) return 560.0f;
     return width;
+}
+
+/* width of the card column; the list takes what is left of the content band */
+static CGFloat SplitLeftWidth(CGFloat contentW) {
+    CGFloat want = contentW * 0.36f;
+    if (want < 320.0f) want = 320.0f;
+    if (want > 440.0f) want = 440.0f;
+    return want;
+}
+
+BOOL SenkoHomeUsesSplitColumns(UIView *root) {
+    if (!root) return NO;
+    CGRect b = root.bounds;
+    return IsSplit(b.size.width, b.size.height);
 }
 
 static CGFloat SideInset(CGFloat width) {
@@ -449,16 +474,20 @@ CGPoint SenkoHomeOrbCenter(const SenkoHomeChrome *ui) {
 
 void SenkoHomeLayout(UIView *root, const SenkoHomeChrome *ui, CGFloat headerProgress) {
     if (!root || !ui || !ui->table) return;
-    CGFloat t = headerProgress;
-    if (t < 0.0f) t = 0.0f;
-    if (t > 1.0f) t = 1.0f;
-
     CGRect bounds = root.bounds;
     CGFloat W = bounds.size.width;
     CGFloat H = bounds.size.height;
     if (W < 1.0f || H < 1.0f) return;
     BOOL pad = IsPad();
     BOOL compact = IsCompact(H);
+    BOOL split = IsSplit(W, H);
+
+    CGFloat t = headerProgress;
+    /* the two column layout gives the list its own full height column, so the
+       card has nothing to make room for and stays open */
+    if (split) t = 0.0f;
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
 
     UIEdgeInsets safe = SenkoSafeAreaInsets(root);
     CGFloat top = GetTopOffset();
@@ -503,8 +532,10 @@ void SenkoHomeLayout(UIView *root, const SenkoHomeChrome *ui, CGFloat headerProg
     /* card: two target shapes, then one interpolation. deriving both from the
        same metrics is what keeps the detail line off the button row */
     CardMetrics m = MetricsFor(W, H);
+    CGFloat columnGap = 20.0f;
     CGFloat cardX = contentX + inset;
     CGFloat cardW = contentW - inset * 2.0f;
+    if (split) cardW = SplitLeftWidth(contentW - inset * 2.0f);
     CGFloat cardY = HeaderBandHeight(H, top);
     CGFloat cardH = Lerp(m.openH, m.shutH, t);
     SetFrame(ui->card, CGRectMake(cardX, cardY, cardW, cardH));
@@ -644,25 +675,39 @@ void SenkoHomeLayout(UIView *root, const SenkoHomeChrome *ui, CGFloat headerProg
     }
 
     /* the list keeps one frame for the life of the screen and is pushed down by
-       a content inset instead, so collapsing the card never relayouts a row */
-    CGFloat listTop = cardY + m.shutH + (compact ? 10.0f : 14.0f);
+       a scrolling spacer instead, so collapsing the card never relayouts a row.
+       it takes the card's own column so the well, the rows and the card all
+       share one set of edges */
+    CGFloat listTop = split ? cardY : cardY + m.shutH + (compact ? 10.0f : 14.0f);
+    CGFloat listX = split ? cardX + cardW + columnGap : cardX;
+    CGFloat listW = split ? (contentX + contentW - inset) - listX : cardW;
+    if (listW < 200.0f) listW = 200.0f;
     CGFloat listHeight = H - safe.bottom - listTop;
     if (listHeight < 60.0f) listHeight = 60.0f;
-    CGRect listFrame = CGRectMake(contentX, listTop, contentW, listHeight);
+    CGRect listFrame = CGRectMake(listX, listTop, listW, listHeight);
     SetFrame(ui->table, listFrame);
     SetFrame(ui->well, listFrame);
 
     /* the gap the open card needs is a scrolling spacer rather than a content
        inset: an inset would park every pinned section header that far below the
-       table's top edge, leaving a permanent empty band under the card */
-    CGFloat spacer = m.openH - m.shutH;
+       table's top edge, leaving a permanent empty band under the card.
+       replacing the header re-runs the table's own layout, so it is only ever
+       written while the list is at rest: doing it from a scroll frame made the
+       table call back into this pass */
+    CGFloat spacer = split ? 0.0f : m.openH - m.shutH;
     UIView *head = ui->table.tableHeaderView;
-    if (!head || fabsf((float)(head.bounds.size.height - spacer)) > 0.5f) {
-        UIView *fresh = [[[UIView alloc] initWithFrame:
-                          CGRectMake(0, 0, contentW, spacer)] autorelease];
-        fresh.backgroundColor = [UIColor clearColor];
-        fresh.userInteractionEnabled = NO;
-        ui->table.tableHeaderView = fresh;
+    CGFloat headH = head ? head.bounds.size.height : 0.0f;
+    if (fabsf((float)(headH - spacer)) > 0.5f &&
+        !ui->table.tracking && !ui->table.decelerating) {
+        if (spacer < 0.5f) {
+            ui->table.tableHeaderView = nil;
+        } else {
+            UIView *fresh = [[[UIView alloc] initWithFrame:
+                              CGRectMake(0, 0, listW, spacer)] autorelease];
+            fresh.backgroundColor = [UIColor clearColor];
+            fresh.userInteractionEnabled = NO;
+            ui->table.tableHeaderView = fresh;
+        }
     }
 
     if (ui->well) {

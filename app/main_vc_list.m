@@ -892,6 +892,12 @@ static int SenkoSortRank(NSNumber *ms) {
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
     if (scrollView != _table) return;
+    /* the two column ipad layout gives the list its own height, so the card has
+       nothing to collapse for */
+    if (SenkoHomeUsesSplitColumns(self.view)) {
+        [self setListHeaderProgress:0.0f];
+        return;
+    }
     /* the collapse is tied to the spacer above the first row, so the card
        finishes shrinking exactly as that spacer leaves the screen and the two
        never disagree about how far the list has travelled */
@@ -1019,14 +1025,22 @@ static int SenkoSortRank(NSNumber *ms) {
 
     NSInteger finalSection = _dragSection;
     NSInteger sourceSection = _sectionDragOrigin;
-    BOOL moved = finalSection != sourceSection;
+/* a status refresh can empty the catalog while a header is under the finger,
+   and -rectForHeaderInSection: raises on a section the table no longer has */
+    NSInteger sectionCount = [_table numberOfSections];
+    if (finalSection >= sectionCount) finalSection = sectionCount - 1;
+    if (finalSection < 0) finalSection = 0;
+    if (sourceSection >= sectionCount) sourceSection = finalSection;
+    BOOL moved = sectionCount > 0 && finalSection != sourceSection;
     UIView *sourceHeader = [_sectionDragHeader retain];
     _table.scrollEnabled = YES;
 
     UIView *snapshot = [_sectionDragSnapshot retain];
     [_sectionDragSnapshot release];
     _sectionDragSnapshot = nil;
-    CGRect target = [_table rectForHeaderInSection:finalSection];
+    CGRect target = sectionCount > 0
+        ? [_table rectForHeaderInSection:finalSection]
+        : snapshot.frame;
     [UIView animateWithDuration:0.18
                           delay:0.0
                         options:UIViewAnimationOptionCurveEaseOut
@@ -1388,6 +1402,7 @@ forRowAtIndexPath:(NSIndexPath *)ip {
     if (!server) return;
     [_sheet dismiss];
     [_sheet release];
+    _sheet = nil;
 
     NSString *source = SenkoLocalizedText(@"Manual");
     if (server->group >= 0) {
@@ -1410,7 +1425,11 @@ forRowAtIndexPath:(NSIndexPath *)ip {
     [_sheet presentInView:self.view];
 
     int idx = server->index;
+/* the reply outlives a sheet the user closed and reopened on another server,
+   and the pending link would then be written into the wrong card */
+    SenkoServerSheet *asking = _sheet;
     [_ctl serverLinkIndex:idx reply:^(NSString *link) {
+        if (_sheet != asking) return;
         [_sheet setLink:link];
     }];
 }
@@ -1765,9 +1784,14 @@ forRowAtIndexPath:(NSIndexPath *)ip {
             [_collapsedSubs containsObject:[NSNumber numberWithInt:subIdx]])
             continue;
         NSArray *rows = [[_sections objectAtIndex:section] objectForKey:@"rows"];
-        for (NSInteger row = 0; row < (NSInteger)[rows count]; ++row) {
-            SenkoServer *server = [rows objectAtIndex:row];
+/* the manual group draws the saved amneziawg profile above its servers, so a
+   server's table row is its position in the section plus that offset. without
+   it a ping landed on the profile row and never on the server it measured */
+        NSInteger offset = [self awgRowOffsetInSection:section];
+        for (NSInteger i = 0; i < (NSInteger)[rows count]; ++i) {
+            SenkoServer *server = [rows objectAtIndex:i];
             if (server->index != serverIndex) continue;
+            NSInteger row = i + offset;
             if (row >= [_table numberOfRowsInSection:section]) return;
             NSIndexPath *path = [NSIndexPath indexPathForRow:row inSection:section];
             /* offscreen rows pick up the cached ping when they appear */

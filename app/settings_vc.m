@@ -286,7 +286,7 @@ static NSString *SenkoSortModeName(void) {
 
 - (NSString *)footerTextForSection:(NSInteger)s {
     if (s == 0)
-        return SenkoLocalizedText(@"Senko sends device traffic through the selected profile. The local proxy is available only on this device.");
+        return SenkoLocalizedText(@"Routing is not a switch. Senko always carries every app and every system connection, because senkod runs as root on the jailbreak and rewrites the system routes itself, so there is nothing to configure outside this app. The local proxy is reachable only from this device.");
     return SenkoLocalizedText(@"Hide links only changes what is shown on screen. Backups keep the complete configuration.");
 }
 
@@ -305,7 +305,8 @@ static NSString *SenkoSortModeName(void) {
 - (UIView *)sectionTextViewWithText:(NSString *)text
                                font:(UIFont *)font
                              height:(CGFloat)height
-                              width:(CGFloat)width {
+                              width:(CGFloat)width
+                           centered:(BOOL)centered {
     if (![text length]) return nil;
     UIView *wrap = [[[UIView alloc] initWithFrame:
                      CGRectMake(0, 0, width, height)] autorelease];
@@ -320,25 +321,34 @@ static NSString *SenkoSortModeName(void) {
     label.numberOfLines = 0;
     label.lineBreakMode = NSLineBreakByWordWrapping;
     label.text = text;
-    SenkoStyleMutedLabel(label);
+    if (centered) {
+        label.textAlignment = NSTextAlignmentCenter;
+        SenkoStyleAccentLabel(label);
+    } else {
+        SenkoStyleMutedLabel(label);
+    }
     label.shadowColor = nil;
     label.shadowOffset = CGSizeZero;
     [wrap addSubview:label];
     return wrap;
 }
 
+/* group titles sit centred in the accent, the way aniliberty sets its own out;
+   the footers stay left because they are sentences, not labels */
 - (UIView *)tableView:(UITableView *)tv viewForHeaderInSection:(NSInteger)s {
     return [self sectionTextViewWithText:[self headerTextForSection:s]
                                     font:[UIFont boldSystemFontOfSize:12.0f]
                                   height:28.0f
-                                   width:tv.bounds.size.width];
+                                   width:tv.bounds.size.width
+                                centered:YES];
 }
 
 - (UIView *)tableView:(UITableView *)tv viewForFooterInSection:(NSInteger)s {
     return [self sectionTextViewWithText:[self footerTextForSection:s]
                                     font:[UIFont systemFontOfSize:12.0f]
                                   height:[self tableView:tv heightForFooterInSection:s]
-                                   width:tv.bounds.size.width];
+                                   width:tv.bounds.size.width
+                                centered:NO];
 }
 
 - (void)tableView:(UITableView *)tv willDisplayCell:(UITableViewCell *)cell
@@ -382,7 +392,8 @@ static NSString *SenkoSortModeName(void) {
             cell.detailTextLabel.text = _daemonState;
         } else if (ip.row == 1) {
             cell.textLabel.text = @"Routing";
-            cell.detailTextLabel.text = SenkoLocalizedText(@"All apps and system traffic");
+            cell.detailTextLabel.text =
+                SenkoLocalizedText(@"Whole device, set up by the root daemon");
         } else if (ip.row == 2) {
             cell.textLabel.text = @"Version";
             cell.detailTextLabel.text = SENKO_VERSION;

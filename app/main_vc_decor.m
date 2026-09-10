@@ -1,14 +1,24 @@
 #import "main_vc_priv.h"
 
+/* the theme gradient is the ground everything else stands on, so wallpaper goes
+   directly above it rather than at index 0 */
+static NSUInteger SenkoWallpaperIndex(UIView *root) {
+    NSArray *views = root.subviews;
+    if ([views count] && [(UIView *)[views objectAtIndex:0] tag] == kSenkoBackdropTag)
+        return 1;
+    return 0;
+}
+
 static void SenkoPlaceBehind(UIView *view, UIView *root) {
     if (!view || !root) return;
+    NSUInteger want = SenkoWallpaperIndex(root);
     if (view.superview != root) {
-        [root insertSubview:view atIndex:0];
+        [root insertSubview:view atIndex:want];
         return;
     }
     NSArray *views = root.subviews;
-    if (![views count] || [views objectAtIndex:0] != view)
-        [root insertSubview:view atIndex:0];
+    if ([views count] <= want || [views objectAtIndex:want] != view)
+        [root insertSubview:view atIndex:want];
 }
 
 @implementation MainVC (Decor)
@@ -35,10 +45,12 @@ static void SenkoPlaceBehind(UIView *view, UIView *root) {
     if (b.size.width < 1.0f || b.size.height < 1.0f)
         b = [[UIScreen mainScreen] bounds];
 
-    if (_bgGrad) {
-        _bgGrad.frame = b;
-        if (_bgGrad.superlayer != self.view.layer)
-            [self.view.layer insertSublayer:_bgGrad atIndex:0];
+    UIView *backdrop = [self.view viewWithTag:kSenkoBackdropTag];
+    if (backdrop) {
+        if (!CGRectEqualToRect(backdrop.frame, b)) backdrop.frame = b;
+        if ([self.view.subviews count] &&
+            [self.view.subviews objectAtIndex:0] != backdrop)
+            [self.view sendSubviewToBack:backdrop];
     }
     if (_misidePattern && !_misidePattern.hidden) {
         _misidePattern.frame = b;
@@ -69,7 +81,11 @@ static void SenkoPlaceBehind(UIView *view, UIView *root) {
     if (d < 100.0f) d = 100.0f;
     if (fabsf((float)(_statusWashHost.bounds.size.width - d)) > 0.5f) {
         _statusWashHost.bounds = CGRectMake(0, 0, d, d);
-        if (_statusWash) _statusWash.frame = _statusWashHost.bounds;
+/* the wash is a bare layer, so a plain frame write starts core animation's
+   default quarter second action. the orb resizes on every frame of the card
+   collapse, which restarted that action on every frame and left the glow
+   trailing the icon for as long as the list kept moving */
+        SenkoSetLayerFrame(_statusWash, _statusWashHost.bounds);
     }
     _statusWashHost.center = _statusCard->orb.center;
 }
@@ -111,7 +127,8 @@ static void SenkoPlaceBehind(UIView *view, UIView *root) {
                 _misidePattern.userInteractionEnabled = NO;
                 _misidePattern.autoresizingMask =
                     UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-                [self.view insertSubview:_misidePattern atIndex:0];
+                [self.view insertSubview:_misidePattern
+                                  atIndex:SenkoWallpaperIndex(self.view)];
             }
         }
         _misidePattern.hidden = NO;
@@ -162,7 +179,8 @@ static void SenkoPlaceBehind(UIView *view, UIView *root) {
                 _frutigerBg.userInteractionEnabled = NO;
                 _frutigerBg.autoresizingMask =
                     UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-                [self.view insertSubview:_frutigerBg atIndex:0];
+                [self.view insertSubview:_frutigerBg
+                                  atIndex:SenkoWallpaperIndex(self.view)];
             }
         }
         if (_frutigerBg) {
@@ -199,7 +217,8 @@ static void SenkoPlaceBehind(UIView *view, UIView *root) {
                         : [UIColor colorWithWhite:0.06 alpha:1];
                     _ios26Bg.autoresizingMask =
                         UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-                    [self.view insertSubview:_ios26Bg atIndex:0];
+                    [self.view insertSubview:_ios26Bg
+                                      atIndex:SenkoWallpaperIndex(self.view)];
                 } else {
                     _ios26Bg.image = img;
                     _ios26Bg.backgroundColor = wantLight

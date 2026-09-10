@@ -5,6 +5,8 @@
 #include "core/control.h"
 #include "core/url.h"
 #include "core/config.h"
+#include "core/happ.h"
+#include "core/store.h"
 #include "daemon_ctl.h"
 #include "../common/senko_paths.h"
 
@@ -361,9 +363,110 @@ static int fetch_body_alloc(ctl_server_t *s, const char *url,
     return 0;
 }
 
+/* the default request pretends to be happ so panels that only answer known
+   clients answer at all. those same panels then hand happ its own encrypted
+   bundle, and the formats senko cannot open leave the user with nothing. one
+   retry under senko's own name asks the panel for the plain feed instead */
+#define SENKO_PLAIN_UA "User-Agent: Senko/2"
+
+static int fetch_body_alloc(ctl_server_t *s, const char *url,
+                            const char *request_header,
+                            unsigned char **body_out, size_t *len_out,
+                            ctl_fetch_meta_t *meta);
+
+/* a body senko cannot unwrap, which is the only case worth a second request */
+static int unreadable_happ_body(const unsigned char *blob, size_t blen) {
+    char probe[8192];
+    char plain[16384];
+    size_t n;
+    if (!blob || blen < 7) return 0;
+    if (cfg_content_kind((const char *)blob, blen) != CFG_CONTENT_HAPP) return 0;
+    n = blen < sizeof probe - 1 ? blen : sizeof probe - 1;
+    memcpy(probe, blob, n);
+    probe[n] = '\0';
+    return happ_unwrap(probe, plain, sizeof plain) != 0;
+}
+
 #define LOG_TAIL_MAX (48 * 1024)
 
 #define IMPORT_STAGE_MAX (512 * 1024)
+
+/* the panel host is the only name a bare subscription url carries */
+static void sub_name_from_url(const char *url, char *out, size_t cap) {
+    const char *host = url;
+    size_t n = 0;
+    if (!out || cap == 0) return;
+    out[0] = '\0';
+    if (!url) return;
+    if (strncmp(host, "https://", 8) == 0) host += 8;
+    else if (strncmp(host, "http://", 7) == 0) host += 7;
+    while (host[n] && host[n] != '/' && host[n] != ':' && host[n] != '?' &&
+           n + 1 < cap)
+        ++n;
+    if (n == 0) {
+        snprintf(out, cap, "subscription");
+        return;
+    }
+    memcpy(out, host, n);
+    out[n] = '\0';
+}
+
+/* register the feed the deep link pointed at, then pull it once so the user
+   sees nodes instead of an empty section */
+static void import_subscription_url(ctl_server_t *s, ctl_client_t *c,
+                                    const char *url) {
+    char reply[192];
+    size_t rn = 0;
+    char name[128];
+    size_t si = 0;
+    unsigned char *blob = NULL;
+    size_t blen = 0;
+    size_t added = 0;
+    ctl_fetch_meta_t meta;
+
+    sub_name_from_url(url, name, sizeof name);
+    if (store_add_sub(&s->engine.store, name, url, &si) != STORE_OK) {
+        if (ctl_build_err("subscription list is full", reply, sizeof reply, &rn) == CTL_OK)
+            client_write(c, reply, rn);
+        return;
+    }
+    if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
+
+    if (!s->fetch) {
+        if (ctl_build_ok("subscription added", reply, sizeof reply, &rn) == CTL_OK)
+            client_write(c, reply, rn);
+        return;
+    }
+    memset(&meta, 0, sizeof meta);
+    if (fetch_body_alloc(s, url, NULL, &blob, &blen, &meta) != 0) {
+        if (ctl_build_ok("subscription added, refresh failed", reply, sizeof reply, &rn) == CTL_OK)
+            client_write(c, reply, rn);
+        return;
+    }
+    if (unreadable_happ_body(blob, blen)) {
+        free(blob);
+        blob = NULL;
+        memset(&meta, 0, sizeof meta);
+        if (fetch_body_alloc(s, url, SENKO_PLAIN_UA, &blob, &blen, &meta) != 0)
+            blob = NULL;
+    }
+    if (!blob || meta.gated ||
+        store_refresh_sub(&s->engine.store, si, (const char *)blob, blen,
+                          &added) != STORE_OK) {
+        free(blob);
+        if (ctl_build_ok("subscription added, refresh failed", reply, sizeof reply, &rn) == CTL_OK)
+            client_write(c, reply, rn);
+        return;
+    }
+    if (meta.expire) store_set_sub_expire(&s->engine.store, si, meta.expire);
+    store_set_sub_meta(&s->engine.store, si, meta.upload, meta.download,
+                       meta.total, meta.description, meta.support_url);
+    free(blob);
+    if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
+    snprintf(name, sizeof name, "subscription added, %zu server(s)", added);
+    if (ctl_build_ok(name, reply, sizeof reply, &rn) == CTL_OK)
+        client_write(c, reply, rn);
+}
 
 /* read a staged import file whole; the cap is what the parser is allowed to see */
 static int read_whole_file(const char *path, size_t max_bytes,
@@ -796,6 +899,15 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
             return;
         }
 
+/* a happ deep link normally carries the panel's subscription url, which is not
+   a node to add but a feed to follow */
+        char sub_url[512];
+        if (cfg_subscription_url((const char *)blob, blen, sub_url, sizeof sub_url) == 0) {
+            free(blob);
+            import_subscription_url(s, c, sub_url);
+            return;
+        }
+
         vl_server_t *parsed = (vl_server_t *)calloc(STORE_MAX_SERVERS, sizeof *parsed);
         if (!parsed) {
             free(blob);
@@ -1013,6 +1125,24 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
             if (ctl_build_err("fetch failed", reply, sizeof reply, &rn) == CTL_OK)
                 client_write(c, reply, rn);
             return;
+        }
+/* a panel that answered the happ user agent with a bundle senko cannot open is
+   asked once more under senko's own name, which is what makes it serve the
+   plain feed. a subscription that carries its own header is left alone: the
+   user chose that one */
+        if (unreadable_happ_body(blob, blen) &&
+            !s->engine.store.subs[si].header[0]) {
+            unsigned char *plain_blob = NULL;
+            size_t plain_len = 0;
+            ctl_fetch_meta_t plain_meta;
+            memset(&plain_meta, 0, sizeof plain_meta);
+            if (fetch_body_alloc(s, s->engine.store.subs[si].url, SENKO_PLAIN_UA,
+                                 &plain_blob, &plain_len, &plain_meta) == 0) {
+                free(blob);
+                blob = plain_blob;
+                blen = plain_len;
+                meta = plain_meta;
+            }
         }
         if (meta.gated) {
 /* the panel answers a device it will not serve with a one entry placeholder

@@ -441,6 +441,18 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     }
 }
 
+/* the card is a rounded, clipped view holding a scroll view, so every frame of
+   the slide costs an offscreen pass. flattening it to one cached bitmap for the
+   duration is what takes the stutter out of the entrance on an a5 ipad */
+- (void)setTransitionCache:(BOOL)on {
+    if (on) {
+        _card.layer.rasterizationScale = [UIScreen mainScreen].scale;
+        _card.layer.shouldRasterize = YES;
+    } else {
+        _card.layer.shouldRasterize = NO;
+    }
+}
+
 - (void)presentInView:(UIView *)host {
     if (!host) return;
     self.frame = host.bounds;
@@ -449,21 +461,29 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     [self layoutIfNeeded];
     CGFloat travel = self.bounds.size.height - _card.frame.origin.y;
     _card.transform = CGAffineTransformMakeTranslation(0, travel);
-    SenkoAnimate(0.20, ^{ _backdrop.alpha = 1.0f; }, NULL);
-    SenkoAnimateSpring(0.42, 0, ^{
+    [self setTransitionCache:YES];
+    SenkoAnimate(0.22, ^{ _backdrop.alpha = 1.0f; }, NULL);
+    /* a spring overshoots past the bottom edge and back, which is two more
+       composited passes than the card is worth; one settled ease is steadier */
+    SenkoAnimate(0.26, ^{
         _card.transform = CGAffineTransformIdentity;
-    }, NULL);
+    }, ^(BOOL done) {
+        (void)done;
+        [self setTransitionCache:NO];
+    });
 }
 
 - (void)dismiss {
     if (_dismissing) return;
     _dismissing = YES;
     CGFloat travel = self.bounds.size.height - _card.frame.origin.y;
+    [self setTransitionCache:YES];
     SenkoAnimate(0.24, ^{
         _backdrop.alpha = 0.0f;
         _card.transform = CGAffineTransformMakeTranslation(0, travel);
     }, ^(BOOL done) {
         (void)done;
+        [self setTransitionCache:NO];
         [self removeFromSuperview];
     });
 }

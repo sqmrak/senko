@@ -850,6 +850,63 @@ cfg_content_t cfg_content_kind(const char *blob, size_t blob_len) {
     return kind;
 }
 
+static void trim_ends(char *s) {
+    size_t n;
+    char *start = s;
+    if (!s) return;
+    while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n')
+        ++start;
+    if (start != s) memmove(s, start, strlen(start) + 1);
+    n = strlen(s);
+    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t' ||
+                     s[n - 1] == '\r' || s[n - 1] == '\n'))
+        s[--n] = '\0';
+}
+
+/* one line, an http(s) scheme, a host, and nothing cfg_parse_link can dial:
+   that shape is a subscription endpoint, not a CONNECT proxy */
+static int looks_like_subscription_url(const char *text) {
+    vl_server_t probe;
+    size_t i;
+    if (!text) return 0;
+    if (strncmp(text, "http://", 7) != 0 && strncmp(text, "https://", 8) != 0)
+        return 0;
+    for (i = 0; text[i]; ++i) {
+        if (text[i] == '\n' || text[i] == '\r' || text[i] == ' ' || text[i] == '\t')
+            return 0;
+    }
+    if (i < 12 || i >= 512) return 0;
+    return cfg_parse_link(text, &probe) != CFG_OK;
+}
+
+int cfg_subscription_url(const char *blob, size_t blob_len,
+                         char *out, size_t out_cap) {
+    char plain[16384];
+    char tmp[8192];
+    size_t n;
+    const char *text;
+
+    if (!blob || blob_len == 0 || !out || out_cap == 0) return -1;
+    out[0] = '\0';
+
+    n = blob_len < sizeof tmp - 1 ? blob_len : sizeof tmp - 1;
+    memcpy(tmp, blob, n);
+    tmp[n] = '\0';
+    trim_ends(tmp);
+
+    if (looks_like_happ(tmp, strlen(tmp))) {
+        if (happ_unwrap(tmp, plain, sizeof plain) != 0) return -1;
+        trim_ends(plain);
+        text = plain;
+    } else {
+        text = tmp;
+    }
+    if (!looks_like_subscription_url(text)) return -1;
+    if (strlen(text) + 1 > out_cap) return -1;
+    memcpy(out, text, strlen(text) + 1);
+    return 0;
+}
+
 cfg_status_t cfg_parse_subscription(const char *blob, size_t blob_len,
                                     vl_server_t *out, size_t max_servers,
                                     size_t *out_count) {

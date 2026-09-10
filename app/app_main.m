@@ -48,51 +48,59 @@ static BOOL ExternalTlsfixInstalled(void) {
     return access(SENKO_SUBSTRATE_DIR "/tlsfix.dylib", F_OK) == 0;
 }
 
+NSString *SenkoSponsorURL(void) {
+    return @"https://2xvpn.shop/dashboard/buy?promo=SENKO";
+}
+
 NSString *SenkoAboutAppReport(void) {
     int tlsfix = ExternalTlsfixInstalled();
     BOOL systemTLS = [[[UIDevice currentDevice] systemVersion] floatValue] >= 12.0f;
     if (SenkoLanguageIsRussian()) {
         return [NSString stringWithFormat:
-                @"vpn для всего устройства\n"
-                 "приложения и системный трафик идут через выбранный профиль. для маршрутизации нужен root.\n\n"
-                 "транспорты\n"
-                 "tcp · tls · reality + vision\n"
-                 "websocket · xhttp · grpc\n"
-                 "amneziawg · socks5 · http(s) connect\n\n"
-                 "совместимость\n"
-                 "ios 5-15 · armv7 + arm64\n"
-                 "интерфейс подстраивается под компактные, plus, x/mini/max и ipad-экраны.\n\n"
-                 "безопасность и диагностика\n"
-                 "control socket с токеном · защита подписок от ssrf · скрытие секретов в логах · настоящая проверка транспорта.\n"
-                 "общий журнал: /var/log/senko-system.log\n\n"
-                 "tls-режим: %@\n\n"
-                 "тестировали: @inraxx, @s3dativee, @rafal_official, @RealPetuh, @QuaIcomm, @belo4kaFLUNI, @Wolfer_QUIC, @fluffynifty, @not_a_modder, @Lineysom, @Lime_iOS6, @fr0n1k, @ogeprint, @CookieValerka, @ra1n_developer",
+                @"VPN для всего устройства\n"
+                 "Приложения и системный трафик идут через выбранный профиль. "
+                 "Для маршрутизации нужен root, и джейлбрейк его уже даёт.\n\n"
+                 "Транспорты\n"
+                 "TCP · TLS · REALITY + Vision\n"
+                 "WebSocket · XHTTP · gRPC\n"
+                 "AmneziaWG · SOCKS5 · HTTP(S) CONNECT\n\n"
+                 "Совместимость\n"
+                 "iOS 5-15 · armv7 + arm64\n"
+                 "Интерфейс подстраивается под компактные, Plus, X/mini/Max и iPad-экраны.\n\n"
+                 "Безопасность и диагностика\n"
+                 "Control socket с токеном · защита подписок от SSRF · скрытие секретов "
+                 "в логах · настоящая проверка транспорта.\n"
+                 "Общий журнал: /var/log/senko-system.log\n\n"
+                 "Режим TLS: %@\n\n"
+                 "Тестировали: @inraxx, @s3dativee, @rafal_official, @RealPetuh, @QuaIcomm, @belo4kaFLUNI, @Wolfer_QUIC, @fluffynifty, @not_a_modder, @Lineysom, @Lime_iOS6, @fr0n1k, @ogeprint, @CookieValerka, @ra1n_developer",
                 systemTLS
-                    ? @"системный tls (compatibility hook не внедряется)"
+                    ? @"системный TLS, compatibility hook не внедряется"
                     : tlsfix
                     ? @"внешний tlsfix найден, хуки senkotlsfix отключены"
-                    : @"senkotlsfix для tls1.3 safari при установленном mobilesubstrate"];
+                    : @"senkotlsfix для TLS 1.3 в Safari при установленном MobileSubstrate"];
     }
     return [NSString stringWithFormat:
-            @"full-device vpn\n"
-             "apps and system traffic use the selected profile. root is required for routing.\n\n"
-             "transports\n"
-             "tcp · tls · reality + vision\n"
-             "websocket · xhttp · grpc\n"
-             "amneziawg · socks5 · http(s) connect\n\n"
-             "compatibility\n"
-             "ios 5-15 · armv7 + arm64\n"
-             "adaptive layouts for compact, plus, x/mini/max and ipad displays.\n\n"
-             "security and diagnostics\n"
-             "token-authenticated control socket · subscription ssrf protection · secret redaction · real transport checks.\n"
-             "combined log: /var/log/senko-system.log\n\n"
-             "tls mode: %@\n\n"
-             "testers: @inraxx, @s3dativee, @rafal_official, @RealPetuh, @QuaIcomm, @belo4kaFLUNI, @Wolfer_QUIC, @fluffynifty, @not_a_modder, @Lineysom, @Lime_iOS6, @fr0n1k, @ogeprint, @CookieValerka, @ra1n_developer",
+            @"Full-device VPN\n"
+             "Apps and system traffic use the selected profile. Routing needs root, "
+             "and a jailbreak already provides it.\n\n"
+             "Transports\n"
+             "TCP · TLS · REALITY + Vision\n"
+             "WebSocket · XHTTP · gRPC\n"
+             "AmneziaWG · SOCKS5 · HTTP(S) CONNECT\n\n"
+             "Compatibility\n"
+             "iOS 5-15 · armv7 + arm64\n"
+             "Adaptive layouts for compact, Plus, X/mini/Max and iPad displays.\n\n"
+             "Security and diagnostics\n"
+             "Token-authenticated control socket · subscription SSRF protection · "
+             "secret redaction · real transport checks.\n"
+             "Combined log: /var/log/senko-system.log\n\n"
+             "TLS mode: %@\n\n"
+             "Testers: @inraxx, @s3dativee, @rafal_official, @RealPetuh, @QuaIcomm, @belo4kaFLUNI, @Wolfer_QUIC, @fluffynifty, @not_a_modder, @Lineysom, @Lime_iOS6, @fr0n1k, @ogeprint, @CookieValerka, @ra1n_developer",
             systemTLS
-                ? @"system tls (the compatibility hook is not injected)"
+                ? @"system TLS, the compatibility hook is not injected"
                 : tlsfix
-                ? @"external tlsfix present - senkotlsfix hooks stay off"
-                : @"senkotlsfix (safari tls1.3 when mobilesubstrate is installed)"];
+                ? @"external tlsfix present, senkotlsfix hooks stay off"
+                : @"senkotlsfix, Safari TLS 1.3 when MobileSubstrate is installed"];
 }
 
 /* the daemon writes the id it sends as x-hwid to a file the ui can read too.

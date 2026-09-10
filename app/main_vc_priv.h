@@ -118,6 +118,7 @@
 - (void)viewDidLoad;
 - (void)viewWillAppear:(BOOL)animated;
 - (void)ensureDaemonThenRefresh;
+- (void)appDidBecomeActive:(NSNotification *)n;
 - (void)settingsPressed;
 - (void)bringMainChromeToFront;
 - (void)layoutWallpaperStack;

@@ -138,6 +138,23 @@ static void trim_inplace(char *s) {
         *--e = '\0';
 }
 
+/* the share buttons in the happ app and in the panels that target it emit
+   happ://add/<base64 url>, happ://install-config/<base64 body> and the like.
+   the action word is not part of the payload: decoding it together with the
+   body is what turned every one of those links into "unknown content type" */
+static const char *skip_action_word(const char *p) {
+    static const char * const actions[] = {
+        "add-subscription/", "install-config/", "install/", "import/",
+        "subscription/", "add/", "sub/", "open/"
+    };
+    size_t i;
+    for (i = 0; i < sizeof actions / sizeof actions[0]; ++i) {
+        size_t n = strlen(actions[i]);
+        if (strncmp(p, actions[i], n) == 0) return p + n;
+    }
+    return p;
+}
+
 int happ_unwrap(const char *uri, char *out, size_t out_cap) {
     const char *p;
     int ordinal = -1;
@@ -153,6 +170,8 @@ int happ_unwrap(const char *uri, char *out, size_t out_cap) {
         p += 7;
     else
         return -1;
+
+    p = skip_action_word(p);
 
 /* crypt5 needs chacha keytable; refuse clearly */
     if (strncmp(p, "crypt5/", 7) == 0)

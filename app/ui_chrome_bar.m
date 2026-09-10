@@ -339,11 +339,29 @@ UIEdgeInsets SenkoSafeAreaInsets(UIView *view) {
     return insets;
 }
 
+@interface SenkoBackdropView : UIView
+@end
+
+@implementation SenkoBackdropView
++ (Class)layerClass { return [CAGradientLayer class]; }
+@end
+
 CAGradientLayer *AddVGradient(UIView *view, UIColor *top, UIColor *bottom) {
-    CAGradientLayer *gradient = [CAGradientLayer layer];
+    if (!view) return nil;
+    SenkoBackdropView *host = (SenkoBackdropView *)[view viewWithTag:kSenkoBackdropTag];
+    if (![host isKindOfClass:[SenkoBackdropView class]] || host.superview != view) {
+        host = [[[SenkoBackdropView alloc] initWithFrame:view.bounds] autorelease];
+        host.tag = kSenkoBackdropTag;
+        host.userInteractionEnabled = NO;
+        host.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+                                UIViewAutoresizingFlexibleHeight;
+        [view insertSubview:host atIndex:0];
+    } else {
+        host.frame = view.bounds;
+        [view sendSubviewToBack:host];
+    }
+    CAGradientLayer *gradient = (CAGradientLayer *)host.layer;
     gradient.name = @"vgrad";
-    gradient.frame = view.bounds;
     gradient.colors = [NSArray arrayWithObjects:(id)top.CGColor, (id)bottom.CGColor, nil];
-    [view.layer insertSublayer:gradient atIndex:0];
     return gradient;
 }

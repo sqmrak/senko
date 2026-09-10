@@ -158,6 +158,11 @@ void StyleGlossyCapsule(UIButton *button, UIColor *top, UIColor *bottom);
 void StyleGlossyCapsuleLayout(UIButton *button);
 CGFloat GetTopOffset(void);
 UIEdgeInsets SenkoSafeAreaInsets(UIView *view);
+/* the theme gradient lives in its own autoresizing backdrop view rather than as
+   a bare sublayer: a layer keeps the size the host had when the screen was
+   built, which is what left a black band beside every modal screen opened in
+   one orientation and rotated to the other */
+enum { kSenkoBackdropTag = 9112 };
 CAGradientLayer *AddVGradient(UIView *view, UIColor *top, UIColor *bottom);
 void SenkoSetLayerFrame(CALayer *layer, CGRect frame);
 

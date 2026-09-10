@@ -395,6 +395,10 @@ didOutputSampleBuffer:(CMSampleBufferRef)sb
 
     CVImageBufferRef img = CMSampleBufferGetImageBuffer(sb);
     if (!img) return;
+/* this runs on the capture queue at the frame rate, and every decoded payload
+   is an autoreleased string. without a pool of its own the whole scan session
+   accumulates on an old device until jetsam takes the app */
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     CVPixelBufferLockBaseAddress(img, kCVPixelBufferLock_ReadOnly);
 
     size_t w = CVPixelBufferGetWidth(img);
@@ -426,6 +430,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sb
         }
     }
     CVPixelBufferUnlockBaseAddress(img, kCVPixelBufferLock_ReadOnly);
+    [pool release];
 }
 
 - (void)captureOutput:(AVCaptureOutput *)out
@@ -447,8 +452,13 @@ didOutputMetadataObjects:(NSArray *)objects
 - (void)hit:(NSString *)txt {
     if (_done) return;
     _done = YES;
-    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(showScanTimeout) object:nil];
+/* the metadata and sample buffer callbacks both land on the capture queue, and
+   the timeout was scheduled on the main run loop: cancelling it from here
+   touched another thread's run loop */
     dispatch_async(dispatch_get_main_queue(), ^{
+        [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                                 selector:@selector(showScanTimeout)
+                                                   object:nil];
         if ([_delegate respondsToSelector:@selector(qrScanner:didDecode:)])
             [_delegate qrScanner:self didDecode:txt];
     });

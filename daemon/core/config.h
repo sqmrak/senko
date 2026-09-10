@@ -101,6 +101,13 @@ cfg_status_t cfg_parse_subscription(const char *blob, size_t blob_len,
                                     vl_server_t *out, size_t max_servers,
                                     size_t *out_count);
 
+/* a happ deep link usually carries the panel's subscription url and nothing
+   else. that url is not a proxy senko can dial, so the importer has to
+   register it as a subscription rather than reject it as an unusable node.
+   returns 0 and fills out when the body is exactly one such url */
+int cfg_subscription_url(const char *blob, size_t blob_len,
+                         char *out, size_t out_cap);
+
 #ifdef __cplusplus
 }
 #endif

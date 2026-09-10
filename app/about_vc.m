@@ -12,6 +12,8 @@
     UIView *_info;
     UILabel *_bodyLbl;
     UIButton *_sponsorButton;
+    UILabel  *_sponsorLink;
+    UIButton *_sponsorCopy;
     UIButton *_githubButton;
     UIButton *_telegramButton;
     CAGradientLayer *_cardGrad;
@@ -53,17 +55,17 @@
     name.backgroundColor = [UIColor clearColor];
     name.font = [UIFont boldSystemFontOfSize:15];
     SenkoStyleInkLabel(name);
-    name.text = [NSString stringWithFormat:@"senko\n%@\nios 5-15 · armv7 + arm64", SENKO_VERSION];
+    name.text = [NSString stringWithFormat:@"Senko\n%@\niOS 5-15 · armv7 + arm64", SENKO_VERSION];
     [_card addSubview:name];
 
     _githubButton = [[UIButton buttonWithType:UIButtonTypeCustom] retain];
-    [_githubButton setTitle:@"github" forState:UIControlStateNormal];
+    [_githubButton setTitle:@"GitHub" forState:UIControlStateNormal];
     [_githubButton addTarget:self action:@selector(githubPressed)
             forControlEvents:UIControlEventTouchUpInside];
     [_card addSubview:_githubButton];
 
     _telegramButton = [[UIButton buttonWithType:UIButtonTypeCustom] retain];
-    [_telegramButton setTitle:@"telegram" forState:UIControlStateNormal];
+    [_telegramButton setTitle:@"Telegram" forState:UIControlStateNormal];
     [_telegramButton addTarget:self action:@selector(telegramPressed)
               forControlEvents:UIControlEventTouchUpInside];
     [_card addSubview:_telegramButton];
@@ -103,6 +105,29 @@
     [_sponsorButton addTarget:self action:@selector(sponsorPressed)
              forControlEvents:UIControlEventTouchUpInside];
     [_info addSubview:_sponsorButton];
+
+/* old safari cannot open the shop, and the address was only reachable by
+   guessing that the line was tappable at all. it is printed in full so it can
+   be typed on another device, and one button puts it on the clipboard */
+    _sponsorLink = [[UILabel alloc] initWithFrame:CGRectZero];
+    _sponsorLink.backgroundColor = [UIColor clearColor];
+    _sponsorLink.font = [UIFont systemFontOfSize:11];
+    _sponsorLink.numberOfLines = 2;
+    _sponsorLink.lineBreakMode = NSLineBreakByCharWrapping;
+    _sponsorLink.text = SenkoSponsorURL();
+    SenkoStyleMutedLabel(_sponsorLink);
+    [_info addSubview:_sponsorLink];
+
+    _sponsorCopy = [[UIButton buttonWithType:UIButtonTypeCustom] retain];
+    _sponsorCopy.titleLabel.font = [UIFont boldSystemFontOfSize:12.0f];
+    [_sponsorCopy setTitleColor:kAccentBlue forState:UIControlStateNormal];
+    _sponsorCopy.backgroundColor = [kAccentBlue colorWithAlphaComponent:0.12f];
+    _sponsorCopy.layer.cornerRadius = 12.0f;
+    _sponsorCopy.layer.borderWidth = 0.5f;
+    _sponsorCopy.layer.borderColor = [kAccentBlue colorWithAlphaComponent:0.30f].CGColor;
+    [_sponsorCopy addTarget:self action:@selector(sponsorCopyPressed)
+           forControlEvents:UIControlEventTouchUpInside];
+    [_info addSubview:_sponsorCopy];
     [self updateSponsorButton];
 
     [[NSNotificationCenter defaultCenter] addObserver:self
@@ -115,11 +140,14 @@
 
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [_scroll release];
     [_card release];
     [_info release];
     [_bodyLbl release];
     [_sponsorButton release];
+    [_sponsorLink release];
+    [_sponsorCopy release];
     [_githubButton release];
     [_telegramButton release];
     [super dealloc];
@@ -134,15 +162,26 @@
 
 - (void)updateSponsorButton {
     NSString *title = SenkoLanguageIsRussian()
-        ? @"спонсоры: 2xvpn.shop"
-        : @"sponsors: 2xvpn.shop";
+        ? @"Спонсор: 2xvpn.shop — промокод SENKO даёт скидку 15%"
+        : @"Sponsor: 2xvpn.shop — promo code SENKO takes 15% off";
     [_sponsorButton setTitle:title forState:UIControlStateNormal];
     [_sponsorButton setTitleColor:kAccentBlue forState:UIControlStateNormal];
+    [_sponsorCopy setTitle:SenkoLocalizedText(@"Copy link") forState:UIControlStateNormal];
+    _sponsorLink.text = SenkoSponsorURL();
 }
 
 - (void)sponsorPressed {
-    NSURL *url = [NSURL URLWithString:@"https://2xvpn.shop/dashboard/buy?promo=SENKO"];
+    NSURL *url = [NSURL URLWithString:SenkoSponsorURL()];
     if (url) [[UIApplication sharedApplication] openURL:url];
+}
+
+- (void)sponsorCopyPressed {
+    [[UIPasteboard generalPasteboard] setString:SenkoSponsorURL()];
+    [_sponsorCopy setTitle:SenkoLocalizedText(@"Copied") forState:UIControlStateNormal];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(updateSponsorButton)
+                                               object:nil];
+    [self performSelector:@selector(updateSponsorButton) withObject:nil afterDelay:1.6];
 }
 
 - (void)githubPressed {
@@ -194,8 +233,9 @@
     if (bodySz.height < 40.0f) bodySz.height = 40.0f;
     if (bodySz.height > 2000.0f) bodySz.height = 2000.0f;
 
-    CGFloat sponsorH = 30.0f;
-    CGFloat infoH = bodySz.height + sponsorH + 32.0f;
+    CGFloat sponsorH = 34.0f;
+    CGFloat linkH = 30.0f;
+    CGFloat infoH = bodySz.height + sponsorH + linkH + 34.0f;
     CGFloat infoY = CGRectGetMaxY(_card.frame) + 12.0f;
     _info.frame = CGRectMake(contentX + side, infoY, cardW, infoH);
     _infoGrad.frame = CGRectMake(0, 0, cardW, infoH);
@@ -204,6 +244,14 @@
                                       14.0f + bodySz.height,
                                       textW,
                                       sponsorH);
+    CGFloat copyW = 108.0f;
+    if (copyW > textW - 60.0f) copyW = textW * 0.4f;
+    _sponsorLink.frame = CGRectMake(textPad,
+                                    14.0f + bodySz.height + sponsorH,
+                                    textW - copyW - 8.0f, linkH);
+    _sponsorCopy.frame = CGRectMake(textPad + textW - copyW,
+                                    16.0f + bodySz.height + sponsorH,
+                                    copyW, 24.0f);
 
     BOOL light = SenkoThemeIsLight();
     if (SenkoThemeIsIos26()) {

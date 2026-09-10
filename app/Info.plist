@@ -17,9 +17,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>09092026-patch4-nightly</string>
+    <string>09102026-nightly</string>
 	<key>CFBundleVersion</key>
-	<string>32</string>
+	<string>33</string>
     <key>CFBundleIconFile</key>
     <string>Icon.png</string>
     <key>CFBundleIconFiles</key>
