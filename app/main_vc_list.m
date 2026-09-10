@@ -892,12 +892,6 @@ static int SenkoSortRank(NSNumber *ms) {
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
     if (scrollView != _table) return;
-    /* the two column ipad layout gives the list its own height, so the card has
-       nothing to collapse for */
-    if (SenkoHomeUsesSplitColumns(self.view)) {
-        [self setListHeaderProgress:0.0f];
-        return;
-    }
     /* the collapse is tied to the spacer above the first row, so the card
        finishes shrinking exactly as that spacer leaves the screen and the two
        never disagree about how far the list has travelled */

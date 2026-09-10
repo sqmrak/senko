@@ -129,8 +129,10 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"Paste from clipboard", @"Вставить из буфера");
     SenkoAddTranslation(@"Paste", @"Вставить");
     SenkoAddTranslation(@"Safe mode", @"Безопасный режим");
-    SenkoAddTranslation(@"This subscription is published only as a Happ crypt5 bundle, which Senko cannot decrypt. Ask the provider for a plain or base64 subscription link.",
-                        @"Эта подписка отдаётся только как бандл Happ crypt5, который Senko не умеет расшифровывать. Попросите у провайдера обычную ссылку или base64-подписку.");
+    SenkoAddTranslation(@"This address only hands back a link to itself: the provider has not published a subscription feed behind it. Ask them for the real subscription link.",
+                        @"По этому адресу отдаётся ссылка на него же: провайдер не опубликовал за ним подписку. Попросите у него настоящую ссылку на подписку.");
+    SenkoAddTranslation(@"The Happ crypt5 bundle on this page could not be opened. It is either damaged or sealed with a key this build does not carry.",
+                        @"Бандл Happ crypt5 на этой странице не открылся: он либо повреждён, либо запечатан ключом, которого нет в этой сборке.");
     SenkoAddTranslation(@"This address opens a web page instead of a subscription feed. Copy the subscription link the page offers, not the page address.",
                         @"По этому адресу открывается веб-страница, а не подписка. Скопируйте ссылку на подписку, которую предлагает страница, а не адрес самой страницы.");
     SenkoAddTranslation(@"Copy link", @"Копировать ссылку");
@@ -504,8 +506,10 @@ NSString *SenkoHumanReadableError(NSString *text) {
         message = @"This server uses a protocol or security mode that Senko does not support.";
     else if ([raw isEqualToString:@"server: bad uuid in server link"])
         message = @"The server link has an invalid UUID. Import the link again from its source.";
-    else if ([raw hasPrefix:@"this panel publishes the profile only as a happ crypt5"])
-        message = @"This subscription is published only as a Happ crypt5 bundle, which Senko cannot decrypt. Ask the provider for a plain or base64 subscription link.";
+    else if ([raw hasPrefix:@"this address only hands back its own link"])
+        message = @"This address only hands back a link to itself: the provider has not published a subscription feed behind it. Ask them for the real subscription link.";
+    else if ([raw hasPrefix:@"the happ crypt5 bundle on this page could not be opened"])
+        message = @"The Happ crypt5 bundle on this page could not be opened. It is either damaged or sealed with a key this build does not carry.";
     else if ([raw hasPrefix:@"this address opens a web page"])
         message = @"This address opens a web page instead of a subscription feed. Copy the subscription link the page offers, not the page address.";
     else if ([raw isEqualToString:@"connect timeout"] || [raw isEqualToString:@"switch timeout"])

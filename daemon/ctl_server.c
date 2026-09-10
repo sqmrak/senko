@@ -453,7 +453,7 @@ static void import_subscription_url(ctl_server_t *s, ctl_client_t *c,
     if (!blob || meta.gated ||
         store_refresh_sub(&s->engine.store, si, (const char *)blob, blen,
                           &added) != STORE_OK) {
-        const char *why = blob ? cfg_reject_reason((const char *)blob, blen) : NULL;
+        const char *why = blob ? cfg_reject_reason((const char *)blob, blen, url) : NULL;
         char msg[224];
         snprintf(msg, sizeof msg, "subscription added, %s",
                  why ? why : "refresh failed");
@@ -1164,7 +1164,8 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         if (store_refresh_sub(&s->engine.store, (size_t)si, (const char *)blob, blen, &added) != STORE_OK) {
 /* "parse failed" tells the user nothing they can act on, and the two answers a
    panel actually gives instead of a feed are both nameable */
-            const char *why = cfg_reject_reason((const char *)blob, blen);
+            const char *why = cfg_reject_reason((const char *)blob, blen,
+                                                s->engine.store.subs[si].url);
             char detail[224];
             size_t dn = 0;
             free(blob);

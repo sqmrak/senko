@@ -11,7 +11,7 @@ REPLAY   = $(CORE)/senko_replay.c
 UPLOAD   = $(CORE)/senko_upload.c
 NET_SAFE = $(CORE)/net_safe.c
 CJSON    = $(CORE)/third_party/cJSON.c
-CFG_SRC  = $(CORE)/config.c $(CORE)/happ.c $(CORE)/b64.c $(CORE)/profiles.c $(CJSON)
+CFG_SRC  = $(CORE)/config.c $(CORE)/happ.c $(CORE)/happ_crypt5.c $(CORE)/b64.c $(CORE)/profiles.c $(CJSON)
 TLS_CFLAGS  := $(shell pkg-config --cflags openssl 2>/dev/null)
 TLS_LDFLAGS := $(shell pkg-config --libs openssl 2>/dev/null || echo -lssl -lcrypto)
 

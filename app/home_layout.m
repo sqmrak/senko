@@ -72,40 +72,15 @@ static void SetFrame(UIView *view, CGRect frame) {
     view.center = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
 }
 
-/* a landscape ipad has room for the card and the list next to each other. the
-   stacked phone layout left 300pt of screen empty on both sides and collapsed
-   the card for a list that had never run out of height */
-static BOOL IsSplit(CGFloat width, CGFloat height) {
-    return IsPad() && width > height && width >= 900.0f;
-}
-
 static CGFloat ContentWidth(CGFloat width, CGFloat height) {
     BOOL land = width > height;
     if (IsPad()) {
-        if (IsSplit(width, height)) {
-            CGFloat want = width - 56.0f;
-            return want < 320.0f ? width : want;
-        }
-        CGFloat cap = land ? 720.0f : 700.0f;
+        CGFloat cap = land ? 720.0f : 640.0f;
         CGFloat want = width - (land ? 80.0f : 56.0f);
         return want > cap ? cap : want;
     }
     if (land && width > 640.0f) return 560.0f;
     return width;
-}
-
-/* width of the card column; the list takes what is left of the content band */
-static CGFloat SplitLeftWidth(CGFloat contentW) {
-    CGFloat want = contentW * 0.36f;
-    if (want < 320.0f) want = 320.0f;
-    if (want > 440.0f) want = 440.0f;
-    return want;
-}
-
-BOOL SenkoHomeUsesSplitColumns(UIView *root) {
-    if (!root) return NO;
-    CGRect b = root.bounds;
-    return IsSplit(b.size.width, b.size.height);
 }
 
 static CGFloat SideInset(CGFloat width) {
@@ -480,12 +455,8 @@ void SenkoHomeLayout(UIView *root, const SenkoHomeChrome *ui, CGFloat headerProg
     if (W < 1.0f || H < 1.0f) return;
     BOOL pad = IsPad();
     BOOL compact = IsCompact(H);
-    BOOL split = IsSplit(W, H);
 
     CGFloat t = headerProgress;
-    /* the two column layout gives the list its own full height column, so the
-       card has nothing to make room for and stays open */
-    if (split) t = 0.0f;
     if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
 
@@ -532,51 +503,22 @@ void SenkoHomeLayout(UIView *root, const SenkoHomeChrome *ui, CGFloat headerProg
     /* card: two target shapes, then one interpolation. deriving both from the
        same metrics is what keeps the detail line off the button row */
     CardMetrics m = MetricsFor(W, H);
-    CGFloat columnGap = 20.0f;
     CGFloat cardX = contentX + inset;
     CGFloat cardW = contentW - inset * 2.0f;
-    if (split) cardW = SplitLeftWidth(contentW - inset * 2.0f);
     CGFloat cardY = HeaderBandHeight(H, top);
-    /* both columns start together and run to the bottom edge, so the card is a
-       panel rather than a small tile floating over an empty half screen */
-    CGFloat columnH = H - safe.bottom - cardY;
-    if (columnH < 120.0f) columnH = 120.0f;
-    /* the list bleeds off the bottom because it scrolls; the panel is a fixed
-       surface and stops short of the edge */
-    CGFloat panelH = columnH - 16.0f;
-    if (panelH < 120.0f) panelH = columnH;
-    CGFloat cardH = split ? panelH : Lerp(m.openH, m.shutH, t);
+    CGFloat cardH = Lerp(m.openH, m.shutH, t);
     SetFrame(ui->card, CGRectMake(cardX, cardY, cardW, cardH));
     for (CALayer *layer in ui->card.layer.sublayers) {
         if ([layer.name isEqualToString:@"cardFill"])
             SenkoSetLayerFrame(layer, ui->card.bounds);
     }
 
-    /* the panel stacks its parts down the middle: status above, actions pinned
-       to the bottom edge, so the height it was given is actually used */
-    CGFloat splitOrb = 0.0f, splitBtnH = 0.0f, splitStateH = 0.0f;
-    CGFloat splitDetailH = 0.0f, splitBlockY = 0.0f;
-    if (split) {
-        splitOrb = cardW * 0.30f;
-        if (splitOrb < 72.0f) splitOrb = 72.0f;
-        if (splitOrb > 116.0f) splitOrb = 116.0f;
-        splitBtnH = 54.0f;
-        splitStateH = ceilf(26.0f * 1.25f);
-        splitDetailH = ceilf(16.0f * 1.35f) * 3.0f;
-        CGFloat blockH = splitOrb + 20.0f + splitStateH + 8.0f + splitDetailH;
-        CGFloat room = cardH - m.cardPad * 2.0f - splitBtnH - 20.0f;
-        splitBlockY = m.cardPad + floorf((room - blockH) * 0.5f);
-        if (splitBlockY < m.cardPad) splitBlockY = m.cardPad;
-    }
-
-    CGFloat orbSide = split ? splitOrb : Lerp(m.orbOpen, m.orbShut, t);
+    CGFloat orbSide = Lerp(m.orbOpen, m.orbShut, t);
     CGFloat shutPad = (m.shutH - (m.orbShut > m.btnShut ? m.orbShut : m.btnShut)) * 0.5f;
     CGRect orbOpenR = CGRectMake(m.cardPad, m.cardPad, m.orbOpen, m.orbOpen);
     CGRect orbShutR = CGRectMake(m.cardPad, (m.shutH - m.orbShut) * 0.5f,
                                  m.orbShut, m.orbShut);
-    CGRect orbFrame = split
-        ? CGRectMake(floorf((cardW - splitOrb) * 0.5f), splitBlockY, splitOrb, splitOrb)
-        : LerpRect(orbOpenR, orbShutR, t);
+    CGRect orbFrame = LerpRect(orbOpenR, orbShutR, t);
     orbFrame.size.width = orbSide;
     orbFrame.size.height = orbSide;
 
@@ -634,114 +576,80 @@ void SenkoHomeLayout(UIView *root, const SenkoHomeChrome *ui, CGFloat headerProg
         card->core.layer.cornerRadius = coreSide * 0.5f;
     }
 
-    CGFloat btnH = split ? splitBtnH : Lerp(m.btnOpen, m.btnShut, t);
+    CGFloat btnH = Lerp(m.btnOpen, m.btnShut, t);
     CGFloat innerW = cardW - m.cardPad * 2.0f;
 
-    if (split) {
-        CGFloat checkSide = splitBtnH;
-        CGFloat connectW = innerW - checkSide - 12.0f;
-        CGFloat rowY = cardH - m.cardPad - splitBtnH;
-        SetLabelSize(card->state, 26.0f, YES);
-        SetFrame(ui->connect, CGRectMake(m.cardPad, rowY, connectW, splitBtnH));
-        SetFrame(ui->check, CGRectMake(cardW - m.cardPad - checkSide, rowY,
-                                       checkSide, splitBtnH));
-        ui->check.alpha = 1.0f;
-        ui->check.userInteractionEnabled = YES;
-        if ([ui->connect imageForState:UIControlStateNormal])
-            [ui->connect setImage:nil forState:UIControlStateNormal];
-        SyncPill(ui->connect, 0.0f);
-        SyncPill(ui->check, 0.0f);
+    /* the collapsed pill is sized to its own title, and drops the glyph, so a
+       russian verb on a 320pt screen never has to ellipse */
+    SetLabelSize(card->state, Lerp(m.stateSizeOpen, m.stateSizeShut, t), YES);
+    UIFont *pillFont = ui->connect ? ui->connect.titleLabel.font : nil;
+    NSString *pillText = [ui->connect titleForState:UIControlStateNormal];
+    CGFloat pillTextW = PillTextWidth(pillText, pillFont);
+    CGFloat connectWShut = pillTextW + m.btnShut;
+    CGFloat maxShut = innerW - m.orbShut - 10.0f - 56.0f;
+    if (connectWShut > maxShut) connectWShut = maxShut;
+    if (connectWShut < 72.0f) connectWShut = 72.0f;
 
-        card->state.textAlignment = NSTextAlignmentCenter;
-        SetFrame(card->state, CGRectMake(m.cardPad,
-                                         splitBlockY + splitOrb + 20.0f,
-                                         innerW, splitStateH));
-        if (ui->detail) {
-            if (ui->detail.numberOfLines != 3) ui->detail.numberOfLines = 3;
-            ui->detail.textAlignment = NSTextAlignmentCenter;
-            ui->detail.alpha = 1.0f;
-            SetFrame(ui->detail, CGRectMake(m.cardPad,
-                                            splitBlockY + splitOrb + 20.0f +
-                                                splitStateH + 8.0f,
-                                            innerW, splitDetailH));
-        }
-    } else {
-        card->state.textAlignment = NSTextAlignmentLeft;
-        if (ui->detail) ui->detail.textAlignment = NSTextAlignmentLeft;
+    CGFloat checkW = m.btnOpen + 14.0f;
+    CGFloat connectWOpen = innerW - checkW - 10.0f;
 
-        /* the collapsed pill is sized to its own title, and drops the glyph, so a
-           russian verb on a 320pt screen never has to ellipse */
-        SetLabelSize(card->state, Lerp(m.stateSizeOpen, m.stateSizeShut, t), YES);
-        UIFont *pillFont = ui->connect ? ui->connect.titleLabel.font : nil;
-        NSString *pillText = [ui->connect titleForState:UIControlStateNormal];
-        CGFloat pillTextW = PillTextWidth(pillText, pillFont);
-        CGFloat connectWShut = pillTextW + m.btnShut;
-        CGFloat maxShut = innerW - m.orbShut - 10.0f - 56.0f;
-        if (connectWShut > maxShut) connectWShut = maxShut;
-        if (connectWShut < 72.0f) connectWShut = 72.0f;
+    CGRect connectOpenR = CGRectMake(m.cardPad, m.openH - m.cardPad - m.btnOpen,
+                                     connectWOpen, m.btnOpen);
+    CGRect connectShutR = CGRectMake(cardW - m.cardPad - connectWShut, shutPad,
+                                     connectWShut, m.btnShut);
+    CGRect connectFrame = LerpRect(connectOpenR, connectShutR, t);
+    connectFrame.size.height = btnH;
+    SetFrame(ui->connect, connectFrame);
 
-        CGFloat checkW = m.btnOpen + 14.0f;
-        CGFloat connectWOpen = innerW - checkW - 10.0f;
+    CGRect checkOpenR = CGRectMake(cardW - m.cardPad - checkW,
+                                   m.openH - m.cardPad - m.btnOpen, checkW, m.btnOpen);
+    /* it slides off the trailing edge, where the card's own clip hides it,
+       rather than fading out underneath the primary pill */
+    CGRect checkShutR = CGRectMake(cardW - m.cardPad, shutPad, checkW, m.btnShut);
+    CGRect checkFrame = LerpRect(checkOpenR, checkShutR, t);
+    checkFrame.size.height = btnH;
+    SetFrame(ui->check, checkFrame);
+    /* the secondary pill is the first thing to go: the compact row has room for
+       one action, and a half faded button under the primary one reads as a bug */
+    ui->check.alpha = t > 0.4f ? 0.0f : (1.0f - t / 0.4f);
+    ui->check.userInteractionEnabled = ui->check.alpha > 0.5f;
 
-        CGRect connectOpenR = CGRectMake(m.cardPad, m.openH - m.cardPad - m.btnOpen,
-                                         connectWOpen, m.btnOpen);
-        CGRect connectShutR = CGRectMake(cardW - m.cardPad - connectWShut, shutPad,
-                                         connectWShut, m.btnShut);
-        CGRect connectFrame = LerpRect(connectOpenR, connectShutR, t);
-        connectFrame.size.height = btnH;
-        SetFrame(ui->connect, connectFrame);
+    /* the pill carries its label alone; setting the image again on every frame
+       still dirties the button's layout */
+    if ([ui->connect imageForState:UIControlStateNormal])
+        [ui->connect setImage:nil forState:UIControlStateNormal];
+    SyncPill(ui->connect, 0.0f);
+    SyncPill(ui->check, 0.0f);
 
-        CGRect checkOpenR = CGRectMake(cardW - m.cardPad - checkW,
-                                       m.openH - m.cardPad - m.btnOpen, checkW, m.btnOpen);
-        /* it slides off the trailing edge, where the card's own clip hides it,
-           rather than fading out underneath the primary pill */
-        CGRect checkShutR = CGRectMake(cardW - m.cardPad, shutPad, checkW, m.btnShut);
-        CGRect checkFrame = LerpRect(checkOpenR, checkShutR, t);
-        checkFrame.size.height = btnH;
-        SetFrame(ui->check, checkFrame);
-        /* the secondary pill is the first thing to go: the compact row has room for
-           one action, and a half faded button under the primary one reads as a bug */
-        ui->check.alpha = t > 0.4f ? 0.0f : (1.0f - t / 0.4f);
-        ui->check.userInteractionEnabled = ui->check.alpha > 0.5f;
+    CGFloat textXOpen = m.cardPad + m.orbOpen + 12.0f;
+    CGFloat textXShut = m.cardPad + m.orbShut + 10.0f;
+    CGFloat textX = Lerp(textXOpen, textXShut, t);
+    CGFloat textWOpen = cardW - textXOpen - m.cardPad;
+    CGFloat textWShut = cardW - textXShut - m.cardPad - connectWShut - 10.0f;
+    if (textWShut < 40.0f) textWShut = 40.0f;
+    CGFloat textW = Lerp(textWOpen, textWShut, t);
 
-        /* the pill carries its label alone; setting the image again on every frame
-           still dirties the button's layout */
-        if ([ui->connect imageForState:UIControlStateNormal])
-            [ui->connect setImage:nil forState:UIControlStateNormal];
-        SyncPill(ui->connect, 0.0f);
-        SyncPill(ui->check, 0.0f);
+    CGFloat stateYOpen = m.cardPad;
+    CGFloat stateYShut = (m.shutH - m.stateH) * 0.5f;
+    SetFrame(card->state, CGRectMake(textX, Lerp(stateYOpen, stateYShut, t),
+                                     textW, m.stateH));
 
-        CGFloat textXOpen = m.cardPad + m.orbOpen + 12.0f;
-        CGFloat textXShut = m.cardPad + m.orbShut + 10.0f;
-        CGFloat textX = Lerp(textXOpen, textXShut, t);
-        CGFloat textWOpen = cardW - textXOpen - m.cardPad;
-        CGFloat textWShut = cardW - textXShut - m.cardPad - connectWShut - 10.0f;
-        if (textWShut < 40.0f) textWShut = 40.0f;
-        CGFloat textW = Lerp(textWOpen, textWShut, t);
-
-        CGFloat stateYOpen = m.cardPad;
-        CGFloat stateYShut = (m.shutH - m.stateH) * 0.5f;
-        SetFrame(card->state, CGRectMake(textX, Lerp(stateYOpen, stateYShut, t),
-                                         textW, m.stateH));
-
-        if (ui->detail) {
-            if (ui->detail.numberOfLines != m.detailLines)
-                ui->detail.numberOfLines = m.detailLines;
-            SetFrame(ui->detail, CGRectMake(textXOpen, m.cardPad + m.stateH + 3.0f,
-                                            textWOpen, m.detailH));
-            /* the second line goes well before the row height could clip it */
-            ui->detail.alpha = t > 0.3f ? 0.0f : (1.0f - t / 0.3f);
-        }
+    if (ui->detail) {
+        if (ui->detail.numberOfLines != m.detailLines)
+            ui->detail.numberOfLines = m.detailLines;
+        SetFrame(ui->detail, CGRectMake(textXOpen, m.cardPad + m.stateH + 3.0f,
+                                        textWOpen, m.detailH));
+        /* the second line goes well before the row height could clip it */
+        ui->detail.alpha = t > 0.3f ? 0.0f : (1.0f - t / 0.3f);
     }
 
     /* the list keeps one frame for the life of the screen and is pushed down by
        a scrolling spacer instead, so collapsing the card never relayouts a row.
        it takes the card's own column so the well, the rows and the card all
        share one set of edges */
-    CGFloat listTop = split ? cardY : cardY + m.shutH + (compact ? 10.0f : 14.0f);
-    CGFloat listX = split ? cardX + cardW + columnGap : cardX;
-    CGFloat listW = split ? (contentX + contentW - inset) - listX : cardW;
-    if (listW < 200.0f) listW = 200.0f;
+    CGFloat listTop = cardY + m.shutH + (compact ? 10.0f : 14.0f);
+    CGFloat listX = cardX;
+    CGFloat listW = cardW;
     CGFloat listHeight = H - safe.bottom - listTop;
     if (listHeight < 60.0f) listHeight = 60.0f;
     CGRect listFrame = CGRectMake(listX, listTop, listW, listHeight);
@@ -754,20 +662,16 @@ void SenkoHomeLayout(UIView *root, const SenkoHomeChrome *ui, CGFloat headerProg
        replacing the header re-runs the table's own layout, so it is only ever
        written while the list is at rest: doing it from a scroll frame made the
        table call back into this pass */
-    CGFloat spacer = split ? 0.0f : m.openH - m.shutH;
+    CGFloat spacer = m.openH - m.shutH;
     UIView *head = ui->table.tableHeaderView;
     CGFloat headH = head ? head.bounds.size.height : 0.0f;
     if (fabsf((float)(headH - spacer)) > 0.5f &&
         !ui->table.tracking && !ui->table.decelerating) {
-        if (spacer < 0.5f) {
-            ui->table.tableHeaderView = nil;
-        } else {
-            UIView *fresh = [[[UIView alloc] initWithFrame:
-                              CGRectMake(0, 0, listW, spacer)] autorelease];
-            fresh.backgroundColor = [UIColor clearColor];
-            fresh.userInteractionEnabled = NO;
-            ui->table.tableHeaderView = fresh;
-        }
+        UIView *fresh = [[[UIView alloc] initWithFrame:
+                          CGRectMake(0, 0, listW, spacer)] autorelease];
+        fresh.backgroundColor = [UIColor clearColor];
+        fresh.userInteractionEnabled = NO;
+        ui->table.tableHeaderView = fresh;
     }
 
     if (ui->well) {

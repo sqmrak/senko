@@ -628,13 +628,44 @@ static void parse_link_lines(const char *text, size_t len,
     }
 }
 
-const char *cfg_reject_reason(const char *blob, size_t blob_len) {
+/* the happ deep link a panel page carries, unwrapped. the page is the only
+   thing some panels publish, so what that link points at decides whether there
+   is a subscription behind the address at all */
+static int page_happ_target(const char *blob, size_t blob_len,
+                            char *out, size_t out_cap) {
+    const char *at = memmem_ascii(blob, blob_len, "happ://");
+    size_t i;
+    char token[4096];
+    if (!at) at = memmem_ascii(blob, blob_len, "HAPP://");
+    if (!at) return -1;
+    i = 0;
+    while (at + i < blob + blob_len && i + 1 < sizeof token &&
+           link_token_char(at[i]))
+        ++i;
+    if (i < 8) return -1;
+    memcpy(token, at, i);
+    token[i] = '\0';
+    return happ_unwrap(token, out, out_cap);
+}
+
+const char *cfg_reject_reason(const char *blob, size_t blob_len,
+                              const char *source_url) {
+    char target[4096];
     size_t i = 0;
     if (!blob || blob_len == 0) return NULL;
-    if (memmem_ascii(blob, blob_len, "happ://crypt5/") ||
-        memmem_ascii(blob, blob_len, "HAPP://crypt5/"))
-        return "this panel publishes the profile only as a happ crypt5 bundle, "
-               "which senko cannot decrypt";
+
+    if (page_happ_target(blob, blob_len, target, sizeof target) == 0) {
+/* a page whose only offer is a link back to itself is not a subscription, and
+   following it again would just fetch the same page */
+        if (source_url && strcmp(target, source_url) == 0)
+            return "this address only hands back its own link: the provider has "
+                   "not published a subscription feed behind it";
+    } else if (memmem_ascii(blob, blob_len, "happ://crypt5/") ||
+               memmem_ascii(blob, blob_len, "HAPP://crypt5/")) {
+        return "the happ crypt5 bundle on this page could not be opened: it is "
+               "either damaged or sealed with a key senko does not carry";
+    }
+
     while (i < blob_len && (blob[i] == ' ' || blob[i] == '\t' ||
                             blob[i] == '\r' || blob[i] == '\n'))
         ++i;

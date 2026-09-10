@@ -213,6 +213,11 @@
 }
 
 - (void)layoutMainChromeGeometry {
+    /* the whole screen changes shape at once during a rotation, and letting
+       uikit interpolate each piece from its old frame is what made the card,
+       the pill and the rows slide past each other on the way round */
+    BOOL animating = [UIView areAnimationsEnabled];
+    if (_rotating && animating) [UIView setAnimationsEnabled:NO];
     SenkoHomeLayout(self.view, &_ui, _listHeaderProgress);
     [self layoutStatusGlow];
     if (_emptyState && !_emptyState.hidden &&
@@ -226,6 +231,7 @@
         _frutigerBg.frame = self.view.bounds;
     if (_ios26Bg && !_ios26Bg.hidden)
         _ios26Bg.frame = self.view.bounds;
+    if (_rotating && animating) [UIView setAnimationsEnabled:YES];
 }
 
 - (void)layoutMainChrome {
@@ -258,24 +264,53 @@
 - (void)willAnimateRotationToInterfaceOrientation:(UIInterfaceOrientation)io
                                          duration:(NSTimeInterval)duration {
     (void)io; (void)duration;
+    _rotating = YES;
     [self.view setNeedsLayout];
     [self layoutMainChrome];
 }
 
-- (void)didRotateFromInterfaceOrientation:(UIInterfaceOrientation)io {
-    (void)io;
+/* ios 8 replaced the rotation callbacks with this one, and the old pair is not
+   called there at all */
+- (void)viewWillTransitionToSize:(CGSize)size
+       withTransitionCoordinator:(id)coordinator {
+    struct objc_super sup = { self, [UIViewController class] };
+    if ([[UIViewController class] instancesRespondToSelector:_cmd])
+        ((void (*)(struct objc_super *, SEL, CGSize, id))objc_msgSendSuper)(
+            &sup, _cmd, size, coordinator);
+    _rotating = YES;
+    [self.view setNeedsLayout];
+    if ([coordinator respondsToSelector:
+            @selector(animateAlongsideTransition:completion:)]) {
+        ((void (*)(id, SEL, id, id))objc_msgSend)(
+            coordinator, @selector(animateAlongsideTransition:completion:), nil,
+            ^(id context) {
+                (void)context;
+                [self finishRotation];
+            });
+        return;
+    }
+    [self performSelector:@selector(finishRotation) withObject:nil afterDelay:0.4];
+}
+
+- (void)finishRotation {
+    if (!_rotating) return;
+    _rotating = NO;
     [self.view setNeedsLayout];
     [self.view layoutIfNeeded];
     [self layoutMainChrome];
-    /* the spacer the collapse is measured against is a different height in the
-       new orientation, and the two column layout has none at all, so the stored
-       progress belongs to a screen that no longer exists */
     _listHeaderProgress = 0.0f;
     [self scrollViewDidScroll:_table];
-    [_revealedRows removeAllObjects];
+}
+
+- (void)didRotateFromInterfaceOrientation:(UIInterfaceOrientation)io {
+    (void)io;
+    /* the spacer the collapse is measured against is a different height in the
+       new orientation, so the stored progress belongs to a screen that is gone.
+       the rows are not reloaded: they are already on screen, and replaying
+       their entrance animation is what made a rotation flicker */
+    [self finishRotation];
     if (_boyField && SenkoThemeIsBoykisser())
         [self syncBoykisserField];
-    [_table reloadData];
 }
 
 - (void)viewDidLoad {

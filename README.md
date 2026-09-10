@@ -40,7 +40,10 @@ handshake nobody can explain.
 refresh / add-subscription accepts:
 
 * classic uri lists (`vless://…` one per line, optionally base64-wrapped)
-* `happ://crypt` … `happ://crypt4` deep links (rsa unwrap to vless/socks/http; `crypt5` not yet). the
+* `happ://crypt` … `happ://crypt5` deep links. `crypt` through `crypt4` are rsa
+  blocks; `crypt5` names one of 36 keys in the four characters at each end of its
+  payload, unwraps a chacha20-poly1305 content key through rsa and authenticates
+  the body, so a damaged or re-signed link is refused rather than half read. the
   action word the share buttons put in front of the payload (`happ://add/…`,
   `happ://install-config/…`, `happ://subscription/…`) is stripped before decoding.
   a deep link that unwraps to nothing but a panel url is registered as a
@@ -63,12 +66,13 @@ at all. a panel that replies to that name with a happ bundle senko cannot open
 `User-Agent` header is left alone.
 
 a panel that answers with its own web page instead of a feed still has its
-`vless://` and `socks5://` nodes read out of the markup. when the page carries no
-node senko can dial, the refresh says which of the two things happened, because
-"parse failed" is not something a user can act on:
+`vless://`, `socks5://` and `happ://` links read out of the markup. when the page
+carries no node senko can dial, the refresh says which of the three things
+happened, because "parse failed" is not something a user can act on:
 
-* the page publishes the profile only as `happ://crypt5/…`, which needs a
-  keytable senko does not ship. ask the provider for a plain or base64 link
+* the page's happ link points back at the address it was fetched from, so the
+  provider never published a feed behind it
+* the crypt5 bundle would not open: damaged, or sealed with a key not in the table
 * the address opens a landing page and the feed is somewhere else
 
 panels that bind a subscription to a device (remnawave and similar) are sent

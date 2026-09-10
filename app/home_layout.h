@@ -62,11 +62,6 @@ void SenkoHomeLayout(UIView *root, const SenkoHomeChrome *ui,
 /* centre of the orb in root coordinates, for the status glow behind it */
 CGPoint SenkoHomeOrbCenter(const SenkoHomeChrome *ui);
 
-/* a landscape ipad puts the card and the list in two columns. the card never
-   collapses there, so the controller has to stop driving headerProgress from
-   the scroll offset */
-BOOL SenkoHomeUsesSplitColumns(UIView *root);
-
 /* a filled pill has to label itself against its own fill: a theme is free to
    hand over a pale idle colour that white text disappears into */
 UIColor *SenkoPillLabelColor(UIColor *fill);

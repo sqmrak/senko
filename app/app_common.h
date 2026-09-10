@@ -6,7 +6,7 @@
 #import "control_client.h"
 
 #define SENKO_SOCK @"/var/tmp/senkod.sock"
-#define SENKO_VERSION @"v09102026-patch1-nightly"
+#define SENKO_VERSION @"v09102026-patch2-nightly"
 #define SENKO_HIDE_LINKS_KEY @"SenkoHideServerLinks"
 #define SENKO_PINNED_SUB_URL_KEY @"SenkoPinnedSubscriptionURL"
 #define SENKO_AWG_PROFILE_KEY @"SenkoAWGProfilePath"

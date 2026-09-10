@@ -16,7 +16,11 @@
 /* declared in config.h; avoid circular include */
 int url_percent_decode(const char *src, size_t src_len, char *dst, size_t cap);
 
-/* url-safe b64 alphabet; reuse project decoder after normalize */
+/* url-safe b64 alphabet; reuse project decoder after normalize. crypt5 meets
+   the same alphabet at three separate points, so it shares this one */
+int happ_b64_decode_ex(const char *in, size_t in_len,
+                       unsigned char *out, size_t cap, size_t *out_len);
+
 static int happ_b64_decode(const char *in, size_t in_len,
                            unsigned char *out, size_t cap, size_t *out_len) {
     char *norm;
@@ -39,6 +43,11 @@ static int happ_b64_decode(const char *in, size_t in_len,
     rc = b64_decode(norm, n, out, cap, out_len);
     free(norm);
     return rc;
+}
+
+int happ_b64_decode_ex(const char *in, size_t in_len,
+                       unsigned char *out, size_t cap, size_t *out_len) {
+    return happ_b64_decode(in, in_len, out, cap, out_len);
 }
 
 static RSA *load_pkcs1_b64(const char *b64) {
@@ -173,9 +182,11 @@ int happ_unwrap(const char *uri, char *out, size_t out_cap) {
 
     p = skip_action_word(p);
 
-/* crypt5 needs chacha keytable; refuse clearly */
-    if (strncmp(p, "crypt5/", 7) == 0)
-        return -1;
+    if (strncmp(p, "crypt5/", 7) == 0) {
+        if (happ_crypt5_unwrap(p + 7, out, out_cap) != 0) return -1;
+        trim_inplace(out);
+        return out[0] ? 0 : -1;
+    }
 
     if (strncmp(p, "crypt4/", 7) == 0) { ordinal = 3; prefix = 7; }
     else if (strncmp(p, "crypt3/", 7) == 0) { ordinal = 2; prefix = 7; }

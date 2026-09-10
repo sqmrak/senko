@@ -96,6 +96,9 @@
     SenkoEmptyStateView *_emptyState;
     NSString      *_deviceHWID;
     int            _hwidRetries;
+    /* uikit runs the rotation inside its own animation block, so every frame
+       this layout writes would otherwise be interpolated from the old shape */
+    BOOL           _rotating;
 }
 
 - (void)dealloc;
@@ -115,6 +118,9 @@
 - (void)viewDidLayoutSubviews;
 - (void)willAnimateRotationToInterfaceOrientation:(UIInterfaceOrientation)io duration:(NSTimeInterval)duration;
 - (void)didRotateFromInterfaceOrientation:(UIInterfaceOrientation)io;
+- (void)viewWillTransitionToSize:(CGSize)size
+       withTransitionCoordinator:(id)coordinator;
+- (void)finishRotation;
 - (void)viewDidLoad;
 - (void)viewWillAppear:(BOOL)animated;
 - (void)ensureDaemonThenRefresh;
