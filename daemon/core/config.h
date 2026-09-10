@@ -108,6 +108,10 @@ cfg_status_t cfg_parse_subscription(const char *blob, size_t blob_len,
 int cfg_subscription_url(const char *blob, size_t blob_len,
                          char *out, size_t out_cap);
 
+/* why a fetched body carried no node senko can run, when the answer is known.
+   returns a static string or NULL when there is nothing specific to say */
+const char *cfg_reject_reason(const char *blob, size_t blob_len);
+
 #ifdef __cplusplus
 }
 #endif

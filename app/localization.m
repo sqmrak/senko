@@ -129,6 +129,10 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"Paste from clipboard", @"Вставить из буфера");
     SenkoAddTranslation(@"Paste", @"Вставить");
     SenkoAddTranslation(@"Safe mode", @"Безопасный режим");
+    SenkoAddTranslation(@"This subscription is published only as a Happ crypt5 bundle, which Senko cannot decrypt. Ask the provider for a plain or base64 subscription link.",
+                        @"Эта подписка отдаётся только как бандл Happ crypt5, который Senko не умеет расшифровывать. Попросите у провайдера обычную ссылку или base64-подписку.");
+    SenkoAddTranslation(@"This address opens a web page instead of a subscription feed. Copy the subscription link the page offers, not the page address.",
+                        @"По этому адресу открывается веб-страница, а не подписка. Скопируйте ссылку на подписку, которую предлагает страница, а не адрес самой страницы.");
     SenkoAddTranslation(@"Copy link", @"Копировать ссылку");
     SenkoAddTranslation(@"Copied", @"Скопировано");
     SenkoAddTranslation(@"Whole device, set up by the root daemon",
@@ -500,6 +504,10 @@ NSString *SenkoHumanReadableError(NSString *text) {
         message = @"This server uses a protocol or security mode that Senko does not support.";
     else if ([raw isEqualToString:@"server: bad uuid in server link"])
         message = @"The server link has an invalid UUID. Import the link again from its source.";
+    else if ([raw hasPrefix:@"this panel publishes the profile only as a happ crypt5"])
+        message = @"This subscription is published only as a Happ crypt5 bundle, which Senko cannot decrypt. Ask the provider for a plain or base64 subscription link.";
+    else if ([raw hasPrefix:@"this address opens a web page"])
+        message = @"This address opens a web page instead of a subscription feed. Copy the subscription link the page offers, not the page address.";
     else if ([raw isEqualToString:@"connect timeout"] || [raw isEqualToString:@"switch timeout"])
         message = @"The connection attempt timed out. Check the network and try another server.";
     else if ([raw hasPrefix:@"daemon offline"] || [raw isEqualToString:@"daemon offline"])

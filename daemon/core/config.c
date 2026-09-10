@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 
 static int is_hex(char c) {
@@ -520,6 +521,17 @@ cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out) {
     return CFG_OK;
 }
 
+/* the blob is not nul terminated, so strstr cannot be used on it */
+static const char *memmem_ascii(const char *hay, size_t n, const char *needle) {
+    size_t nl = strlen(needle);
+    size_t i;
+    if (nl == 0 || n < nl) return NULL;
+    for (i = 0; i + nl <= n; ++i) {
+        if (memcmp(hay + i, needle, nl) == 0) return hay + i;
+    }
+    return NULL;
+}
+
 static int looks_like_links(const char *b, size_t n) {
     for (size_t i = 0; i + 2 < n; ++i) {
         if (b[i] == ':' && b[i+1] == '/' && b[i+2] == '/') return 1;
@@ -537,6 +549,51 @@ static int looks_like_json(const char *b, size_t n) {
 }
 
 static void parse_link_lines(const char *text, size_t len,
+                             vl_server_t *out, size_t max, size_t *count);
+
+/* a panel that answers with its own web page still carries the nodes inside the
+   markup, wrapped in quotes and tags. only the schemes that are always a node
+   are picked out of a line: an http(s) url inside a page is a page link far
+   more often than it is a CONNECT proxy */
+static int embedded_link_start(const char *p) {
+    return strncmp(p, "vless://", 8) == 0 ||
+           strncmp(p, "socks5://", 9) == 0 ||
+           strncmp(p, "happ://", 7) == 0 ||
+           strncmp(p, "HAPP://", 7) == 0;
+}
+
+static int link_token_char(char c) {
+    return !(c == '"' || c == '\'' || c == '<' || c == '>' || c == '\\' ||
+             c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\0');
+}
+
+static void scan_embedded_links(const char *line, vl_server_t *out,
+                                size_t max, size_t *count) {
+    char token[4096];
+    size_t i = 0;
+    size_t n = strlen(line);
+    while (i < n && *count < max) {
+        size_t j;
+        if (!embedded_link_start(line + i)) { ++i; continue; }
+        j = i;
+        while (j < n && link_token_char(line[j])) ++j;
+        if (j - i > 0 && j - i < sizeof token) {
+            memcpy(token, line + i, j - i);
+            token[j - i] = '\0';
+            if (token[0] == 'h' || token[0] == 'H') {
+                char plain[8192];
+                if (happ_unwrap(token, plain, sizeof plain) == 0)
+                    parse_link_lines(plain, strlen(plain), out, max, count);
+            } else if (cfg_parse_link(token, &out[*count]) == CFG_OK &&
+                       cfg_validate_server(&out[*count], NULL, 0)) {
+                (*count)++;
+            }
+        }
+        i = j > i ? j : i + 1;
+    }
+}
+
+static void parse_link_lines(const char *text, size_t len,
                              vl_server_t *out, size_t max, size_t *count) {
     const char *p = text;
     const char *end = text + len;
@@ -550,6 +607,7 @@ static void parse_link_lines(const char *text, size_t len,
 
         size_t llen = (size_t)(le - p);
         if (llen > 0 && llen < sizeof line) {
+            size_t before = *count;
             memcpy(line, p, llen);
             line[llen] = '\0';
 /* expand happ lines into one or many nodes */
@@ -562,10 +620,29 @@ static void parse_link_lines(const char *text, size_t len,
                        cfg_validate_server(&out[*count], NULL, 0)) {
                 (*count)++;
             }
+            if (*count == before)
+                scan_embedded_links(line, out, max, count);
         }
         if (!nl) break;
         p = nl + 1;
     }
+}
+
+const char *cfg_reject_reason(const char *blob, size_t blob_len) {
+    size_t i = 0;
+    if (!blob || blob_len == 0) return NULL;
+    if (memmem_ascii(blob, blob_len, "happ://crypt5/") ||
+        memmem_ascii(blob, blob_len, "HAPP://crypt5/"))
+        return "this panel publishes the profile only as a happ crypt5 bundle, "
+               "which senko cannot decrypt";
+    while (i < blob_len && (blob[i] == ' ' || blob[i] == '\t' ||
+                            blob[i] == '\r' || blob[i] == '\n'))
+        ++i;
+    if (blob_len - i >= 5 &&
+        (strncasecmp(blob + i, "<html", 5) == 0 ||
+         strncasecmp(blob + i, "<!doc", 5) == 0))
+        return "this address opens a web page, not a subscription feed";
+    return NULL;
 }
 
 #include "third_party/cJSON.h"

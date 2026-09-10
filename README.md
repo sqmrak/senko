@@ -59,8 +59,17 @@ dropped from the row label, so a section does not read as one repeated server.
 
 refreshes go out as `Happ/3.26.1` so panels that only answer known clients answer
 at all. a panel that replies to that name with a happ bundle senko cannot open
-(`crypt5`) is asked once more as `Senko/2`, which is what makes it serve the plain
-feed; a subscription carrying its own `User-Agent` header is left alone.
+(`crypt5`) is asked once more as `Senko/2`; a subscription carrying its own
+`User-Agent` header is left alone.
+
+a panel that answers with its own web page instead of a feed still has its
+`vless://` and `socks5://` nodes read out of the markup. when the page carries no
+node senko can dial, the refresh says which of the two things happened, because
+"parse failed" is not something a user can act on:
+
+* the page publishes the profile only as `happ://crypt5/…`, which needs a
+  keytable senko does not ship. ask the provider for a plain or base64 link
+* the address opens a landing page and the feed is somewhere else
 
 panels that bind a subscription to a device (remnawave and similar) are sent
 `x-hwid`, `x-device-os`, `x-ver-os` and `x-device-model`. the id lives in

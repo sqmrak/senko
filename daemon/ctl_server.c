@@ -415,7 +415,7 @@ static void sub_name_from_url(const char *url, char *out, size_t cap) {
    sees nodes instead of an empty section */
 static void import_subscription_url(ctl_server_t *s, ctl_client_t *c,
                                     const char *url) {
-    char reply[192];
+    char reply[288];
     size_t rn = 0;
     char name[128];
     size_t si = 0;
@@ -453,8 +453,12 @@ static void import_subscription_url(ctl_server_t *s, ctl_client_t *c,
     if (!blob || meta.gated ||
         store_refresh_sub(&s->engine.store, si, (const char *)blob, blen,
                           &added) != STORE_OK) {
+        const char *why = blob ? cfg_reject_reason((const char *)blob, blen) : NULL;
+        char msg[224];
+        snprintf(msg, sizeof msg, "subscription added, %s",
+                 why ? why : "refresh failed");
         free(blob);
-        if (ctl_build_ok("subscription added, refresh failed", reply, sizeof reply, &rn) == CTL_OK)
+        if (ctl_build_ok(msg, reply, sizeof reply, &rn) == CTL_OK)
             client_write(c, reply, rn);
         return;
     }
@@ -1158,9 +1162,15 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         }
         size_t added = 0;
         if (store_refresh_sub(&s->engine.store, (size_t)si, (const char *)blob, blen, &added) != STORE_OK) {
+/* "parse failed" tells the user nothing they can act on, and the two answers a
+   panel actually gives instead of a feed are both nameable */
+            const char *why = cfg_reject_reason((const char *)blob, blen);
+            char detail[224];
+            size_t dn = 0;
             free(blob);
-            if (ctl_build_err("refresh parse failed", reply, sizeof reply, &rn) == CTL_OK)
-                client_write(c, reply, rn);
+            if (ctl_build_err(why ? why : "refresh parse failed",
+                              detail, sizeof detail, &dn) == CTL_OK)
+                client_write(c, detail, dn);
             return;
         }
         free(blob);

@@ -97,6 +97,48 @@ int main(void) {
        cfg_parse_subscription(link, strlen(link), servers, 8, &count) == CFG_OK &&
        count == 1 && strcmp(servers[0].host, "node.example") == 0);
 
+    /* a panel that answers with its own page still carries the nodes in the
+       markup, and the whole-line parser never saw them */
+    const char *page =
+        "<!DOCTYPE html>\n<html><body>\n"
+        "<a class=\"btn\" href=\"vless://11111111-2222-3333-4444-555555555555"
+        "@page.example:8443?security=tls&sni=page.example&type=tcp"
+        "#page-one\">import</a>\n"
+        "<p>see <a href=\"https://fonts.example/css?family=Nunito\">fonts</a></p>\n"
+        "</body></html>\n";
+    count = 0;
+    ok("a node inside markup is imported",
+       cfg_parse_subscription(page, strlen(page), servers, 8, &count) == CFG_OK &&
+       count == 1 && strcmp(servers[0].host, "page.example") == 0);
+
+    /* a page link is a page link: it must not become an https proxy */
+    const char *plain_page =
+        "<!DOCTYPE html><html><body>"
+        "<link href=\"https://fonts.example/css2?family=Nunito\">"
+        "<a href=\"https://apps.example/app/id123\">get it</a>"
+        "</body></html>";
+    count = 0;
+    cfg_parse_subscription(plain_page, strlen(plain_page), servers, 8, &count);
+    ok("page links are not turned into proxies", count == 0);
+    ok("a page with no feed says so",
+       cfg_reject_reason(plain_page, strlen(plain_page)) != NULL);
+
+    /* the one shape senko genuinely cannot read has to name itself */
+    const char *crypt5_page =
+        "<!DOCTYPE html><html><body>"
+        "<a href=\"happ://crypt5/fzvdSYbx2G3lRSCU2HlXiw58761w1zJ\">add</a>"
+        "</body></html>";
+    count = 0;
+    cfg_parse_subscription(crypt5_page, strlen(crypt5_page), servers, 8, &count);
+    ok("a crypt5 only page yields no node", count == 0);
+    {
+        const char *why = cfg_reject_reason(crypt5_page, strlen(crypt5_page));
+        ok("a crypt5 only page is named as such",
+           why != NULL && strstr(why, "crypt5") != NULL);
+    }
+    ok("a real feed has nothing to explain",
+       cfg_reject_reason(nodes, strlen(nodes)) == NULL);
+
     /* crypt5 still has no keytable, and a wrong answer is worse than none */
     ok("crypt5 is refused rather than guessed",
        happ_unwrap("happ://crypt5/AAAA", plain, sizeof plain) != 0);
