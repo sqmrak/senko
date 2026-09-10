@@ -59,6 +59,9 @@
        arrived, so the label can tick between refreshes */
     long          _tunnelUptime;
     CFTimeInterval _tunnelUptimeAt;
+    /* whether the two above describe the tunnel now on screen. without it a
+       zero age and "no age reported yet" are the same value */
+    BOOL          _tunnelUptimeKnown;
     NSTimer      *_uptimeTimer;
     UIView            *_statusWashHost;
     CALayer           *_statusWash;

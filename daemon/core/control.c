@@ -262,8 +262,9 @@ ctl_status_t ctl_build_state(ctl_state_t st, long uptime,
                              char *buf, size_t cap, size_t *n) {
     if (!buf) return CTL_ERR_ARG;
     /* the age is a trailing token so a reader that only wants the state name
-       can keep taking the first word */
-    if (uptime > 0)
+       can keep taking the first word. a connected tunnel always carries one,
+       because a missing token and an age of zero are not the same answer */
+    if (uptime > 0 || st == CTL_STATE_CONNECTED)
         return finish(snprintf(buf, cap, "STATE %s %ld\n",
                                ctl_state_name(st), uptime), cap, n);
     return finish(snprintf(buf, cap, "STATE %s\n", ctl_state_name(st)), cap, n);

@@ -20,7 +20,7 @@
 /* h:mm:ss once past an hour, m:ss below, which is what a session actually
    reads like on this screen */
 static NSString *SenkoFormatUptime(long seconds) {
-    if (seconds <= 0) return nil;
+    if (seconds < 0) return nil;
     long h = seconds / 3600;
     long m = (seconds % 3600) / 60;
     long s = seconds % 60;
@@ -32,7 +32,7 @@ static NSString *SenkoFormatUptime(long seconds) {
 /* the label ticks once a second while a tunnel is up and stops otherwise, so an
    idle screen schedules nothing */
 - (void)syncUptimeTicker {
-    BOOL wanted = [_state isEqualToString:@"connected"] && _tunnelUptime > 0;
+    BOOL wanted = [_state isEqualToString:@"connected"] && _tunnelUptimeKnown;
     if (wanted == (_uptimeTimer != nil)) return;
     if (!wanted) {
         [_uptimeTimer invalidate];
@@ -69,7 +69,7 @@ static NSString *SenkoFormatUptime(long seconds) {
     NSNumber *ms = [_serverStatus objectForKey:[NSNumber numberWithInt:picked->index]];
     if (ms && [ms intValue] >= 0)
         [line appendFormat:@" · %d ms", [ms intValue]];
-    if ([_state isEqualToString:@"connected"] && _tunnelUptime > 0) {
+    if ([_state isEqualToString:@"connected"] && _tunnelUptimeKnown) {
         long elapsed = _tunnelUptime +
             (long)(CACurrentMediaTime() - _tunnelUptimeAt);
         NSString *age = SenkoFormatUptime(elapsed);
@@ -81,6 +81,20 @@ static NSString *SenkoFormatUptime(long seconds) {
 - (void)applyState {
     BOOL connecting = [_state isEqualToString:@"connecting"];
     BOOL connected = [_state isEqualToString:@"connected"];
+/* the connect reply carries a state but no clock, and nothing polled STATUS
+   again while the tunnel stayed up, so the age never arrived and the ticker
+   never started: it only appeared after leaving the screen and coming back.
+   the clock starts here at zero and the next status reply corrects it with the
+   daemon's own, which is the one that survives the app being closed */
+    if (connected && !_tunnelUptimeKnown) {
+        _tunnelUptime = 0;
+        _tunnelUptimeAt = CACurrentMediaTime();
+        _tunnelUptimeKnown = YES;
+    } else if (!connected) {
+        _tunnelUptimeKnown = NO;
+        _tunnelUptime = 0;
+        _tunnelUptimeAt = 0.0;
+    }
     BOOL active = connected || connecting;
     if (!connecting)
         [NSObject cancelPreviousPerformRequestsWithTarget:self

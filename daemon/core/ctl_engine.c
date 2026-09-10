@@ -13,8 +13,9 @@ long ctl_engine_now(void) {
 long ctl_engine_uptime(const ctl_engine_t *e) {
     if (!e || e->state != CTL_STATE_CONNECTED || e->connected_at <= 0) return 0;
     long now = ctl_engine_now();
-    /* a clock change must not report a negative or absurd age */
-    return (now > e->connected_at) ? now - e->connected_at : 0;
+    /* a clock change must not report a negative or absurd age. the first second
+       of a tunnel is a real age of zero, not a missing one */
+    return (now >= e->connected_at) ? now - e->connected_at : 0;
 }
 
 #include <stdio.h>

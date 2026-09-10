@@ -17,9 +17,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>09102026-patch4-nightly</string>
+    <string>09102026-patch5-nightly</string>
 	<key>CFBundleVersion</key>
-	<string>37</string>
+	<string>38</string>
     <key>CFBundleIconFile</key>
     <string>Icon.png</string>
     <!-- one file per slot: springboard scales anything else into place and

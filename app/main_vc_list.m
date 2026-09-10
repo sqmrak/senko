@@ -797,9 +797,14 @@ static int SenkoSortRank(NSNumber *ms) {
         /* the daemon owns the clock, so the elapsed time survives the app being
            closed and reopened over a live tunnel. a dropped reply carries no
            clock at all and must not reset the one already on screen */
-        if ([state length]) {
+        if ([state isEqualToString:@"connected"]) {
             _tunnelUptime = uptime;
-            _tunnelUptimeAt = uptime > 0 ? CACurrentMediaTime() : 0.0;
+            _tunnelUptimeAt = CACurrentMediaTime();
+            _tunnelUptimeKnown = YES;
+        } else if ([state length]) {
+            _tunnelUptimeKnown = NO;
+            _tunnelUptime = 0;
+            _tunnelUptimeAt = 0.0;
         }
         vlessState = [state copy];
         applyBackendState();
