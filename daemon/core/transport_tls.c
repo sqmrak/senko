@@ -32,9 +32,12 @@ static void *tls_open(int fd, const transport_tls_cfg_t *cfg) {
     SSL_CTX_set_max_proto_version(h->ctx, TLS1_3_VERSION);
 
 /* a bare ClientHello with no alpn and openssl's own suite/group order is a
-   free dpi fingerprint for "not a browser"; match what chrome actually sends
-   without touching certificate validation */
-    static const unsigned char alpn[] = "\x02h2\x08http/1.1";
+   free dpi fingerprint for "not a browser". offering h2 here is not safe:
+   this transport only ever speaks http/1.x (tls_read/tls_write pass bytes
+   straight through to subfetch's http.c and to the vless byte stream), so a
+   server that honors h2 over an alpn offer leaves both trying to parse a
+   binary h2 frame as a plaintext response */
+    static const unsigned char alpn[] = "\x08http/1.1";
     SSL_CTX_set_alpn_protos(h->ctx, alpn, sizeof alpn - 1);
     SSL_CTX_set_ciphersuites(h->ctx,
         "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256");
