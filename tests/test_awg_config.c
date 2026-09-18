@@ -128,11 +128,21 @@ int main(void) {
 
     /* awg 2.0 wire options senko cannot produce have to fail loudly instead of
        building a tunnel that never completes a handshake */
-    static const char protected_header[] =
+    static const char header_protection_needs_padding[] =
         "[Interface]\nPrivateKey = " K_PRIV "\nAddress = 10.0.0.2/32\n"
         "HeaderProtectionKey = " K_PSK "\n"
         "[Peer]\nPublicKey = " K_PUB "\nEndpoint = 127.0.0.1:51820\n";
-    bad |= expect_status(protected_header, AWG_CFG_ERR_UNSUPPORTED, "header protection");
+    bad |= expect_status(header_protection_needs_padding, AWG_CFG_ERR_RANGE,
+                         "header protection without enough s-prefix junk");
+
+    static const char header_protection[] =
+        "[Interface]\nPrivateKey = " K_PRIV "\nAddress = 10.0.0.2/32\n"
+        "S1 = 12\nS2 = 12\nS3 = 12\nS4 = 12\n"
+        "HeaderProtectionKey = " K_PSK "\n"
+        "[Peer]\nPublicKey = " K_PUB "\nEndpoint = 127.0.0.1:51820\n";
+    r = parse(header_protection, &cfg, reason, sizeof reason);
+    bad |= expect(r == AWG_CFG_OK, "header protection with 12 byte s-prefixes parses");
+    bad |= expect(cfg.has_header_protection, "header protection flag set");
 
     static const char trailers_on[] =
         "[Interface]\nPrivateKey = " K_PRIV "\nAddress = 10.0.0.2/32\n"

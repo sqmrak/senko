@@ -264,8 +264,13 @@ awg_hs_status_t awg_handshake_build_initiation(awg_handshake_t *hs,
     if (ok) {
         memcpy(packet + 116, mac, AWG_TAG_LEN);
         memset(packet + 132, 0, AWG_TAG_LEN);
-        *out_len = need;
+/* header protection xors the whole message with a keystream nonced from the
+   s1 junk this function already wrote in front of it */
+        if (cfg->has_header_protection)
+            ok = rc_chacha20_xor(cfg->header_protection_key, out, packet, packet,
+                                 AWG_INIT_PACKET_LEN) == RC_OK;
     }
+    if (ok) *out_len = need;
     OPENSSL_cleanse(key, sizeof key);
     OPENSSL_cleanse(shared, sizeof shared);
     OPENSSL_cleanse(static_public, sizeof static_public);
@@ -283,6 +288,13 @@ awg_hs_status_t awg_handshake_consume_response(awg_handshake_t *hs,
     size_t offset = cfg->padding[1];
     if (packet_len < offset + AWG_RESP_PACKET_LEN) return AWG_HS_ERR_FORMAT;
     const uint8_t *msg = packet + offset;
+    uint8_t decrypted[AWG_RESP_PACKET_LEN];
+    if (cfg->has_header_protection) {
+        if (rc_chacha20_xor(cfg->header_protection_key, packet, msg, decrypted,
+                            AWG_RESP_PACKET_LEN) != RC_OK)
+            return AWG_HS_ERR_CRYPTO;
+        msg = decrypted;
+    }
     uint32_t header = read_le32(msg);
     if (header < cfg->header_min[1] || header > cfg->header_max[1] ||
         read_le32(msg + 8) != hs->sender_index)

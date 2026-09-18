@@ -36,6 +36,10 @@ typedef struct {
     uint32_t padding[4];
     uint32_t header_min[4];
     uint32_t header_max[4];
+    /* awg 2.0 header protection: a chacha20 keystream xor over each message,
+       keyed by this and nonced from the s-prefix junk that precedes it */
+    uint8_t header_protection_key[AWG_KEY_LEN];
+    int has_header_protection;
     /* i1-i5, the special junk packets awg 1.5 sends before the handshake */
     char signature[5][AWG_MAX_SIGNATURE];
     /* j1-j3, the controlled junk packets that follow i1-i5 in the same train.

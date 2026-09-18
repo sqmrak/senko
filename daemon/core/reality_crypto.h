@@ -93,6 +93,11 @@ rc_status_t rc_chacha20poly1305_open(const uint8_t key[32], const uint8_t iv[RC_
                                      const uint8_t tag[RC_GCM_TAGLEN],
                                      uint8_t *pt);
 
+/* amneziawg header protection: an unauthenticated chacha20 keystream xor, safe
+   in place because a stream cipher's keystream does not depend on the data */
+rc_status_t rc_chacha20_xor(const uint8_t key[32], const uint8_t nonce[12],
+                            const uint8_t *in, uint8_t *out, size_t len);
+
 #ifdef __cplusplus
 }
 #endif

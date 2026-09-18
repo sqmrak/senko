@@ -85,6 +85,10 @@ awg_tun_status_t awg_tunnel_seal(awg_tunnel_t *tunnel,
     write_le32(wire, choose_header(cfg->header_min[3], cfg->header_max[3]));
     write_le32(wire + 4, tunnel->handshake.receiver_index);
     write_le64(wire + 8, counter);
+/* only the 16 byte header is protected; the payload gets its own aead seal */
+    if (cfg->has_header_protection &&
+        rc_chacha20_xor(cfg->header_protection_key, out, wire, wire, 16) != RC_OK)
+        return AWG_TUN_ERR_CRYPTO;
     uint8_t nonce[12];
     uint8_t tag[16];
     nonce_for_counter(counter, nonce);
@@ -110,11 +114,18 @@ awg_tun_status_t awg_tunnel_open(awg_tunnel_t *tunnel,
     if (!tunnel->handshake.established || packet_len < prefix + AWG_TRANSPORT_FIXED)
         return AWG_TUN_ERR_FORMAT;
     const uint8_t *wire = packet + prefix;
-    uint32_t header = read_le32(wire);
+    uint8_t header_buf[16];
+    const uint8_t *hdr = wire;
+    if (cfg->has_header_protection) {
+        if (rc_chacha20_xor(cfg->header_protection_key, packet, wire, header_buf, 16) != RC_OK)
+            return AWG_TUN_ERR_FORMAT;
+        hdr = header_buf;
+    }
+    uint32_t header = read_le32(hdr);
     if (header < cfg->header_min[3] || header > cfg->header_max[3] ||
-        read_le32(wire + 4) != tunnel->handshake.sender_index)
+        read_le32(hdr + 4) != tunnel->handshake.sender_index)
         return AWG_TUN_ERR_FORMAT;
-    uint64_t counter = read_le64(wire + 8);
+    uint64_t counter = read_le64(hdr + 8);
     if (tunnel->have_recv_counter) {
         if (counter > tunnel->recv_counter) {
             uint64_t shift = counter - tunnel->recv_counter;

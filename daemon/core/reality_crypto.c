@@ -1,5 +1,7 @@
 #include "reality_crypto.h"
 
+#include <string.h>
+
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
 #include <openssl/hmac.h>
@@ -324,6 +326,30 @@ rc_status_t rc_chacha20poly1305_open(const uint8_t key[32], const uint8_t iv[RC_
         if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG, RC_GCM_TAGLEN,
                                 (void *)tag) != 1) break;
         if (EVP_DecryptFinal_ex(ctx, pt + len, &len) != 1) break;
+        rc = RC_OK;
+    } while (0);
+
+    EVP_CIPHER_CTX_free(ctx);
+    return rc;
+}
+
+rc_status_t rc_chacha20_xor(const uint8_t key[32], const uint8_t nonce[12],
+                            const uint8_t *in, uint8_t *out, size_t len) {
+    if (!key || !nonce || (len && (!in || !out))) return RC_ERR_ARG;
+
+    /* openssl's chacha20 iv is a 4 byte little-endian block counter followed
+       by the 12 byte nonce; amneziawg always starts the counter at zero */
+    uint8_t iv[16] = {0};
+    memcpy(iv + 4, nonce, 12);
+
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) return RC_ERR_CRYPTO;
+
+    rc_status_t rc = RC_ERR_CRYPTO;
+    int outl = 0;
+    do {
+        if (EVP_EncryptInit_ex(ctx, EVP_chacha20(), NULL, key, iv) != 1) break;
+        if (len && EVP_EncryptUpdate(ctx, out, &outl, in, (int)len) != 1) break;
         rc = RC_OK;
     } while (0);
 

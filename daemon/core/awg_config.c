@@ -158,20 +158,20 @@ static int key_is_required(awg_section_t section,
            span_equals(key_start, key_end, "Endpoint");
 }
 
-/* awg 2.0 knobs that change what goes on the wire. senko cannot produce them,
-   and a tunnel built while ignoring one never completes a handshake, so the
-   profile is refused naming the field that caused it. the two switches are only
-   fatal when they are actually turned on */
+/* awg 2.0 knobs that change what goes on the wire. senko cannot produce
+   random trailers, and a tunnel built while ignoring that never completes a
+   handshake, so the profile is refused naming the field that caused it. it is
+   only fatal when actually turned on.
+   ContentPaddingAddition is not refused here: it only lengthens the padding
+   the *sender* adds to its own outgoing data packets, and awg_tunnel_open
+   already recovers the real length from the tunnelled ip header regardless of
+   how much trailing padding the peer chose to add, so a client that never
+   emits this padding itself still interoperates fine */
 static const char *unsupported_wire_key(const char *key_start, const char *key_end,
                                         const char *value_start, const char *value_end) {
-    if (span_equals(key_start, key_end, "HeaderProtectionKey"))
-        return "HeaderProtectionKey";
     if (span_equals(key_start, key_end, "RandomTrailers") &&
         span_equals(value_start, value_end, "on"))
         return "RandomTrailers";
-    if (span_equals(key_start, key_end, "ContentPaddingAddition") &&
-        !span_equals(value_start, value_end, "0"))
-        return "ContentPaddingAddition";
     return NULL;
 }
 
@@ -203,6 +203,10 @@ static awg_cfg_status_t assign_interface(awg_config_t *cfg,
         if (parse_u32(value_start, value_end, &cfg->jmin) != 0) goto bad_value;
     } else if (span_equals(key_start, key_end, "Jmax")) {
         if (parse_u32(value_start, value_end, &cfg->jmax) != 0) goto bad_value;
+    } else if (span_equals(key_start, key_end, "HeaderProtectionKey")) {
+        if (parse_key(value_start, value_end, cfg->header_protection_key) != 0)
+            goto bad_key;
+        cfg->has_header_protection = 1;
     } else if (key_end - key_start == 2 && key_start[0] == 'S' &&
                key_start[1] >= '1' && key_start[1] <= '4') {
         size_t i = (size_t)(key_start[1] - '1');
@@ -372,6 +376,13 @@ awg_cfg_status_t awg_config_parse(const char *text, size_t len, awg_config_t *cf
         uint32_t base = i == 0 ? 148 : (i == 1 ? 92 : (i == 2 ? 64 : 32));
         if (cfg->padding[i] > cfg->mtu || base + cfg->padding[i] > cfg->mtu) {
             set_reason(reason, reason_cap, "packet padding exceeds mtu");
+            return AWG_CFG_ERR_RANGE;
+        }
+        /* the header protection nonce comes from the first 12 bytes of this
+           packet's own s-prefix junk, so there has to be at least that much */
+        if (cfg->has_header_protection && cfg->padding[i] < 12) {
+            set_reason(reason, reason_cap,
+                       "header protection needs S1-S4 at least 12 bytes");
             return AWG_CFG_ERR_RANGE;
         }
         for (size_t j = i + 1; j < 4; ++j) {
