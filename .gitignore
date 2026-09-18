@@ -22,6 +22,7 @@ tests/fuzz_*
 !tests/fuzz_*.h
 senkotlsfix/*.dylib
 status/*.dylib
+status/build-install/
 
 # packaging stage (templates under DEBIAN/Library/var stay)
 packaging/usr/
