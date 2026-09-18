@@ -36,8 +36,13 @@ BOOL SenkoCrashSafeMode(void);
 /* how many launches in a row died before the ui came up */
 int SenkoCrashFailedLaunches(void);
 
-/* leave safe mode once the user has read the report */
+/* leave safe mode once the user has read the report. this also removes a safe
+   mode that was asked for by hand */
 void SenkoCrashClearSafeMode(void);
+
+/* ask for safe mode on the next launch without waiting for two dead ones. the
+   current run is already built, so this changes nothing until senko restarts */
+void SenkoCrashEnterSafeMode(void);
 
 /* the previous launch's fatal report, or nil when the app shut down cleanly */
 NSString *SenkoCrashLastReport(void);

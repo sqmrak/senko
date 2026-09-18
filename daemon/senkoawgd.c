@@ -6,8 +6,7 @@
 #include "awg_route.h"
 #include "awg_pfroute.h"
 #include "awg_utun.h"
-#include "vpn_icon.h"
-#include "legacy_ios.h"
+#include "status.h"
 #include "proc_detach.h"
 
 #include <openssl/crypto.h>
@@ -99,11 +98,6 @@ static long monotonic_millis(void) {
 }
 
 static int run_tunnel(const awg_config_t *cfg, int timeout_ms) {
-    if (senko_is_ios5()) {
-        write_status("error ios 5 full-device routing disabled for safety");
-        fprintf(stderr, "senkoawgd: ios 5 full-device routing disabled for safety\n");
-        return 1;
-    }
     write_status("connecting");
     char ifname[32];
     int tun_fd = awg_utun_open(ifname, sizeof ifname);
@@ -162,7 +156,7 @@ static int run_tunnel(const awg_config_t *cfg, int timeout_ms) {
     fprintf(stderr, "senkoawgd: linked %s to %s:%u\n",
             ifname, cfg->endpoint_host, cfg->endpoint_port);
     write_status("connected");
-    vpn_icon_set(1);
+    status_set(1);
     long last_tx_ms = monotonic_millis();
     long last_handshake_ms = last_tx_ms;
     long last_rekey_attempt_ms = 0;
@@ -233,7 +227,7 @@ static int run_tunnel(const awg_config_t *cfg, int timeout_ms) {
         }
     }
     awg_route_plan_down(&route_plan);
-    vpn_icon_set(0);
+    status_set(0);
     write_status(g_stop ? "idle" : "error tunnel stopped");
     OPENSSL_cleanse(&tunnel, sizeof tunnel);
     close(udp_fd);
@@ -263,10 +257,6 @@ int main(int argc, char **argv) {
     if (argc < 3) { usage(argv[0]); return 2; }
     if (strcmp(argv[1], "--route-mutation-probe") == 0) {
         if (argc < 4) { usage(argv[0]); return 2; }
-        if (senko_is_ios5()) {
-            fprintf(stderr, "senkoawgd: ios 5 route probe disabled for safety\n");
-            return 1;
-        }
         char detail[160]; int rc = awg_pfroute_probe_host4(argv[2], argv[3], detail, sizeof detail);
         fprintf(stderr, "senkoawgd: route mutation %s\n", detail);
         return rc == 0 ? 0 : 1;
@@ -287,10 +277,6 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (strcmp(argv[1], "--interface-probe") == 0) {
-        if (senko_is_ios5()) {
-            fprintf(stderr, "senkoawgd: ios 5 route probe disabled for safety\n");
-            return 1;
-        }
         char ifname[32];
         int fd = awg_utun_open(ifname, sizeof ifname);
         awg_route_plan_t plan;
@@ -302,10 +288,6 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "--net-route-probe") == 0) {
         if (argc < 5) { usage(argv[0]); return 2; }
-        if (senko_is_ios5()) {
-            fprintf(stderr, "senkoawgd: ios 5 route probe disabled for safety\n");
-            return 1;
-        }
         char ifname[32];
         int fd = awg_utun_open(ifname, sizeof ifname);
         awg_route_plan_t plan;
@@ -319,10 +301,6 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "--route-plan-probe") == 0) {
         if (argc < 5) { usage(argv[0]); return 2; }
-        if (senko_is_ios5()) {
-            fprintf(stderr, "senkoawgd: ios 5 route probe disabled for safety\n");
-            return 1;
-        }
         char ifname[32];
         int fd = awg_utun_open(ifname, sizeof ifname);
         awg_route_plan_t plan;

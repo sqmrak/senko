@@ -118,7 +118,7 @@ void StyleNavBarClassic(UINavigationController *nav) {
     else
         titleC = [UIColor whiteColor];
     UIFont *titleFont = SenkoThemeIsIos16()
-        ? SenkoFontTitle(18)
+        ? SenkoFontBody(18, YES)
         : ((flat) ? SenkoFontTitle(17) : [UIFont boldSystemFontOfSize:18]);
     if ([bar respondsToSelector:@selector(setTitleTextAttributes:)]) {
 #pragma clang diagnostic push
@@ -165,7 +165,21 @@ void StyleGlossyCapsuleLayout(UIButton *button) {
     CGFloat cr = b.size.height / 2.0f;
     CAGradientLayer *body = SenkoNamedGradientLayer(button.layer, @"body");
     CAGradientLayer *gloss = SenkoNamedGradientLayer(button.layer, @"gloss");
+    UIColor *rememberedTop = objc_getAssociatedObject(button, &SenkoStyleTopKey);
+    UIColor *rememberedBottom = objc_getAssociatedObject(button, &SenkoStyleBotKey);
+    if (body && rememberedTop && rememberedBottom) {
+        NSArray *colors = body.colors;
+        BOOL stale = [colors count] < 2 ||
+            !CGColorEqualToColor((CGColorRef)[colors objectAtIndex:0], rememberedTop.CGColor) ||
+            !CGColorEqualToColor((CGColorRef)[colors objectAtIndex:1], rememberedBottom.CGColor);
+        if (stale)
+            body.colors = [NSArray arrayWithObjects:(id)rememberedTop.CGColor,
+                                                     (id)rememberedBottom.CGColor, nil];
+        body.hidden = NO;
+        body.opacity = 1.0f;
+    }
     if (!body || !gloss) return;
+    if (SenkoStyleSizeMatches(button, b.size)) return;
     SenkoBeginSilentLayers();
     button.layer.cornerRadius = cr;
     body.frame = b;
@@ -310,7 +324,8 @@ void StyleGlossyCapsule(UIButton *button, UIColor *top, UIColor *bottom) {
 }
 
 CGFloat GetTopOffset(void) {
-/* the cap avoids oversized status frames reported during rotation */
+    UIEdgeInsets safe = SenkoSafeAreaInsets([UIApplication sharedApplication].keyWindow);
+    if (safe.top > 0.0f) return safe.top;
     if ([[[UIDevice currentDevice] systemVersion] floatValue] < 7.0f)
         return 0.0f;
     CGRect sb = [UIApplication sharedApplication].statusBarFrame;
@@ -320,7 +335,6 @@ CGFloat GetTopOffset(void) {
     CGFloat edge = h;
     if (w > 0.0f && w < edge) edge = w;
     if (edge < 1.0f) edge = 20.0f;
-    if (edge > 20.0f) edge = 20.0f;
     return edge;
 }
 

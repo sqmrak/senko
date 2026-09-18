@@ -24,6 +24,10 @@ typedef struct {
     uint64_t total;
     char description[256];
     char support_url[512];
+    /* wall clock second of the last successful refresh, 0 when never pulled.
+       the scheduled refresh compares against it, so it has to survive a
+       restart the same way the node list does */
+    uint64_t last_refresh;
     int  used;
 } store_sub_t;
 
@@ -37,6 +41,7 @@ typedef struct {
     size_t      section_n;
 
     int         selected;
+    ruleset_t   rules;
 } store_t;
 
 typedef enum {
@@ -61,6 +66,10 @@ store_status_t store_move_section(store_t *st, int section_id, size_t to_pos);
 
 store_status_t store_add_manual(store_t *st, const char *link, size_t *out_index);
 
+/* validate the new link before replacing a manual entry, so an invalid edit
+   leaves the saved profile untouched */
+store_status_t store_replace_manual(store_t *st, size_t index, const char *link);
+
 /* the already parsed variant, used by bulk imports of foreign client profiles */
 store_status_t store_add_manual_server(store_t *st, const vl_server_t *server,
                                        size_t *out_index);
@@ -70,6 +79,10 @@ store_status_t store_clear_manual(store_t *st, size_t *out_removed);
 
 store_status_t store_add_sub(store_t *st, const char *name, const char *url,
                              size_t *out_sub);
+
+/* keep the existing nodes while changing a subscription's fetch details */
+store_status_t store_replace_sub(store_t *st, size_t sub_index, const char *name,
+                                 const char *url, const char *header);
 
 /* replace one subscription's servers */
 store_status_t store_refresh_sub(store_t *st, size_t sub_index,
@@ -83,9 +96,17 @@ store_status_t store_remove_sub(store_t *st, size_t sub_index);
 
 void store_set_sub_expire(store_t *st, size_t sub_index, uint64_t expire);
 
+void store_set_sub_refresh(store_t *st, size_t sub_index, uint64_t when);
+
 void store_set_sub_meta(store_t *st, size_t sub_index, uint64_t upload,
                         uint64_t download, uint64_t total,
                         const char *description, const char *support_url);
+
+/* adopt the panel's suggested title as the subscription's name, but only while
+   the stored name still matches url_host: once it differs, a person chose that
+   name on purpose and a refresh must not overwrite their choice */
+store_status_t store_set_sub_title(store_t *st, size_t sub_index,
+                                   const char *title, const char *url_host);
 
 /* set a single optional HTTP request header for subscription refreshes */
 store_status_t store_set_sub_header(store_t *st, size_t sub_index,
@@ -95,6 +116,10 @@ store_status_t store_select(store_t *st, int index);
 
 const vl_server_t *store_selected(const store_t *st);
 int store_link_at(const store_t *st, size_t index, char *buf, size_t cap);
+
+store_status_t store_add_rule(store_t *st, const char *text, size_t len,
+                              size_t *out_index);
+store_status_t store_remove_rule(store_t *st, size_t index);
 
 /* save the store in a simple restart format */
 store_status_t store_serialize(const store_t *st, char *buf, size_t cap, size_t *out_len);

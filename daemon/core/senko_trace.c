@@ -2,32 +2,10 @@
 #include "session.h"
 #include "vless.h"
 
-#ifdef SENKO_RELEASE
-
-void senko_trace_set_th_label(void *th, const char *host) {
-    (void)th; (void)host;
-}
-
-void senko_trace_sess(session_t *s, const char *event, const char *detail) {
-    (void)s; (void)event; (void)detail;
-}
-
-void senko_trace_th(void *th, const char *event, const char *detail) {
-    (void)th; (void)event; (void)detail;
-}
-
-void session_set_trace_host(session_t *s, const vless_dest_t *dest) {
-    (void)s; (void)dest;
-}
-
-void session_trace_close(session_t *s, const char *reason) {
-    (void)s; (void)reason;
-}
-
-#else
-
+#ifndef SENKO_RELEASE
 #include "senko_replay.h"
 #include "senko_upload.h"
+#endif
 
 #include <stdio.h>
 #include <string.h>
@@ -42,6 +20,24 @@ typedef struct {
 
 #define TH_TRACE_MAX 64
 static th_trace_t g_th_trace[TH_TRACE_MAX];
+
+/* a debug build traced unconditionally before this flag existed, and that is
+   what its users expect. a release build starts quiet and is turned on from
+   the developer screen, because the lines are worth one branch per connection
+   but not a log nobody asked for */
+#ifdef SENKO_RELEASE
+static int g_trace_enabled = 0;
+#else
+static int g_trace_enabled = 1;
+#endif
+
+void senko_trace_set_enabled(int on) {
+    g_trace_enabled = on ? 1 : 0;
+}
+
+int senko_trace_enabled(void) {
+    return g_trace_enabled;
+}
 
 static unsigned long trace_ms(void) {
     struct timeval tv;
@@ -82,36 +78,45 @@ static const char *th_label(void *th) {
     return "-";
 }
 
-static void trace_line(const char *host, const void *ctx,
-                       uint64_t app_tx, uint64_t app_rx,
-                       uint64_t wire_tx, uint64_t wire_rx,
-                       int ds, int us, int us_pend,
+/* the byte counters only exist where they are compiled in, so a release build
+   prints the event and the vision framing state and stops there */
+static void trace_line(const char *host, const void *ctx, const session_t *s,
                        const char *event, const char *detail) {
+    int ds = s ? s->vision_downstream_direct : 0;
+    int us = s ? s->vision_upstream_direct : 0;
+    int us_pend = s ? s->vision_upstream_direct_pending : 0;
+#ifndef SENKO_RELEASE
+    if (s) {
+        fprintf(stderr,
+                "senko-trace: t=%lu host=%s ctx=%p event=%s %s "
+                "app_tx=%llu app_rx=%llu wire_tx=%llu wire_rx=%llu "
+                "ds=%d us=%d us_pend=%d\n",
+                trace_ms(), host_or_dash(host), ctx,
+                event ? event : "?", detail ? detail : "",
+                (unsigned long long)s->trace_app_tx,
+                (unsigned long long)s->trace_app_rx,
+                (unsigned long long)s->trace_wire_tx,
+                (unsigned long long)s->trace_wire_rx,
+                ds, us, us_pend);
+        fflush(stderr);
+        return;
+    }
+#endif
     fprintf(stderr,
-            "senko-trace: t=%lu host=%s ctx=%p event=%s %s "
-            "app_tx=%llu app_rx=%llu wire_tx=%llu wire_rx=%llu "
-            "ds=%d us=%d us_pend=%d\n",
+            "senko-trace: t=%lu host=%s ctx=%p event=%s %s ds=%d us=%d us_pend=%d\n",
             trace_ms(), host_or_dash(host), ctx,
-            event ? event : "?", detail ? detail : "",
-            (unsigned long long)app_tx, (unsigned long long)app_rx,
-            (unsigned long long)wire_tx, (unsigned long long)wire_rx,
-            ds, us, us_pend);
+            event ? event : "?", detail ? detail : "", ds, us, us_pend);
     fflush(stderr);
 }
 
 void senko_trace_sess(session_t *s, const char *event, const char *detail) {
-    if (!s) return;
-    trace_line(s->trace_host, s,
-               s->trace_app_tx, s->trace_app_rx,
-               s->trace_wire_tx, s->trace_wire_rx,
-               s->vision_downstream_direct,
-               s->vision_upstream_direct,
-               s->vision_upstream_direct_pending,
-               event, detail);
+    if (!s || !g_trace_enabled) return;
+    trace_line(s->trace_host, s, s, event, detail);
 }
 
 void senko_trace_th(void *th, const char *event, const char *detail) {
-    trace_line(th_label(th), th, 0, 0, 0, 0, 0, 0, 0, event, detail);
+    if (!g_trace_enabled) return;
+    trace_line(th_label(th), th, NULL, event, detail);
 }
 
 void session_set_trace_host(session_t *s, const vless_dest_t *dest) {
@@ -153,8 +158,10 @@ void session_trace_close(session_t *s, const char *reason) {
     snprintf(detail, sizeof detail, "state=%d %s",
              (int)s->state, reason ? reason : "");
     senko_trace_sess(s, "session_close", detail);
+#ifndef SENKO_RELEASE
     senko_replay_flush(s);
     senko_upload_flush(s);
+#endif
     if (s->th) {
         for (size_t i = 0; i < TH_TRACE_MAX; ++i) {
             if (g_th_trace[i].th == s->th) {
@@ -165,5 +172,3 @@ void session_trace_close(session_t *s, const char *reason) {
         }
     }
 }
-
-#endif

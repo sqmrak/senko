@@ -44,7 +44,8 @@ make -j"$(nproc)" build_libs
 mkdir -p "${PREFIX}/lib" "${PREFIX}/include"
 cp -a libssl.a libcrypto.a "${PREFIX}/lib/"
 cp -a include/openssl "${PREFIX}/include/" 2>/dev/null || true
-rsync -a --ignore-existing "${SRC}/include/openssl/" "${PREFIX}/include/openssl/" 2>/dev/null || true
+mkdir -p "${PREFIX}/include/openssl"
+cp -rn "${SRC}/include/openssl/." "${PREFIX}/include/openssl/" 2>/dev/null || true
 cp -a include/openssl/configuration.h "${PREFIX}/include/openssl/" 2>/dev/null || true
 touch "${MARKER}"
 echo "openssl armv7 ios5 installed: ${PREFIX}"

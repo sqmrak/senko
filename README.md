@@ -13,9 +13,8 @@
   <img src="assets/senko-readme.png" width="420" alt="senko">
 </p>
 
-senko is a full-device client for jailbroken ios 5-16. one deb contains the
-armv7, arm64 and arm64e slices. the installer handles rootful and rootless
-jailbreaks.
+senko is a full-device client for ios 5-16. old devices use the universal deb,
+ios 14-16 uses the arm64 ipa with the native packet tunnel.
 
 ## supported devices
 
@@ -88,6 +87,14 @@ SENKO_GO SENKO_GO_CORE_SRC
 ```
 
 the output is `senko-v<version>.deb`.
+
+for new ios, run:
+
+```bash
+./build_stock_ipa.sh
+```
+
+the output is `Senko-v<version>.ipa`.
 
 ## uninstall
 

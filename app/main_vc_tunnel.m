@@ -5,6 +5,26 @@
 
 @implementation MainVC (Tunnel)
 
+/* a stuck-connecting or missing reply means routing may already be half
+   applied, so only a reply where the daemon itself settled on a non-connected
+   outcome is safe to retry against a different candidate */
+static BOOL SenkoConnectReplyIsCleanFailure(NSString *reply) {
+    if (!reply) return NO;
+    NSString *errReason = nil;
+    NSString *finalState = nil;
+    for (NSString *line in [reply componentsSeparatedByString:@"\n"]) {
+        if ([line length] == 0) continue;
+        if ([line hasPrefix:@"ERR "]) {
+            errReason = [line substringFromIndex:4];
+        } else if ([line hasPrefix:@"STATE "]) {
+            finalState = SenkoControlStateFromReply(line, NULL);
+        }
+    }
+    if (!finalState) return NO;
+    if ([finalState isEqualToString:@"connecting"] && !errReason) return NO;
+    return ![finalState isEqualToString:@"connected"];
+}
+
 /* the headline names the state, the detail line under it keeps carrying the
    daemon's own wording, so a failure still shows its exact reason */
 - (NSString *)stateHeadline {
@@ -27,6 +47,29 @@ static NSString *SenkoFormatUptime(long seconds) {
     if (h > 0)
         return [NSString stringWithFormat:@"%ld:%02ld:%02ld", h, m, s];
     return [NSString stringWithFormat:@"%ld:%02ld", m, s];
+}
+
+- (void)nativeStatusWithReply:(void (^)(NSString *, long))done {
+    [_nativeVPN status:^(NSInteger status, NSDate *connectedDate) {
+        NSString *state = nil;
+        if (status == 2 || status == 4)
+            state = @"connecting";
+        else if (status == 3)
+            state = @"connected";
+        else if (status == 0)
+            state = @"error";
+        else if (status == 1 || status == 5)
+            state = @"idle";
+/* the extension's connectedDate is this backend's equivalent of the daemon's
+   own uptime: without it every poll restarted the clock at zero, which is
+   what made the on-screen timer climb for one poll interval and drop back */
+        long uptime = 0;
+        if (connectedDate) {
+            NSTimeInterval since = -[connectedDate timeIntervalSinceNow];
+            if (since > 0) uptime = (long)since;
+        }
+        if (done) done(state, uptime);
+    }];
 }
 
 /* the label ticks once a second while a tunnel is up and stops otherwise, so an
@@ -52,6 +95,20 @@ static NSString *SenkoFormatUptime(long seconds) {
         return;
     }
     SetStatusDefault(_statusLabel, [self selectionSummary]);
+    if (_trafficPending || _busy || _selectedBackend == SenkoBackendAmneziaWG) return;
+    _trafficPending = YES;
+    NSUInteger generation = _trafficGeneration;
+    [_ctl traffic:^(BOOL known, uint64_t up, uint64_t down) {
+        _trafficPending = NO;
+        if (generation != _trafficGeneration || !_uptimeTimer ||
+            ![_state isEqualToString:@"connected"]) return;
+        _trafficKnown = known;
+        _trafficUp = up;
+        _trafficDown = down;
+        SenkoHomeApplyTraffic(&_ui, known, up, down);
+        if (SenkoClassicHomeEnabled())
+            SetStatusDefault(_statusLabel, [self selectionSummary]);
+    }];
 }
 
 - (NSString *)selectionSummary {
@@ -75,6 +132,9 @@ static NSString *SenkoFormatUptime(long seconds) {
         NSString *age = SenkoFormatUptime(elapsed);
         if (age) [line appendFormat:@" · %@", age];
     }
+    if (_trafficKnown && SenkoClassicHomeEnabled())
+        [line appendFormat:@" · ↑ %@ ↓ %@", SenkoFormatBytes(_trafficUp),
+                           SenkoFormatBytes(_trafficDown)];
     return line;
 }
 
@@ -91,6 +151,10 @@ static NSString *SenkoFormatUptime(long seconds) {
         _tunnelUptimeAt = CACurrentMediaTime();
         _tunnelUptimeKnown = YES;
     } else if (!connected) {
+        ++_trafficGeneration;
+        _trafficKnown = NO;
+        _trafficUp = _trafficDown = 0;
+        SenkoHomeApplyTraffic(&_ui, NO, 0, 0);
         _tunnelUptimeKnown = NO;
         _tunnelUptime = 0;
         _tunnelUptimeAt = 0.0;
@@ -100,7 +164,11 @@ static NSString *SenkoFormatUptime(long seconds) {
         [NSObject cancelPreviousPerformRequestsWithTarget:self
                                                  selector:@selector(refresh)
                                                    object:nil];
-    SenkoHomeApplyStatus(&_ui, _state, [self stateHeadline], YES);
+/* the glow behind the orb is painted from backgroundStatusKey, which reports an
+   error for as long as one is standing even though _state has already gone back
+   to idle. feeding the orb the same key is what stops a grey dot sitting in a
+   red halo with nothing on the card to explain it */
+    SenkoHomeApplyStatus(&_ui, [self backgroundStatusKey], [self stateHeadline], YES);
 
     if (connected)
         [self setLastErr:nil];
@@ -121,17 +189,21 @@ static NSString *SenkoFormatUptime(long seconds) {
     [self applyServerListLock];
 }
 
-static void senkoClearVpnIcon(void) {
-    const char *path = "/var/mobile/Library/Preferences/com.senko.vpnicon.state";
+static void senkoClearStatus(void) {
+#if SENKO_STOCK_NATIVE
+    return;
+#else
+    const char *path = "/var/mobile/Library/Preferences/com.senko.status.state";
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd >= 0) {
         (void)write(fd, "0\n", 2);
         close(fd);
     }
+#endif
 }
 
 - (void)forceTunnelCleanupWithReason:(NSString *)reason {
-    senkoClearVpnIcon();
+    senkoClearStatus();
     [_ctl disconnectReply:^(NSString *reply) {
         (void)reply;
         _activeBackend = SenkoBackendNone;
@@ -151,6 +223,10 @@ static void senkoClearVpnIcon(void) {
 - (void)togglePressed {
     if (_busy)
         return;
+#if SENKO_STOCK_NATIVE
+    [self toggleAfterAWGCheck];
+    return;
+#else
     [NSObject cancelPreviousPerformRequestsWithTarget:self
                                              selector:@selector(refresh)
                                                object:nil];
@@ -169,7 +245,7 @@ static void senkoClearVpnIcon(void) {
                     [self setLastErr:stopClean.length ? stopClean :
                         @"could not stop amneziawg"];
                     [_state release]; _state = [@"error" copy];
-                    senkoClearVpnIcon();
+                    senkoClearStatus();
                     [self applyState];
                     [self setToggleBusy:NO];
                     return;
@@ -177,7 +253,7 @@ static void senkoClearVpnIcon(void) {
                 _activeBackend = SenkoBackendNone;
                 [_state release]; _state = [@"idle" copy];
                 [self setLastErr:nil];
-                senkoClearVpnIcon();
+                senkoClearStatus();
                 [self applyState];
                 [self setToggleBusy:NO];
             }];
@@ -185,6 +261,85 @@ static void senkoClearVpnIcon(void) {
         }
         [self toggleAfterAWGCheck];
     }];
+#endif
+}
+
+/* tries idx, and on a clean (non-stuck) failure moves to the next
+   best-measured sibling collapsed into the same row, until one connects or
+   the row is exhausted. replyBlock always fires exactly once, with whichever
+   attempt's reply decided the outcome. */
+- (void)connectTryingCandidates:(NSArray *)candidates offset:(NSUInteger)offset
+                           reply:(void (^)(NSString *reply))replyBlock {
+    int idx = [[candidates objectAtIndex:offset] intValue];
+    [_ctl connectIndex:idx reply:^(NSString *reply) {
+        if (offset + 1 < [candidates count] && SenkoConnectReplyIsCleanFailure(reply)) {
+            [self connectTryingCandidates:candidates offset:offset + 1 reply:replyBlock];
+            return;
+        }
+        replyBlock(reply);
+    }];
+}
+
+- (void)startNativeServerIndex:(int)idx {
+#if SENKO_STOCK_NATIVE
+    SenkoServer *server = [self serverByIndex:idx];
+    if (!server || ![server->link length]) {
+        [self setLastErr:@"server link is not cached"];
+        [_state release]; _state = [@"error" copy];
+        [self applyState];
+        [self setToggleBusy:NO];
+        return;
+    }
+    SenkoNativeConfigurationForLink(server->link,
+        ^(NSString *json, NSString *endpoint, NSString *error) {
+        if (!json) {
+            [self setLastErr:error ? error : @"native VPN configuration failed"];
+            [_state release]; _state = [@"error" copy];
+            [self applyState];
+            [self setToggleBusy:NO];
+            return;
+        }
+        [_nativeVPN startWithConfiguration:json serverAddress:endpoint
+                                completion:^(NSError *nativeError) {
+            if (nativeError) {
+                [self setLastErr:[nativeError localizedDescription]];
+                [_state release]; _state = [@"error" copy];
+                [self applyState];
+                [self setToggleBusy:NO];
+                return;
+            }
+            _activeBackend = SenkoBackendServer;
+            [_state release]; _state = [@"connected" copy];
+            [self setLastErr:nil];
+            [self applyState];
+            [self setToggleBusy:NO];
+        }];
+    });
+#else
+    [_ctl nativeConfigurationIndex:idx reply:^(NSString *json, NSString *error) {
+        if (!json) {
+            [self setLastErr:error ? error : @"native VPN configuration failed"];
+            [_state release]; _state = [@"error" copy];
+            [self applyState];
+            [self setToggleBusy:NO];
+            return;
+        }
+        [_nativeVPN startWithConfiguration:json serverAddress:nil completion:^(NSError *nativeError) {
+            if (nativeError) {
+                [self setLastErr:[nativeError localizedDescription]];
+                [_state release]; _state = [@"error" copy];
+                [self applyState];
+                [self setToggleBusy:NO];
+                return;
+            }
+            _activeBackend = SenkoBackendServer;
+            [_state release]; _state = [@"connected" copy];
+            [self setLastErr:nil];
+            [self applyState];
+            [self setToggleBusy:NO];
+        }];
+    }];
+#endif
 }
 
 - (void)toggleAfterAWGCheck {
@@ -195,10 +350,39 @@ static void senkoClearVpnIcon(void) {
     }
     [self setToggleBusy:YES];
     if (on) {
+        if ([SenkoNativeVPN available]) {
+            [_nativeVPN stopWithCompletion:^(NSError *nativeError) {
+                if (nativeError) {
+                    [self setLastErr:[nativeError localizedDescription]];
+                    [self applyState];
+                    [self setToggleBusy:NO];
+                    return;
+                }
+#if SENKO_STOCK_NATIVE
+                _activeBackend = SenkoBackendNone;
+                [_state release]; _state = [@"idle" copy];
+                senkoClearStatus();
+                [self setLastErr:nil];
+                [self applyState];
+                [self setToggleBusy:NO];
+#else
+                [_ctl disconnectReply:^(NSString *reply) {
+                    (void)reply;
+                    _activeBackend = SenkoBackendNone;
+                    [_state release]; _state = [@"idle" copy];
+                    senkoClearStatus();
+                    [self setLastErr:nil];
+                    [self applyState];
+                    [self setToggleBusy:NO];
+                }];
+#endif
+            }];
+            return;
+        }
         [_ctl disconnectReply:^(NSString *reply) {
             (void)reply;
             _activeBackend = SenkoBackendNone;
-            senkoClearVpnIcon();
+            senkoClearStatus();
             [self refresh];
             [self setToggleBusy:NO];
         }];
@@ -219,6 +403,9 @@ static void senkoClearVpnIcon(void) {
         _state = [@"connecting" copy];
         [self setLastErr:nil];
         [self applyState];
+#if SENKO_STOCK_NATIVE
+        [self startNativeServerIndex:_selectedSrvIdx];
+#else
         [_ctl stopAWG:^(NSString *stopReply) {
             NSString *stopClean = [stopReply stringByTrimmingCharactersInSet:
                                    [NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -226,12 +413,30 @@ static void senkoClearVpnIcon(void) {
                 [self setLastErr:stopClean.length ? stopClean :
                     @"could not stop amneziawg"];
                 [_state release]; _state = [@"error" copy];
-                senkoClearVpnIcon();
+                senkoClearStatus();
                 [self applyState];
                 [self setToggleBusy:NO];
                 return;
             }
-            [_ctl connectIndex:_selectedSrvIdx reply:^(NSString *reply) {
+            if ([SenkoNativeVPN available]) {
+                [_ctl disconnectReply:^(NSString *reply) {
+                    if (!reply || [reply hasPrefix:@"ERR "]) {
+                        NSString *message = reply && [reply length] > 4
+                            ? [reply substringFromIndex:4]
+                            : @"could not stop legacy VPN";
+                        [self setLastErr:message];
+                        [_state release]; _state = [@"error" copy];
+                        [self applyState];
+                        [self setToggleBusy:NO];
+                        return;
+                    }
+                    [self startNativeServerIndex:_selectedSrvIdx];
+                }];
+                return;
+            }
+            [self connectTryingCandidates:[self connectCandidatesForServerIndex:_selectedSrvIdx]
+                                    offset:0
+                                     reply:^(NSString *reply) {
             NSString *errReason = nil;
             NSString *finalState = nil;
             if (reply) {
@@ -243,9 +448,7 @@ static void senkoClearVpnIcon(void) {
                             stringByTrimmingCharactersInSet:
                             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
                     } else if ([ln hasPrefix:@"STATE "]) {
-                        finalState = [[ln substringFromIndex:6]
-                            stringByTrimmingCharactersInSet:
-                            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                        finalState = SenkoControlStateFromReply(ln, NULL);
                     }
                 }
             }
@@ -267,7 +470,7 @@ static void senkoClearVpnIcon(void) {
             }
             if ([_state isEqualToString:@"error"] ||
                 [_state isEqualToString:@"idle"])
-                senkoClearVpnIcon();
+                senkoClearStatus();
             [self applyState];
             [_ctl listCatalog:^(NSArray *servers, NSArray *subs, NSArray *order) {
                 if (servers) [self applyCatalog:servers subs:subs order:order];
@@ -275,6 +478,7 @@ static void senkoClearVpnIcon(void) {
             }];
             }];
         }];
+#endif
     }
 }
 
@@ -288,7 +492,36 @@ static void senkoClearVpnIcon(void) {
     _state = [@"connecting" copy];
     [self setLastErr:nil];
     [self applyState];
-    [_ctl connectIndex:idx reply:^(NSString *reply) {
+    if ([SenkoNativeVPN available]) {
+        [_nativeVPN stopWithCompletion:^(NSError *nativeError) {
+            if (nativeError) {
+                [self setLastErr:[nativeError localizedDescription]];
+                [_state release]; _state = [@"error" copy];
+                [self applyState];
+                [self setToggleBusy:NO];
+                return;
+            }
+#if SENKO_STOCK_NATIVE
+            [self startNativeServerIndex:idx];
+#else
+            [_ctl disconnectReply:^(NSString *reply) {
+                if (!reply || [reply hasPrefix:@"ERR "]) {
+                    [self setLastErr:reply && [reply length] > 4
+                        ? [reply substringFromIndex:4] : @"could not stop legacy VPN"];
+                    [_state release]; _state = [@"error" copy];
+                    [self applyState];
+                    [self setToggleBusy:NO];
+                    return;
+                }
+                [self startNativeServerIndex:idx];
+            }];
+#endif
+        }];
+        return;
+    }
+    [self connectTryingCandidates:[self connectCandidatesForServerIndex:idx]
+                            offset:0
+                             reply:^(NSString *reply) {
         NSString *errReason = nil;
         NSString *finalState = nil;
         if (reply) {
@@ -298,9 +531,7 @@ static void senkoClearVpnIcon(void) {
                                  stringByTrimmingCharactersInSet:
                                  [NSCharacterSet whitespaceAndNewlineCharacterSet]];
                 else if ([line hasPrefix:@"STATE "])
-                    finalState = [[line substringFromIndex:6]
-                                  stringByTrimmingCharactersInSet:
-                                  [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                    finalState = SenkoControlStateFromReply(line, NULL);
             }
         }
         if (!reply || !finalState) {
@@ -312,7 +543,7 @@ static void senkoClearVpnIcon(void) {
         [_state release];
         _state = [finalState copy];
         if ([finalState isEqualToString:@"error"] || [finalState isEqualToString:@"idle"])
-            senkoClearVpnIcon();
+            senkoClearStatus();
         [self applyState];
         [_ctl listCatalog:^(NSArray *servers, NSArray *subs, NSArray *order) {
             if (servers) [self applyCatalog:servers subs:subs order:order];

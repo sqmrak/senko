@@ -24,6 +24,7 @@ remove_rootful_link() {
 # the rootful layout installs a real bundle, so only the copy this package
 # marked is removed; a bundle put there by anything else stays
 remove_rootful_app_bundle() {
+  [ -z "$JBROOT" ] || return 0
   target_path=/Applications/Senko.app
   remove_rootful_link "$target_path" "${PAYLOAD_ROOT}/Applications/Senko.app"
   [ -f "${target_path}/.senko-rootful-copy" ] || return 0
@@ -37,8 +38,8 @@ remove_rootful_layout() {
   done
   remove_rootful_link /usr/lib/senkotlsfix.dylib "${PAYLOAD_ROOT}/usr/lib/senkotlsfix.dylib"
   remove_rootful_link /usr/lib/senkotlsfix "${PAYLOAD_ROOT}/usr/lib/senkotlsfix"
-  remove_rootful_link /usr/lib/senkovpnicon.dylib "${PAYLOAD_ROOT}/usr/lib/senkovpnicon.dylib"
-  remove_rootful_link /usr/lib/senkovpnicon.plist "${PAYLOAD_ROOT}/usr/lib/senkovpnicon.plist"
+  remove_rootful_link /usr/lib/senkostatus.dylib "${PAYLOAD_ROOT}/usr/lib/senkostatus.dylib"
+  remove_rootful_link /usr/lib/senkostatus.plist "${PAYLOAD_ROOT}/usr/lib/senkostatus.plist"
   remove_rootful_app_bundle
   remove_rootful_link /Library/LaunchDaemons/com.senko.senkod.plist \
     "${PAYLOAD_ROOT}/Library/LaunchDaemons/com.senko.senkod.plist"
@@ -61,14 +62,15 @@ case "$1" in
     rm -f /var/mobile/Library/Preferences/Senko/import.dat >/dev/null 2>&1 || true
     rm -f /var/run/senko-pf.conf >/dev/null 2>&1 || true
     rm -f "${JBROOT}/usr/bin/redsocks-senko" /var/run/senko-redsocks.conf >/dev/null 2>&1 || true
-    rm -f "${SUBSTRATE_DIR}/senkovpnicon.dylib" \
-          "${SUBSTRATE_DIR}/senkovpnicon.plist" \
-          /var/mobile/Library/Preferences/com.senko.vpnicon.state \
-          /var/mobile/Library/Preferences/com.senko.vpnicon.status \
-          /var/mobile/Library/Preferences/com.senko.vpnicon.off >/dev/null 2>&1 || true
+    rm -f "${SUBSTRATE_DIR}/senkostatus.dylib" \
+          "${SUBSTRATE_DIR}/senkostatus.plist" \
+          /var/mobile/Library/Preferences/com.senko.status.state \
+          /var/mobile/Library/Preferences/com.senko.status.log \
+          /var/mobile/Library/Preferences/com.senko.status.off >/dev/null 2>&1 || true
     # stale icon records survive after SpringBoard loses the bundle path
     "$UICACHE" >/dev/null 2>&1 || true
     remove_rootful_layout
+    remove_rootful_app_bundle
     ;;
 esac
 

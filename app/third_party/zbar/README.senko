@@ -1,0 +1,9 @@
+zbar is vendored here for QR decoding from iOS 5 camera frames.
+
+source: https://github.com/mchehab/zbar
+revision: 2ea2ca585b10a07e528af08ddf8890756e059b5b
+license: LGPL-2.1-or-later, see COPYING
+
+Senko builds only the QR reader. Camera capture and UIKit integration remain
+in qr_scan.m. This copy excludes video, window, image-file and every non-QR
+barcode backend.

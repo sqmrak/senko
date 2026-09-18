@@ -36,5 +36,8 @@
 /* consecutive launches that never reached the first frame; two of them turn
    the next launch into safe mode */
 #define SENKO_CRASH_FAILS  SENKO_CRASH_DIR "/launch-fails.log"
+/* present when safe mode was asked for by hand rather than earned by two dead
+   launches. it survives a good launch, because leaving it is also a choice */
+#define SENKO_CRASH_SAFE   SENKO_CRASH_DIR "/safe-mode.on"
 
 #endif

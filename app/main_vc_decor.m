@@ -25,18 +25,27 @@ static void SenkoPlaceBehind(UIView *view, UIView *root) {
 
 - (void)bringMainChromeToFront {
     /* the connect pill, the check pill, and the detail line live inside the
-       status card now, so raising the card raises all three at once */
-    if (_statusCard) [self.view bringSubviewToFront:_statusCard];
+       status card, so raising the card raises all three at once. the classic
+       hero hides the card and owns the three itself, so they are raised
+       individually there */
+    if (SenkoClassicHomeEnabled()) {
+        if (_connectBtn) [self.view bringSubviewToFront:_connectBtn];
+        if (_pingAllBtn) [self.view bringSubviewToFront:_pingAllBtn];
+        if (_statusLabel) [self.view bringSubviewToFront:_statusLabel];
+    } else if (_statusCard) {
+        [self.view bringSubviewToFront:_statusCard];
+    }
     /* particle fields do not receive touches, so they can cross the status card
        without taking the connect and ping controls out of the responder chain */
     if (_boyField && !_boyField.hidden) [self.view bringSubviewToFront:_boyField];
     if (_bubbleField && !_bubbleField.hidden) [self.view bringSubviewToFront:_bubbleField];
     if (_ui.title) [self.view bringSubviewToFront:_ui.title];
     if (_ui.gear) [self.view bringSubviewToFront:_ui.gear];
-    if (_ui.refresh) [self.view bringSubviewToFront:_ui.refresh];
     if (_ui.plus) [self.view bringSubviewToFront:_ui.plus];
     /* the detail sheet is modal over everything the screen draws */
     if (_sheet.superview == self.view) [self.view bringSubviewToFront:_sheet];
+    if (_busyOverlay.superview == self.view && _busyOverlay.alpha > 0.0f)
+        [self.view bringSubviewToFront:_busyOverlay];
 }
 
 /* wallpaper only (glow is laid out with the connect button) */

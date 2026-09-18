@@ -332,7 +332,8 @@ void SenkoThemeSetLight(BOOL light) {
     }
     BOOL want = light ? YES : NO;
     if (gLight == want) return;
-    SenkoThemeCrossfadeWindows();
+    /* the segmented control is still completing its native thumb animation;
+       a full-window veil makes that thumb jump on ios 13 and newer */
     gLight = want;
     ApplyCurrentPalette();
     PersistAndNotify();

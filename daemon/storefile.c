@@ -12,10 +12,9 @@
 #include <unistd.h>
 
 /* the store serializes to well under this */
-#define STOREFILE_BUF (1024 * 1024)
+#define STOREFILE_BUF (2 * 1024 * 1024)
 
 static char g_buf[STOREFILE_BUF];
-static char g_store[STOREFILE_BUF];
 
 int storefile_path_ok(const char *path) {
     if (!path || !path[0]) return 0;
@@ -63,7 +62,17 @@ storefile_status_t storefile_load(store_t *st, daemon_settings_t *set, const cha
     close(fd);
 
     if (set) daemon_settings_apply_buf(set, g_buf, total);
-    if (store_deserialize(st, g_buf, total) != STORE_OK) return STOREFILE_ERR_PARSE;
+    if (store_deserialize(st, g_buf, total) != STORE_OK) {
+        size_t plen = strlen(path);
+        if (plen > 4 && strcmp(path + plen - 4, ".bak") != 0) {
+            char bak[1088];
+            snprintf(bak, sizeof bak, "%s.bak", path);
+            if (access(bak, R_OK) == 0) {
+                return storefile_load(st, set, bak);
+            }
+        }
+        return STOREFILE_ERR_PARSE;
+    }
     return STOREFILE_OK;
 }
 
@@ -71,10 +80,6 @@ storefile_status_t storefile_save(const store_t *st, const daemon_settings_t *se
                                   const char *path) {
     if (!st || !path) return STOREFILE_ERR_ARG;
     if (!storefile_path_ok(path)) return STOREFILE_ERR_PATH;
-
-    size_t store_len = 0;
-    if (store_serialize(st, g_store, sizeof g_store, &store_len) != STORE_OK)
-        return STOREFILE_ERR_TOOBIG;
 
     size_t off = 0;
 
@@ -85,11 +90,10 @@ storefile_status_t storefile_save(const store_t *st, const daemon_settings_t *se
         off += set_len;
     }
 
-    if (store_len > 0) {
-        if (off + store_len > sizeof g_buf) return STOREFILE_ERR_TOOBIG;
-        memcpy(g_buf + off, g_store, store_len);
-        off += store_len;
-    }
+    size_t store_len = 0;
+    if (store_serialize(st, g_buf + off, sizeof g_buf - off, &store_len) != STORE_OK)
+        return STOREFILE_ERR_TOOBIG;
+    off += store_len;
     size_t len = off;
 
     char tmp[1088];
@@ -113,6 +117,15 @@ storefile_status_t storefile_save(const store_t *st, const daemon_settings_t *se
 
     if (fsync(fd) != 0) { close(fd); unlink(tmp); return STOREFILE_ERR_IO; }
     if (close(fd) != 0) { unlink(tmp); return STOREFILE_ERR_IO; }
+
+    /* preserve backup of previous valid configuration */
+    char bak[1088];
+    if (snprintf(bak, sizeof bak, "%s.bak", path) < (int)sizeof bak) {
+        if (access(path, F_OK) == 0) {
+            (void)unlink(bak);
+            (void)link(path, bak);
+        }
+    }
 
     if (rename(tmp, path) != 0) { unlink(tmp); return STOREFILE_ERR_IO; }
     return STOREFILE_OK;

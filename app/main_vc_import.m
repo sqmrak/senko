@@ -126,44 +126,28 @@
     }
 
     SetStatusRefresh(_statusLabel, @"saving subscription...");
-    [_ctl deleteSubIndex:idx reply:^(NSString *delReply) {
-        if (!delReply || [delReply hasPrefix:@"ERR"]) {
-            [self setLastErr:delReply ? [delReply stringByTrimmingCharactersInSet:ws]
-                                      : @"daemon offline: cannot edit"];
+    [_ctl replaceSubscriptionIndex:idx name:name url:url header:header
+                             reply:^(NSString *savedReply) {
+        if (!savedReply || [savedReply hasPrefix:@"ERR"]) {
+            [self setLastErr:savedReply ? [savedReply stringByTrimmingCharactersInSet:ws]
+                                        : @"daemon offline: cannot edit"];
             [self applyState];
             return;
         }
-        [_ctl addSubscriptionURL:url name:name reply:^(NSString *addReply) {
-            if (!addReply || ![addReply hasPrefix:@"OK"]) {
-                [self setLastErr:addReply ? [addReply stringByTrimmingCharactersInSet:ws]
-                                          : @"daemon offline: cannot edit"];
+        [_ctl refreshSubIndex:idx reply:^(NSString *refreshReply) {
+            if (!refreshReply || [refreshReply hasPrefix:@"ERR"]) {
+                [self setLastErr:refreshReply ?
+                    [refreshReply stringByTrimmingCharactersInSet:ws] :
+                    @"daemon offline: cannot refresh subscription"];
                 [self applyState];
                 [self refresh];
                 return;
             }
-            int newIdx = [self trailingIntOf:addReply];
-            if (newIdx >= 0) {
-                [_ctl setSubscriptionHeader:newIdx header:header reply:^(NSString *headerReply) {
-                    if (!headerReply || [headerReply hasPrefix:@"ERR"]) {
-                        [self setLastErr:headerReply ? [headerReply stringByTrimmingCharactersInSet:ws]
-                                                   : @"daemon offline: cannot save header"];
-                        [self applyState];
-                        return;
-                    }
-                    [_ctl refreshSubIndex:newIdx reply:^(NSString *refreshReply) {
-                        (void)refreshReply;
-                        [[NSUserDefaults standardUserDefaults] setObject:url forKey:SENKO_PINNED_SUB_URL_KEY];
-                        [[NSUserDefaults standardUserDefaults] synchronize];
-                        [vc dismissViewControllerAnimated:YES completion:nil];
-                        SetStatusRefresh(_statusLabel, @"subscription saved");
-                        [self refresh];
-                    }];
-                }];
-            } else {
-                [vc dismissViewControllerAnimated:YES completion:nil];
-                SetStatusRefresh(_statusLabel, @"subscription saved");
-                [self refresh];
-            }
+            [[NSUserDefaults standardUserDefaults] setObject:url forKey:SENKO_PINNED_SUB_URL_KEY];
+            [[NSUserDefaults standardUserDefaults] synchronize];
+            [vc dismissViewControllerAnimated:YES completion:nil];
+            SetStatusRefresh(_statusLabel, @"subscription saved");
+            [self refresh];
         }];
     }];
 }
@@ -185,16 +169,6 @@
         }
         return;
     }
-    if (sheet.tag >= 500000 && sheet.tag < 600000) {
-        NSArray *modes = [NSArray arrayWithObjects:@"tcp", @"proxy", @"tunnel", @"handshake", nil];
-        NSInteger choice = idx - first;
-        if (choice >= 0 && choice < (NSInteger)[modes count]) {
-            [_pingMode release];
-            _pingMode = [[modes objectAtIndex:choice] copy];
-            [self pingServersInSub:(int)(sheet.tag - 500000)];
-        }
-        return;
-    }
     if (sheet.tag >= 400000 && sheet.tag < 500000) {
         int sub = (int)(sheet.tag - 400000);
         if (![self subscriptionByIndex:sub]) {
@@ -204,23 +178,17 @@
         if (idx == first) {
             SetStatusRefresh(_statusLabel, @"refreshing subscription...");
             [_ctl refreshSubIndex:sub reply:^(NSString *reply) {
-                if (reply && [reply hasPrefix:@"ERR"])
-                    [self setLastErr:[reply stringByTrimmingCharactersInSet:
-                          [NSCharacterSet whitespaceAndNewlineCharacterSet]]];
-                else
-                SetStatusRefresh(_statusLabel, @"subscription updated");
+                if (!reply || [reply hasPrefix:@"ERR"]) {
+                    [self setLastErr:reply ? [reply stringByTrimmingCharactersInSet:
+                          [NSCharacterSet whitespaceAndNewlineCharacterSet]] :
+                          @"daemon offline: cannot refresh subscription"];
+                } else {
+                    SetStatusRefresh(_statusLabel, @"subscription updated");
+                }
                 [self refresh];
             }];
         } else if (idx == first + 1) {
-            UIActionSheet *checks = [[[UIActionSheet alloc]
-                initWithTitle:SenkoLocalizedText(@"Check type") delegate:self
-                cancelButtonTitle:SenkoLocalizedText(@"Cancel") destructiveButtonTitle:nil
-                otherButtonTitles:SenkoLocalizedText(@"TCP port only"),
-                                  SenkoLocalizedText(@"Through current local proxy"),
-                                  SenkoLocalizedText(@"Current tunnel internet access"),
-                                  SenkoLocalizedText(@"Full profile check"), nil] autorelease];
-            checks.tag = 500000 + sub;
-            [checks showInView:self.view];
+            [self pingServersInSub:sub];
         } else if (idx == first + 2) {
             SenkoSub *entry = [self subscriptionByIndex:sub];
             if (entry) {
@@ -361,7 +329,8 @@
    per-link error text instead of the bulk import summary */
 static BOOL SenkoLooksLikeSingleServerLink(NSString *s) {
     if ([s rangeOfString:@"\n"].location != NSNotFound) return NO;
-    if ([s hasPrefix:@"vless://"] || [s hasPrefix:@"socks5://"]) return YES;
+    if ([s hasPrefix:@"vless://"] || [s hasPrefix:@"socks5://"] ||
+        [s hasPrefix:@"trojan://"] || [s hasPrefix:@"ss://"]) return YES;
     if (![s hasPrefix:@"http://"] && ![s hasPrefix:@"https://"]) return NO;
     NSURL *u = [NSURL URLWithString:s];
     if (!u) return NO;
@@ -385,6 +354,17 @@ static BOOL SenkoLooksLikeSubscriptionURL(NSString *s) {
         return;
     }
     SetStatusDefault(_statusLabel, @"reading content...");
+#if SENKO_STOCK_NATIVE
+    NSString *error = nil;
+    NSArray *servers = SenkoNativeServersFromContent(data, &error);
+    if (!servers) {
+        [self setLastErr:error ? error : @"could not parse native import"];
+        [self applyState];
+        return;
+    }
+    [self addNativeServers:servers successText:@"servers added"];
+    return;
+#else
     [_ctl ensureDaemon:^(BOOL up, NSString *detail) {
         if (!up) {
             [self setLastErr:detail ? detail : @"daemon offline: cannot import"];
@@ -410,7 +390,30 @@ static BOOL SenkoLooksLikeSubscriptionURL(NSString *s) {
             [self applyState];
         }];
     }];
+#endif
 }
+
+#if SENKO_STOCK_NATIVE
+- (void)addNativeServers:(NSArray *)servers successText:(NSString *)successText {
+    int next = SenkoNativeNextServerIndex(_servers);
+    for (SenkoServer *server in servers) {
+        server->index = next++;
+        server->group = -1;
+        server->selected = (_selectedSrvIdx < 0 && [_servers count] == 0);
+        [_servers addObject:server];
+        if (server->selected) _selectedSrvIdx = server->index;
+    }
+    if (![servers count]) {
+        [self setLastErr:@"no native-compatible servers found"];
+        [self applyState];
+        return;
+    }
+    SenkoNativeSaveServers(_servers);
+    [self setLastErr:nil];
+    SetStatusRefresh(_statusLabel, successText ? successText : @"servers added");
+    [self refreshNativeCatalog];
+}
+#endif
 
 - (void)importText:(NSString *)s {
     s = [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -455,6 +458,19 @@ static BOOL SenkoLooksLikeSubscriptionURL(NSString *s) {
 }
 
 - (void)addServerLink:(NSString *)link {
+#if SENKO_STOCK_NATIVE
+    NSString *error = nil;
+    SenkoServer *server = SenkoNativeServerFromLink(
+        link, SenkoNativeNextServerIndex(_servers), &error);
+    if (!server) {
+        [self setLastErr:error ? error : @"invalid server link"];
+        [self applyState];
+        return;
+    }
+    [self addNativeServers:[NSArray arrayWithObject:server]
+               successText:@"server added"];
+    return;
+#else
     [_ctl ensureDaemon:^(BOOL up, NSString *detail) {
         if (!up) {
             [self setLastErr:detail ? detail : @"daemon offline: cannot add"];
@@ -477,6 +493,7 @@ static BOOL SenkoLooksLikeSubscriptionURL(NSString *s) {
             }
         }];
     }];
+#endif
 }
 
 - (void)importFileAtPath:(NSString *)path {
@@ -528,6 +545,35 @@ static BOOL SenkoLooksLikeSubscriptionURL(NSString *s) {
 }
 
 - (void)addSubscriptionURL:(NSString *)url name:(NSString *)name {
+#if SENKO_STOCK_NATIVE
+    (void)name;
+    SetStatusDefault(_statusLabel, @"fetching subscription...");
+    NSURLRequest *request = [NSURLRequest requestWithURL:[NSURL URLWithString:url]
+                                              cachePolicy:NSURLRequestReloadIgnoringCacheData
+                                          timeoutInterval:20.0];
+    [NSURLConnection sendAsynchronousRequest:request
+                                       queue:[NSOperationQueue mainQueue]
+                           completionHandler:^(NSURLResponse *response, NSData *data,
+                                               NSError *error) {
+        (void)response;
+        if (error || !data) {
+            [self setLastErr:error ? [error localizedDescription] :
+                @"subscription download failed"];
+            [self applyState];
+            return;
+        }
+        NSString *parseError = nil;
+        NSArray *servers = SenkoNativeServersFromContent(data, &parseError);
+        if (!servers) {
+            [self setLastErr:parseError ? parseError :
+                @"subscription has no supported servers"];
+            [self applyState];
+            return;
+        }
+        [self addNativeServers:servers successText:@"subscription added"];
+    }];
+    return;
+#else
     SetStatusDefault(_statusLabel, @"checking daemon...");
     [_ctl ensureDaemon:^(BOOL up, NSString *detail) {
         if (!up) {
@@ -572,6 +618,7 @@ static BOOL SenkoLooksLikeSubscriptionURL(NSString *s) {
             }];
         }];
     }];
+#endif
 }
 
 - (int)trailingIntOf:(NSString *)reply {

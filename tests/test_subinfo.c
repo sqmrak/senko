@@ -115,6 +115,32 @@ int main(void) {
         expect("no gate reason without the header", info.gate_reason[0] ? 1 : 0, 0);
     }
 
+/* profile-title used to be folded into the same field as subscription-description,
+   so the panel's suggested name for the subscription was stranded on a details
+   screen and never became the subscription's actual name */
+    {
+        static const char titled[] =
+            "HTTP/1.1 200 OK\r\n"
+            "content-length: 5\r\n"
+            "profile-title: My Plan\r\n"
+            "subscription-description: a longer blurb about the plan\r\n"
+            "\r\n"
+            "hello";
+        uint8_t body[64];
+        http_parser_t hp;
+        subfetch_info_t info;
+        http_parser_init(&hp, body, sizeof body);
+        expect("titled response parses",
+               http_parser_feed(&hp, (const uint8_t *)titled, sizeof titled - 1) == HTTP_DONE,
+               1);
+        memset(&info, 0, sizeof info);
+        subfetch_parser_info_for_test(&hp, &info);
+        expect("profile-title becomes the title, not the description",
+               strcmp(info.title, "My Plan") == 0 ? 1 : 0, 1);
+        expect("subscription-description stays a separate field",
+               strcmp(info.description, "a longer blurb about the plan") == 0 ? 1 : 0, 1);
+    }
+
     if (failed) {
         fprintf(stderr, "%d check(s) failed\n", failed);
         return 1;

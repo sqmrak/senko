@@ -46,6 +46,13 @@ static void SyncActionFill(UIButton *button) {
     CAGradientLayer *fill = ActionFill(button);
     SenkoSetLayerFrame(fill, button.bounds);
     fill.cornerRadius = radius;
+    UIColor *base = kAccentBlue ? kAccentBlue : [UIColor colorWithWhite:0.4 alpha:1];
+    SenkoApplyRelief(button, fill, SenkoShadeColor(base, 0.20f),
+                     SenkoShadeColor(base, -0.20f), radius);
+    button.layer.borderWidth = SenkoThemeIsFlat() ? 0.0f : 0.5f;
+    button.layer.borderColor = SenkoThemeIsLight()
+        ? [UIColor colorWithWhite:0 alpha:0.22f].CGColor
+        : [UIColor colorWithWhite:0 alpha:0.38f].CGColor;
 }
 
 static void StyleActionButton(UIButton *button) {
@@ -57,10 +64,12 @@ static void StyleActionButton(UIButton *button) {
     button.backgroundColor = [UIColor clearColor];
     CAGradientLayer *grad = ActionFill(button);
     grad.colors = [NSArray arrayWithObjects:
-                   (id)SenkoShadeColor(fill, 0.14f).CGColor,
-                   (id)SenkoShadeColor(fill, -0.14f).CGColor, nil];
+                   (id)SenkoShadeColor(fill, 0.20f).CGColor,
+                   (id)SenkoShadeColor(fill, -0.20f).CGColor, nil];
     button.layer.cornerRadius = SenkoThemeCardRadius();
-    button.layer.masksToBounds = YES;
+/* the relief hangs a shadow outside the bounds, so the fill and the sheen carry
+   their own corner radius instead of being clipped by the button */
+    button.layer.masksToBounds = NO;
     button.titleLabel.shadowColor = nil;
     button.titleLabel.shadowOffset = CGSizeZero;
     button.titleLabel.numberOfLines = 1;
@@ -81,23 +90,36 @@ static void StyleActionButton(UIButton *button) {
         self.backgroundColor = [UIColor clearColor];
         self.opaque = NO;
 
+        scroll = [[UIScrollView alloc] initWithFrame:CGRectZero];
+        scroll.backgroundColor = [UIColor clearColor];
+        scroll.showsHorizontalScrollIndicator = NO;
+        scroll.showsVerticalScrollIndicator = YES;
+        /* the open card leaves too little travel for the empty panel to feel
+           scrollable on a 3.5 inch screen, so it keeps one deliberate drag of
+           travel even when the text happens to fit exactly */
+        scroll.alwaysBounceVertical = YES;
+        [self addSubview:scroll];
+
+        textPlate = [[UIView alloc] initWithFrame:CGRectZero];
+        [scroll addSubview:textPlate];
+
         headline = [[UILabel alloc] initWithFrame:CGRectZero];
         headline.backgroundColor = [UIColor clearColor];
         headline.textAlignment = NSTextAlignmentCenter;
         headline.numberOfLines = 2;
         headline.lineBreakMode = NSLineBreakByWordWrapping;
-        [self addSubview:headline];
+        [textPlate addSubview:headline];
 
         body = [[UILabel alloc] initWithFrame:CGRectZero];
         body.backgroundColor = [UIColor clearColor];
         body.textAlignment = NSTextAlignmentCenter;
         body.numberOfLines = 0;
         body.lineBreakMode = NSLineBreakByWordWrapping;
-        [self addSubview:body];
+        [textPlate addSubview:body];
 
         hwidPlate = [[UIView alloc] initWithFrame:CGRectZero];
         hwidPlate.backgroundColor = [UIColor clearColor];
-        [self addSubview:hwidPlate];
+        [scroll addSubview:hwidPlate];
 
         hwidCaption = [[UILabel alloc] initWithFrame:CGRectZero];
         hwidCaption.backgroundColor = [UIColor clearColor];
@@ -112,7 +134,7 @@ static void StyleActionButton(UIButton *button) {
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
         hwidValue.minimumFontSize = 8.0f;
 #pragma clang diagnostic pop
-        hwidValue.lineBreakMode = NSLineBreakByTruncatingMiddle;
+        hwidValue.lineBreakMode = NSLineBreakByTruncatingTail;
         [hwidPlate addSubview:hwidValue];
 
         hwidTap = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -136,6 +158,8 @@ static void StyleActionButton(UIButton *button) {
     [hwidCaption release];
     [hwidValue release];
     [hwidPlate release];
+    [textPlate release];
+    [scroll release];
     [_hwid release];
     [super dealloc];
 }
@@ -164,6 +188,16 @@ static void StyleActionButton(UIButton *button) {
     hwidValue.textAlignment = NSTextAlignmentCenter;
 
     SenkoStyleSectionPlate(hwidPlate);
+/* a plain caption over a patterned wallpaper is unreadable, so the block gets
+   the same plate the device id row already sits on, at a lighter weight */
+    textPlate.backgroundColor = SenkoThemeIsLight()
+        ? [UIColor colorWithWhite:1 alpha:0.62f]
+        : [UIColor colorWithWhite:0 alpha:0.38f];
+    textPlate.layer.cornerRadius = SenkoThemeCardRadius();
+    textPlate.layer.borderWidth = 0.5f;
+    textPlate.layer.borderColor = SenkoThemeIsLight()
+        ? [UIColor colorWithWhite:0 alpha:0.14f].CGColor
+        : [UIColor colorWithWhite:1 alpha:0.16f].CGColor;
 
     /* the sentence above already says what to paste, so the button carries the
        verb alone and fits without shrinking */
@@ -202,7 +236,7 @@ static void StyleActionButton(UIButton *button) {
     CGRect b = self.bounds;
     if (b.size.width < 2.0f || b.size.height < 2.0f) return;
 
-    CGFloat side = 20.0f;
+    CGFloat side = SENKO_LIST_PLATE_INSET;
     CGFloat w = b.size.width - side * 2.0f;
     if (w < 80.0f) w = 80.0f;
 
@@ -212,8 +246,7 @@ static void StyleActionButton(UIButton *button) {
 /* a pair of 44pt buttons stretched across an ipad reads as two slabs rather
    than two buttons, so the row keeps a sane width and centres itself */
     CGFloat rowW = w;
-    if (rowW > 420.0f) rowW = 420.0f;
-    CGFloat rowX = (b.size.width - rowW) * 0.5f;
+    CGFloat rowX = side;
     CGFloat buttonW = (rowW - gap) * 0.5f;
     pasteButton.frame = CGRectMake(rowX, bottom - buttonH, buttonW, buttonH);
     scanButton.frame = CGRectMake(rowX + buttonW + gap, bottom - buttonH,
@@ -223,28 +256,42 @@ static void StyleActionButton(UIButton *button) {
     SyncActionFill(pasteButton);
     SyncActionFill(scanButton);
 
-    CGFloat headH = SenkoTextSize(headline.text, headline.font, w).height;
+/* everything above the button row scrolls, because on a 3.5 inch screen the
+   block does not fit under the status card and used to be drawn over */
+    CGFloat scrollH = bottom - buttonH - gap * 2.0f;
+    if (scrollH < 40.0f) scrollH = 40.0f;
+    scroll.frame = CGRectMake(0.0f, 0.0f, b.size.width, scrollH);
+
+    CGFloat textPad = 12.0f;
+    CGFloat textW = w - textPad * 2.0f;
+    if (textW < 60.0f) textW = 60.0f;
+    CGFloat headH = SenkoTextSize(headline.text, headline.font, textW).height;
     if (headH < 24.0f) headH = 24.0f;
-    CGFloat bodyH = SenkoTextSize(body.text, body.font, w).height;
+    CGFloat bodyH = SenkoTextSize(body.text, body.font, textW).height;
     if (bodyH < 18.0f) bodyH = 18.0f;
     CGFloat plateH = 58.0f;
-    CGFloat blockH = headH + 8.0f + bodyH + 18.0f + plateH;
+    CGFloat textPlateH = textPad + headH + 6.0f + bodyH + textPad;
+    CGFloat blockH = textPlateH + 16.0f + plateH;
 
-    CGFloat available = bottom - buttonH - gap * 2.0f;
-    CGFloat y = (available - blockH) * 0.5f;
+    CGFloat y = (scrollH - blockH) * 0.5f;
     if (y < gap) y = gap;
 
-    headline.frame = CGRectMake(side, y, w, headH);
-    y += headH + 8.0f;
-    body.frame = CGRectMake(side, y, w, bodyH);
-    y += bodyH + 18.0f;
+    textPlate.frame = CGRectMake(side, y, w, textPlateH);
+    headline.frame = CGRectMake(textPad, textPad, textW, headH);
+    body.frame = CGRectMake(textPad, textPad + headH + 6.0f, textW, bodyH);
+    y += textPlateH + 16.0f;
 
     CGFloat plateW = w;
-    if (plateW > 320.0f) plateW = 320.0f;
-    hwidPlate.frame = CGRectMake((b.size.width - plateW) * 0.5f, y, plateW, plateH);
+    hwidPlate.frame = CGRectMake(side, y, plateW, plateH);
     hwidCaption.frame = CGRectMake(8.0f, 8.0f, plateW - 16.0f, 14.0f);
     hwidValue.frame = CGRectMake(8.0f, 26.0f, plateW - 16.0f, 24.0f);
     hwidTap.frame = hwidPlate.bounds;
+
+    CGFloat contentH = y + plateH + gap;
+    if (contentH < scrollH + 44.0f) contentH = scrollH + 44.0f;
+    if (!CGSizeEqualToSize(scroll.contentSize,
+                           CGSizeMake(b.size.width, contentH)))
+        scroll.contentSize = CGSizeMake(b.size.width, contentH);
 }
 
 @end

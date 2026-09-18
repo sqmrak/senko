@@ -11,6 +11,8 @@
 #include "vision.h"
 #include "socks5_client.h"
 #include "http_client.h"
+#include "trojan_client.h"
+#include "shadowsocks_client.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,9 +45,11 @@ typedef struct {
 
     vl_proto_t            proto;
     union {
-        vless_conn_t    vc;
-        socks5_client_t s5c;
-        http_client_t   hc;
+        vless_conn_t         vc;
+        socks5_client_t      s5c;
+        http_client_t        hc;
+        trojan_client_t      tc;
+        shadowsocks_client_t sc;
     } u;
 
     uint8_t client_stage[512];
@@ -75,13 +79,18 @@ typedef struct {
 /* delay socks success until the remote response proves the tunnel exists */
     int            pending_socks_ok;
 
-#ifndef SENKO_RELEASE
+/* the destination label and the close latch exist in every build: an event line
+   with no destination in it names nothing, and 280 bytes a session is a cost
+   the trace is worth. everything below is what a release build cuts, because
+   the replay and upload buffers are 64 kb each */
     char     trace_host[280];
+    int      trace_closed;
+
+#ifndef SENKO_RELEASE
     uint64_t trace_app_tx;
     uint64_t trace_app_rx;
     uint64_t trace_wire_tx;
     uint64_t trace_wire_rx;
-    int      trace_closed;
 
     uint8_t  replay_buf[64 * 1024];
     size_t   replay_len;

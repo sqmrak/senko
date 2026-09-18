@@ -32,7 +32,7 @@ static void *tls_open(int fd, const transport_tls_cfg_t *cfg) {
     SSL_CTX_set_max_proto_version(h->ctx, TLS1_3_VERSION);
 
     int reality = (cfg && cfg->reality_pbk && cfg->reality_pbk[0]);
-    if (reality) {
+    if (reality || (cfg && cfg->insecure)) {
         SSL_CTX_set_verify(h->ctx, SSL_VERIFY_NONE, NULL);
     } else {
         SSL_CTX_set_verify(h->ctx, SSL_VERIFY_PEER, NULL);

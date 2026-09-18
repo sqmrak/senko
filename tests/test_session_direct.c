@@ -1,6 +1,7 @@
 #define _DEFAULT_SOURCE
 
 #include "session.h"
+#include "socks5.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -68,6 +69,34 @@ static const transport_vt_t fake_vt = {
     fake_open, fake_read, fake_write, fake_raw_write, fake_close, NULL
 };
 
+/* trojan and shadowsocks carry no distinct response header, so the local
+   socks client only learns the tunnel is up from the connect reply below */
+static void check_socks_connect_ack(vl_proto_t proto, const char *user,
+                                    const char *pass, const char *what) {
+    fake_transport_t ft;
+    memset(&ft, 0, sizeof ft);
+    ft.rx_done = 1;
+
+    session_t s;
+    ok(what, session_init(&s, &fake_vt, &ft, proto, NULL, NULL, user, pass) == SESS_OK);
+
+    uint8_t greet[] = {0x05, 0x01, 0x00};
+    size_t consumed = 0;
+    ok(what, session_feed_client(&s, greet, sizeof greet, &consumed) == SESS_OK);
+    ok(what, consumed == sizeof greet);
+
+    uint8_t req[] = {0x05, 0x01, 0x00, 0x01, 93, 184, 216, 34, 0x01, 0xbb};
+    ok(what, session_feed_client(&s, req, sizeof req, &consumed) == SESS_OK);
+    ok(what, s.state == SESS_RELAY);
+
+    uint8_t out[32];
+    size_t got = session_take_client(&s, out, sizeof out);
+    uint8_t expect[12] = {0x05, 0x00, 0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
+    ok(what, got == sizeof expect && memcmp(out, expect, sizeof expect) == 0);
+
+    printf("ok %s\n", what);
+}
+
 int main(void) {
     uint8_t uuid[VLESS_UUID_LEN];
     for (size_t i = 0; i < sizeof uuid; ++i) uuid[i] = (uint8_t)(i + 1);
@@ -106,6 +135,9 @@ int main(void) {
     ok("client consumed", consumed == 3);
     ok("framed write used", ft.write_calls == 1);
     ok("raw write not used", ft.raw_calls == 0);
+
+    check_socks_connect_ack(VL_PROTO_TROJAN, NULL, "secret", "trojan socks connect ack");
+    check_socks_connect_ack(VL_PROTO_SHADOWSOCKS, "aes-256-gcm", "secret", "shadowsocks socks connect ack");
 
     if (g_fail) {
         fprintf(stderr, "%d check(s) failed\n", g_fail);

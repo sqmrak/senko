@@ -6,6 +6,7 @@
 #include "loop.h"
 #include "routing_exec.h"
 #include "routing_fwd.h"
+#include "settings.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,9 +29,14 @@ typedef struct {
    the kernel ignores does not strand the user on a silent rung */
 typedef int (*c_backend_verify_fn)(void *ctx);
 
+/* force pins one rung instead of walking the ladder, so a tester can say which
+   rung they were on. NULL keeps the ladder */
 int  c_backend_start(c_backend_t *cb, loop_t *loop, int socks_port,
                      const char *server_ip, const char *server_ips,
                      const char *dns_upstream, int dns_local_port,
+                     dns_block_response_t block_response,
+                     ruleset_t *rules,
+                     const senko_force_t *force,
                      c_backend_verify_fn verify, void *verify_ctx,
                      char *reason, size_t reason_cap);
 

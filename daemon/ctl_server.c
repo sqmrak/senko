@@ -8,11 +8,16 @@
 #include "core/happ.h"
 #include "core/store.h"
 #include "daemon_ctl.h"
+#include "routing_exec.h"
+#include "settings.h"
 #include "../common/senko_paths.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <stdarg.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,7 +26,13 @@
 #include <grp.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/un.h>
+#ifdef __APPLE__
+#include <mach/mach_time.h>
+#else
+#include <time.h>
+#endif
 #include <unistd.h>
 
 #ifndef S_ISSOCK
@@ -29,6 +40,10 @@
 #endif
 
 #define AWG_PID_PATH "/var/run/senkoawgd.pid"
+
+/* one connect has to answer while a client is still waiting, and every attempt
+   carries a dns lookup, a handshake and a verify probe */
+#define CTL_FAILOVER_MAX_TRIES 8
 
 static int awg_tunnel_running(void) {
     FILE *f = fopen(AWG_PID_PATH, "r");
@@ -139,18 +154,34 @@ ctls_status_t ctl_server_init(ctl_server_t *s, const char *path,
     if (!s || !path) return CTLS_ERR_ARG;
     memset(s, 0, sizeof *s);
     s->listen_fd = -1;
+    s->ping_pipe[0] = -1;
+    s->ping_pipe[1] = -1;
     for (size_t i = 0; i < CTL_SERVER_MAX_CLIENTS; ++i) s->clients[i].fd = -1;
     s->apply = apply;
     s->apply_ctx = apply_ctx;
+    for (size_t i = 0; i < STORE_MAX_SERVERS; ++i) s->ping_ms[i] = -1;
     ctl_engine_init(&s->engine);
 
+    if (pipe(s->ping_pipe) != 0) return CTLS_ERR;
+    set_nonblock(s->ping_pipe[0]);
+
     size_t pl = strlen(path);
-    if (pl >= sizeof s->sock_path) return CTLS_ERR_ARG;
+    if (pl >= sizeof s->sock_path) {
+        close(s->ping_pipe[0]);
+        close(s->ping_pipe[1]);
+        s->ping_pipe[0] = s->ping_pipe[1] = -1;
+        return CTLS_ERR_ARG;
+    }
     memcpy(s->sock_path, path, pl + 1);
     ctl_token_path_from_sock(path, s->token_path, sizeof s->token_path);
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) return CTLS_ERR_BIND;
+    if (fd < 0) {
+        close(s->ping_pipe[0]);
+        close(s->ping_pipe[1]);
+        s->ping_pipe[0] = s->ping_pipe[1] = -1;
+        return CTLS_ERR_BIND;
+    }
 
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof addr);
@@ -159,25 +190,40 @@ ctls_status_t ctl_server_init(ctl_server_t *s, const char *path,
 
     if (remove_stale_socket(path) != 0) {
         close(fd);
+        close(s->ping_pipe[0]);
+        close(s->ping_pipe[1]);
+        s->ping_pipe[0] = s->ping_pipe[1] = -1;
         return CTLS_ERR_BIND;
     }
     if (bind(fd, (struct sockaddr *)&addr, sizeof addr) != 0) {
         close(fd);
+        close(s->ping_pipe[0]);
+        close(s->ping_pipe[1]);
+        s->ping_pipe[0] = s->ping_pipe[1] = -1;
         return CTLS_ERR_BIND;
     }
     if (tighten_sock_perms(path) != 0) {
         close(fd);
         unlink(path);
+        close(s->ping_pipe[0]);
+        close(s->ping_pipe[1]);
+        s->ping_pipe[0] = s->ping_pipe[1] = -1;
         return CTLS_ERR_BIND;
     }
     if (listen(fd, 4) != 0) {
         close(fd);
         unlink(path);
+        close(s->ping_pipe[0]);
+        close(s->ping_pipe[1]);
+        s->ping_pipe[0] = s->ping_pipe[1] = -1;
         return CTLS_ERR_BIND;
     }
     if (write_ctl_token(s->token_path, s->token, sizeof s->token) != 0) {
         close(fd);
         unlink(path);
+        close(s->ping_pipe[0]);
+        close(s->ping_pipe[1]);
+        s->ping_pipe[0] = s->ping_pipe[1] = -1;
         return CTLS_ERR_AUTH;
     }
     set_nonblock(fd);
@@ -198,6 +244,11 @@ void ctl_server_set_fetch(ctl_server_t *s, ctl_fetch_fn fetch) {
 void ctl_server_set_probe(ctl_server_t *s, ctl_probe_fn probe) {
     if (!s) return;
     s->probe = probe;
+}
+
+void ctl_server_set_server_probe(ctl_server_t *s, ctl_server_probe_fn probe) {
+    if (!s) return;
+    s->server_probe = probe;
 }
 
 void ctl_server_set_verify(ctl_server_t *s, ctl_verify_fn verify) {
@@ -223,6 +274,126 @@ void ctl_server_set_check(ctl_server_t *s, ctl_check_fn check) {
 void ctl_server_set_reason(ctl_server_t *s, ctl_reason_fn reason) {
     if (!s) return;
     s->reason = reason;
+}
+
+void ctl_server_set_stats(ctl_server_t *s, ctl_stats_fn stats) {
+    if (!s) return;
+    s->stats = stats;
+    s->stat_at_ms = 0;
+    s->stat_failed = 0;
+}
+
+static uint64_t stat_now_ms(void) {
+#ifdef __APPLE__
+    mach_timebase_info_data_t scale;
+    mach_timebase_info(&scale);
+    return (uint64_t)((double)mach_absolute_time() * scale.numer / scale.denom / 1000000.0);
+#else
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+    return (uint64_t)now.tv_sec * 1000 + (uint64_t)now.tv_nsec / 1000000;
+#endif
+}
+
+static size_t build_stats(ctl_server_t *s, char *line, size_t cap) {
+    uint64_t up = 0, down = 0;
+    size_t n = 0;
+    if (!s->stats) return 0;
+    if (s->stats(s->apply_ctx, &up, &down) != 0) {
+        if (!s->stat_failed)
+            fprintf(stderr, "senkod: traffic counters unavailable\n");
+        s->stat_failed = 1;
+        return 0;
+    }
+    s->stat_failed = 0;
+    if (ctl_build_stat(up, down, line, cap, &n) != CTL_OK) return 0;
+    return n;
+}
+
+static void broadcast_stats(ctl_server_t *s) {
+    uint64_t now = stat_now_ms();
+    if (!s->stats || (s->stat_at_ms && now - s->stat_at_ms < 1000)) return;
+    s->stat_at_ms = now;
+    char line[64];
+    size_t n = build_stats(s, line, sizeof line);
+    if (n) ctl_server_broadcast(s, line, n);
+}
+
+void ctl_server_set_settings(ctl_server_t *s, const daemon_settings_t *settings) {
+    if (!s) return;
+    s->settings = settings;
+}
+
+void ctl_server_set_diag(ctl_server_t *s, ctl_diag_fn diag) {
+    if (!s) return;
+    s->diag = diag;
+}
+
+void ctl_server_set_fwconf(ctl_server_t *s, ctl_fwconf_fn fwconf) {
+    if (!s) return;
+    s->fwconf = fwconf;
+}
+
+void ctl_server_set_flush(ctl_server_t *s, ctl_flush_fn flush) {
+    if (!s) return;
+    s->flush = flush;
+}
+
+void ctl_server_set_native_config(ctl_server_t *s, ctl_native_config_fn render) {
+    if (!s) return;
+    s->native_config = render;
+}
+
+/* every fact goes through one appender so a full buffer ends the report rather
+   than leaving a half line a reader would show as a fact */
+static void diag_line(char *buf, size_t cap, size_t *off, const char *key,
+                      const char *fmt, ...) {
+    char value[192];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(value, sizeof value, fmt, ap);
+    va_end(ap);
+    if (n < 0) return;
+    size_t written = 0;
+    if (ctl_build_diag(key, value, buf + *off, cap - *off, &written) == CTL_OK)
+        *off += written;
+}
+
+static const char *server_proto_name(const vl_server_t *sv);
+static const char *server_net_name(const vl_server_t *sv);
+static const char *server_sec_name(const vl_server_t *sv);
+static int server_supported(const vl_server_t *sv);
+
+/* the wire configuration of the selected server, without the uuid or the
+   password: this report is five taps away and ends up in screenshots */
+static void diag_selected_server(ctl_server_t *s, char *buf, size_t cap,
+                                 size_t *off) {
+    const store_t *st = &s->engine.store;
+    if (st->selected < 0 || (size_t)st->selected >= st->n) {
+        diag_line(buf, cap, off, "server", "none selected");
+        return;
+    }
+    const vl_server_t *sv = &st->servers[st->selected];
+    diag_line(buf, cap, off, "server", "#%d %s:%u", st->selected, sv->host, sv->port);
+/* the same judgement the server list shows: the combination either has a
+   transport in this build or it does not */
+    diag_line(buf, cap, off, "server.transport", "%s/%s/%s%s",
+              server_proto_name(sv), server_net_name(sv),
+              server_sec_name(sv),
+              server_supported(sv) ? "" : " (no transport in this build)");
+    diag_line(buf, cap, off, "server.flow", "%s",
+              sv->flow[0] ? sv->flow : "none");
+/* vision only rides tcp, and a flow set on a transport that cannot carry it is
+   exactly the kind of silent mismatch this screen exists for */
+    diag_line(buf, cap, off, "server.vision", "%s",
+              (sv->flow[0] && sv->net == VL_NET_TCP) ? "on" : "off");
+}
+
+/* the redial and refresh deadlines share the traffic sampler's clock: a wall
+   clock that jumps (ntp, or the user setting the date) would otherwise stall a
+   redial for as long as the jump */
+static long ctl_now_ms(void) {
+    return (long)stat_now_ms();
 }
 
 static ctl_client_t *alloc_client(ctl_server_t *s) {
@@ -268,6 +439,7 @@ static void accept_one(ctl_server_t *s) {
     c->fd = cfd;
     c->authed = 0;
     c->in_len = 0;
+    c->generation = ++s->client_generation;
 }
 
 static int client_flush(ctl_client_t *c) {
@@ -321,15 +493,128 @@ static void client_write(ctl_client_t *c, const char *buf, size_t len) {
     (void)client_flush(c);
 }
 
+typedef struct {
+    int slot;
+    int fd;
+    uint64_t generation;
+    int server_index;
+    int ms;
+} ctl_ping_result_t;
+
+typedef struct {
+    ctl_server_t *server;
+    int slot;
+    int fd;
+    uint64_t generation;
+    int server_index;
+    vl_server_t profile;
+} ctl_ping_job_t;
+
+static void record_ping(ctl_server_t *s, int idx, int ms);
+
+static void ping_result_write(ctl_server_t *s, const ctl_ping_result_t *result) {
+    const unsigned char *p = (const unsigned char *)result;
+    size_t left = sizeof *result;
+    while (left > 0) {
+        ssize_t n = write(s->ping_pipe[1], p, left);
+        if (n > 0) {
+            p += n;
+            left -= (size_t)n;
+            continue;
+        }
+        if (n < 0 && errno == EINTR) continue;
+        return;
+    }
+}
+
+static void *run_ping_job(void *arg) {
+    ctl_ping_job_t *job = (ctl_ping_job_t *)arg;
+    ctl_ping_result_t result;
+    memset(&result, 0, sizeof result);
+    result.slot = job->slot;
+    result.fd = job->fd;
+    result.generation = job->generation;
+    result.server_index = job->server_index;
+    result.ms = -1;
+    if (job->server->server_probe) {
+        result.ms = job->server->server_probe(job->server->apply_ctx, &job->profile);
+    } else if (job->server->probe) {
+        result.ms = job->server->probe(job->server->apply_ctx,
+                                       job->profile.host, job->profile.port);
+    }
+    ping_result_write(job->server, &result);
+    free(job);
+    return NULL;
+}
+
+static void finish_ping_result(ctl_server_t *s, const ctl_ping_result_t *result) {
+    if (s->ping_active > 0) s->ping_active--;
+    if (result->slot < 0 || result->slot >= CTL_SERVER_MAX_CLIENTS) return;
+    ctl_client_t *c = &s->clients[result->slot];
+    if (c->fd != result->fd || c->generation != result->generation) return;
+
+    record_ping(s, result->server_index, result->ms);
+    char reply[64];
+    size_t rn = 0;
+    if (ctl_build_pong(result->server_index, result->ms,
+                       reply, sizeof reply, &rn) == CTL_OK)
+        client_write(c, reply, rn);
+}
+
+static void drain_ping_results(ctl_server_t *s) {
+    if (!s || s->ping_pipe[0] < 0) return;
+    for (;;) {
+        ctl_ping_result_t result;
+        ssize_t n = read(s->ping_pipe[0], &result, sizeof result);
+        if (n == (ssize_t)sizeof result) {
+            finish_ping_result(s, &result);
+            continue;
+        }
+        if (n < 0 && errno == EINTR) continue;
+        return;
+    }
+}
+
+static int start_ping_job(ctl_server_t *s, ctl_client_t *c,
+                          int server_index, const vl_server_t *profile) {
+    if (!s || !c || !profile || s->ping_active >= CTL_SERVER_MAX_CLIENTS)
+        return -1;
+    int slot = (int)(c - s->clients);
+    if (slot < 0 || slot >= CTL_SERVER_MAX_CLIENTS) return -1;
+
+    ctl_ping_job_t *job = (ctl_ping_job_t *)calloc(1, sizeof *job);
+    if (!job) return -1;
+    job->server = s;
+    job->slot = slot;
+    job->fd = c->fd;
+    job->generation = c->generation;
+    job->server_index = server_index;
+    job->profile = *profile;
+
+    pthread_t thread;
+    int err = pthread_create(&thread, NULL, run_ping_job, job);
+    if (err != 0) {
+        free(job);
+        return -1;
+    }
+    pthread_detach(thread);
+    s->ping_active++;
+    return 0;
+}
+
 static const char *server_proto_name(const vl_server_t *sv) {
     if (sv->proto == VL_PROTO_SOCKS5) return "socks5";
     if (sv->proto == VL_PROTO_HTTP)   return "http";
     if (sv->proto == VL_PROTO_HTTPS)  return "https";
+    if (sv->proto == VL_PROTO_TROJAN) return "trojan";
+    if (sv->proto == VL_PROTO_SHADOWSOCKS) return "shadowsocks";
+    if (sv->proto == VL_PROTO_HYSTERIA2) return "hysteria2";
     return "vless";
 }
 
 static const char *server_net_name(const vl_server_t *sv) {
-    if (sv->proto != VL_PROTO_VLESS) return "tcp";
+    if (sv->proto == VL_PROTO_HYSTERIA2) return "quic";
+    if (sv->proto != VL_PROTO_VLESS && sv->proto != VL_PROTO_TROJAN) return "tcp";
     switch (sv->net) {
         case VL_NET_TCP:   return "tcp";
         case VL_NET_WS:    return "ws";
@@ -338,6 +623,13 @@ static const char *server_net_name(const vl_server_t *sv) {
         case VL_NET_XHTTP: return "xhttp";
         default:          return "unknown";
     }
+}
+
+static const char *server_sec_name(const vl_server_t *sv) {
+    if (sv->proto == VL_PROTO_SHADOWSOCKS) {
+        return sv->encryption[0] ? sv->encryption : "aead";
+    }
+    return vl_sec_name(sv->security);
 }
 
 #define FETCH_CHUNK_RAW 384
@@ -363,31 +655,20 @@ static int fetch_body_alloc(ctl_server_t *s, const char *url,
     return 0;
 }
 
-/* the default request pretends to be happ so panels that only answer known
-   clients answer at all. those same panels then hand happ its own encrypted
-   bundle, and the formats senko cannot open leave the user with nothing. one
-   retry under senko's own name asks the panel for the plain feed instead */
-#define SENKO_PLAIN_UA "User-Agent: Senko/2"
-
+/* every request goes out as happ, because panels that filter on the client name
+   answer that one. a bundle senko cannot open is reported as such rather than
+   asked for again under a second name */
 static int fetch_body_alloc(ctl_server_t *s, const char *url,
                             const char *request_header,
                             unsigned char **body_out, size_t *len_out,
                             ctl_fetch_meta_t *meta);
 
-/* a body senko cannot unwrap, which is the only case worth a second request */
-static int unreadable_happ_body(const unsigned char *blob, size_t blen) {
-    char probe[8192];
-    char plain[16384];
-    size_t n;
-    if (!blob || blen < 7) return 0;
-    if (cfg_content_kind((const char *)blob, blen) != CFG_CONTENT_HAPP) return 0;
-    n = blen < sizeof probe - 1 ? blen : sizeof probe - 1;
-    memcpy(probe, blob, n);
-    probe[n] = '\0';
-    return happ_unwrap(probe, plain, sizeof plain) != 0;
-}
-
 #define LOG_TAIL_MAX (48 * 1024)
+
+/* a pf ruleset with a full routing table in it is the largest thing this verb
+   can be asked for, and the writer that produced it caps at the same size */
+#define FWCONF_MAX (64 * 1024)
+#define FWLINE_MAX 512
 
 #define IMPORT_STAGE_MAX (512 * 1024)
 
@@ -442,13 +723,6 @@ static void import_subscription_url(ctl_server_t *s, ctl_client_t *c,
         if (ctl_build_ok("subscription added, refresh failed", reply, sizeof reply, &rn) == CTL_OK)
             client_write(c, reply, rn);
         return;
-    }
-    if (unreadable_happ_body(blob, blen)) {
-        free(blob);
-        blob = NULL;
-        memset(&meta, 0, sizeof meta);
-        if (fetch_body_alloc(s, url, SENKO_PLAIN_UA, &blob, &blen, &meta) != 0)
-            blob = NULL;
     }
     if (!blob || meta.gated ||
         store_refresh_sub(&s->engine.store, si, (const char *)blob, blen,
@@ -543,7 +817,7 @@ static void fetch_reply_body(ctl_client_t *c,
     if (ln > 0) client_write(c, line, (size_t)ln);
 }
 
-static int server_supported(const vl_server_t *sv);
+static int refresh_subscription(ctl_server_t *s, int si, char *msg, size_t cap);
 
 typedef struct {
     char layer[24];
@@ -618,13 +892,62 @@ static int client_still_open(const ctl_client_t *c) {
     return 1;
 }
 
+/* a measurement is keyed by a store index, and the store is free to move an
+   index under it, so every command that can renumber the catalog drops the
+   whole table rather than keeping entries that now name another server */
+static void forget_pings(ctl_server_t *s) {
+    for (size_t i = 0; i < STORE_MAX_SERVERS; ++i) s->ping_ms[i] = -1;
+}
+
+/* only a probe that reached the server itself belongs here: a measurement
+   taken through the live tunnel says nothing about the node it names */
+static void record_ping(ctl_server_t *s, int idx, int ms) {
+    if (!s || idx < 0 || idx >= STORE_MAX_SERVERS) return;
+    s->ping_ms[idx] = ms >= 0 ? ms : -1;
+}
+
+/* a server nobody measured, and one that did not answer, both belong after
+   everything with a real number */
+static int ping_rank(const ctl_server_t *s, int idx) {
+    int ms = s->ping_ms[idx];
+    return ms < 0 ? INT_MAX : ms;
+}
+
+/* failover stays inside the section the user picked from: a subscription node
+   is never a silent substitute for a manual one. the requested server keeps
+   the first slot, the rest follow by ascending measured latency, and equal
+   latencies keep the stored order */
+static size_t failover_order(const ctl_server_t *s, size_t base, int *order) {
+    const store_t *st = &s->engine.store;
+    size_t n = 0;
+    order[n++] = (int)base;
+    int section = st->group[base];
+    for (size_t i = 0; i < st->n; ++i) {
+        if (i == base || st->group[i] != section) continue;
+        size_t j = n;
+        while (j > 1 && ping_rank(s, order[j - 1]) > ping_rank(s, (int)i)) {
+            order[j] = order[j - 1];
+            --j;
+        }
+        order[j] = (int)i;
+        ++n;
+    }
+    return n;
+}
+
 static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_idx) {
     if (!s || !s->apply) return -1;
     store_t *st = &s->engine.store;
     if (!st->n) return -1;
 
     size_t base = (start_idx >= 0 && (size_t)start_idx < st->n) ? (size_t)start_idx : 0;
+    int order[STORE_MAX_SERVERS];
+    order[0] = (int)base;
     size_t tries = 1;
+    if (s->settings && s->settings->failover) {
+        tries = failover_order(s, base, order);
+        if (tries > CTL_FAILOVER_MAX_TRIES) tries = CTL_FAILOVER_MAX_TRIES;
+    }
     int orig_sel = st->selected;
     int requested_sel = (int)base;
     connect_failure_t last_fail;
@@ -648,7 +971,7 @@ static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_
             return -1;
         }
 
-        size_t i = (base + off) % st->n;
+        size_t i = (size_t)order[off];
         const vl_server_t *sv = &st->servers[i];
         if (!server_supported(sv)) {
             connect_failure_set(&last_fail, "server", "unsupported protocol or security");
@@ -696,7 +1019,9 @@ static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_
             return -1;
         }
 
-        st->selected = requested_sel;
+/* the node that actually came up is the one a redial has to use, so failover
+   moves the stored selection instead of leaving it on the dead entry */
+        st->selected = (int)i;
         if (s->persist && st->selected != orig_sel)
             s->persist(s->apply_ctx, st);
         if (c) {
@@ -784,8 +1109,240 @@ int ctl_server_restore_tunnel(ctl_server_t *s) {
     return connect_with_tunnel_pick(s, NULL, st->selected);
 }
 
+/* 1, 2, 4, 8, 16 then 30 seconds: long enough for a handover or a carrier
+   reattach to finish, short enough that a phone back on wifi does not sit idle */
+static long retry_backoff_ms(int attempt) {
+    long ms = 1000;
+    for (int i = 0; i < attempt && ms < 30000; ++i) ms *= 2;
+    return ms > 30000 ? 30000 : ms;
+}
+
+static void publish_state(ctl_server_t *s, ctl_state_t st) {
+    char ev[64]; size_t en = 0;
+    if (ctl_engine_notify(&s->engine, st, ev, sizeof ev, &en) == CTL_OK)
+        ctl_server_broadcast(s, ev, en);
+}
+
+/* the engine already recorded the outcome, so a redial reports what it ended
+   at instead of notifying a second time and restarting the tunnel clock */
+static void broadcast_current_state(ctl_server_t *s) {
+    char ev[64]; size_t en = 0;
+    if (ctl_build_state(s->engine.state, ctl_engine_uptime(&s->engine),
+                        ev, sizeof ev, &en) == CTL_OK)
+        ctl_server_broadcast(s, ev, en);
+}
+
+static int reconnect_allowed(const ctl_server_t *s) {
+    const store_t *st = &s->engine.store;
+    if (!s->settings || !s->settings->auto_reconnect) return 0;
+    if (st->selected < 0 || (size_t)st->selected >= st->n) return 0;
+    return 1;
+}
+
+static void schedule_retry(ctl_server_t *s, long now) {
+    int max = s->settings ? s->settings->reconnect_max_attempts : 0;
+    if (!reconnect_allowed(s) || (max > 0 && s->retry_attempts >= max)) {
+        s->retry_at_ms = 0;
+        s->retry_attempts = 0;
+        publish_state(s, CTL_STATE_ERROR);
+        return;
+    }
+    long wait = retry_backoff_ms(s->retry_attempts);
+    s->retry_at_ms = now + wait;
+    s->retry_attempts++;
+    fprintf(stderr, "senkod: redial %d of server %d in %ld ms\n",
+            s->retry_attempts, s->engine.store.selected, wait);
+    publish_state(s, CTL_STATE_CONNECTING);
+}
+
+/* a command from the app decides what the tunnel does now, so whatever the
+   daemon had scheduled on its own stops being the current intent */
+static void cancel_retry(ctl_server_t *s) {
+    s->retry_at_ms = 0;
+    s->retry_attempts = 0;
+}
+
+void ctl_server_tunnel_lost(ctl_server_t *s) {
+    if (!s) return;
+/* a tunnel taken down on purpose is already idle here, so only a live one can
+   have been lost */
+    if (s->engine.state != CTL_STATE_CONNECTED &&
+        s->engine.state != CTL_STATE_CONNECTING)
+        return;
+    schedule_retry(s, ctl_now_ms());
+}
+
+/* the redirect rules name the address the egress had when they went up, so a
+   wifi to cellular move leaves a tunnel that looks connected and carries
+   nothing. SystemConfiguration is not linked into the armv7 slice, and its
+   reachability callbacks need a run loop the daemon does not have, so the
+   interface list is polled instead */
+static void check_egress_change(ctl_server_t *s, long now) {
+    if (!s->settings || !s->settings->auto_reconnect) return;
+    if (s->egress_check_ms && now - s->egress_check_ms < 2000) return;
+    s->egress_check_ms = now;
+
+    char name[sizeof s->egress_iface];
+    char ip[sizeof s->egress_ip];
+    if (routing_exec_egress_snapshot(name, sizeof name, ip, sizeof ip) != 0) return;
+
+    int first = (s->egress_iface[0] == '\0');
+    int changed = strcmp(name, s->egress_iface) != 0 ||
+                  strcmp(ip, s->egress_ip) != 0;
+    snprintf(s->egress_iface, sizeof s->egress_iface, "%s", name);
+    snprintf(s->egress_ip, sizeof s->egress_ip, "%s", ip);
+    if (first || !changed) return;
+    if (s->engine.state != CTL_STATE_CONNECTED && !s->retry_at_ms) return;
+
+    fprintf(stderr, "senkod: egress moved to %s %s, rebuilding the tunnel\n",
+            name, ip);
+/* a new network is a new chance, not another failed attempt */
+    s->retry_attempts = 0;
+    s->retry_at_ms = now;
+    publish_state(s, CTL_STATE_CONNECTING);
+}
+
+/* a refresh blocks the control loop while it fetches, so at most one goes per
+   pass and the most overdue subscription is the one that gets it */
+static int refresh_subscription(ctl_server_t *s, int si, char *msg, size_t cap);
+
+static void check_scheduled_refresh(ctl_server_t *s, long now) {
+    if (!s->settings || s->settings->sub_refresh_hours <= 0 || !s->fetch) return;
+    if (s->sub_check_ms && now - s->sub_check_ms < 60000) return;
+    s->sub_check_ms = now;
+
+    uint64_t nowsec = (uint64_t)ctl_engine_now();
+    uint64_t period = (uint64_t)s->settings->sub_refresh_hours * 3600u;
+    int pick = -1;
+    uint64_t oldest = 0;
+    for (int i = 0; i < STORE_MAX_SUBS; ++i) {
+        if (!s->engine.store.subs[i].used) continue;
+        if (s->sub_retry_at_ms[i] && now < s->sub_retry_at_ms[i]) continue;
+        uint64_t last = s->engine.store.subs[i].last_refresh;
+        if (last && nowsec < last + period) continue;
+        if (pick < 0 || last < oldest) { pick = i; oldest = last; }
+    }
+    if (pick < 0) return;
+
+    char msg[352];
+    if (refresh_subscription(s, pick, msg, sizeof msg) == 0) {
+        s->sub_retry_at_ms[pick] = 0;
+        fprintf(stderr, "senkod: scheduled refresh of subscription %d: %s\n",
+                pick, msg);
+        return;
+    }
+/* a panel that is down must not be pulled once a minute for the rest of the
+   day, and the schedule itself cannot tell a broken url from a flaky link */
+    s->sub_retry_at_ms[pick] = now + 15 * 60 * 1000;
+    fprintf(stderr, "senkod: scheduled refresh of subscription %d failed: %s\n",
+            pick, msg);
+}
+
+void ctl_server_tick(ctl_server_t *s) {
+    if (!s || !s->apply) return;
+    long now = ctl_now_ms();
+
+    check_egress_change(s, now);
+
+    if (s->retry_at_ms && now >= s->retry_at_ms) {
+        s->retry_at_ms = 0;
+        int idx = s->engine.store.selected;
+        if (!reconnect_allowed(s)) {
+            s->retry_attempts = 0;
+            publish_state(s, CTL_STATE_ERROR);
+        } else if (connect_with_tunnel_pick(s, NULL, idx) == 0) {
+            s->retry_attempts = 0;
+            broadcast_current_state(s);
+        } else {
+            schedule_retry(s, ctl_now_ms());
+        }
+    }
+
+    check_scheduled_refresh(s, now);
+}
+
 static int server_supported(const vl_server_t *sv) {
     return cfg_validate_server(sv, NULL, 0);
+}
+
+/* one refresh path for the REFRESH command and for the scheduled pull: the panel
+   quirks handled here (the happ retry, the gate placeholder, the reject reason)
+   are not something two call sites could keep in step. msg carries the text the
+   caller reports, success or failure */
+static int refresh_subscription(ctl_server_t *s, int si, char *msg, size_t cap) {
+    if (!s || !msg || cap == 0) return -1;
+    msg[0] = '\0';
+    if (s->refresh_in_progress) {
+        snprintf(msg, cap, "refresh in progress");
+        return -1;
+    }
+    if (!s->fetch) {
+        snprintf(msg, cap, "refresh not supported");
+        return -1;
+    }
+    if (si < 0 || si >= STORE_MAX_SUBS || !s->engine.store.subs[si].used) {
+        snprintf(msg, cap, "no such subscription");
+        return -1;
+    }
+
+    s->refresh_in_progress = 1;
+    unsigned char *blob = NULL;
+    size_t blen = 0;
+    ctl_fetch_meta_t meta;
+    memset(&meta, 0, sizeof meta);
+    if (fetch_body_alloc(s, s->engine.store.subs[si].url,
+                         s->engine.store.subs[si].header,
+                         &blob, &blen, &meta) != 0) {
+        s->refresh_in_progress = 0;
+        snprintf(msg, cap, "fetch failed");
+        return -1;
+    }
+    if (meta.gated && !(s->settings && s->settings->sub_ignore_gating)) {
+/* the panel answers a device it will not serve with a one entry placeholder
+   profile, so keeping the previous nodes is the only correct outcome */
+        free(blob);
+        s->refresh_in_progress = 0;
+        snprintf(msg, cap, "subscription refused this device: %s", meta.gate_reason);
+        return -1;
+    }
+    if (meta.gated)
+        fprintf(stderr, "senkod: taking a device gated feed anyway: %s\n",
+                meta.gate_reason);
+    size_t added = 0;
+    if (store_refresh_sub(&s->engine.store, (size_t)si, (const char *)blob, blen,
+                          &added) != STORE_OK) {
+/* "parse failed" tells the user nothing they can act on, and the two answers a
+   panel actually gives instead of a feed are both nameable */
+        const char *why = cfg_reject_reason((const char *)blob, blen,
+                                            s->engine.store.subs[si].url);
+        free(blob);
+        s->refresh_in_progress = 0;
+        snprintf(msg, cap, "%s", why ? why : "refresh parse failed");
+        return -1;
+    }
+    free(blob);
+    if (meta.expire)
+        store_set_sub_expire(&s->engine.store, (size_t)si, meta.expire);
+    store_set_sub_meta(&s->engine.store, (size_t)si, meta.upload,
+                       meta.download, meta.total, meta.description,
+                       meta.support_url);
+    if (meta.title[0]) {
+        url_t u;
+        if (url_parse(s->engine.store.subs[si].url, &u) == URL_OK)
+            store_set_sub_title(&s->engine.store, (size_t)si, meta.title, u.host);
+    }
+    store_set_sub_refresh(&s->engine.store, (size_t)si,
+                          (uint64_t)ctl_engine_now());
+/* a refresh renumbers the catalog, so every measurement taken against the old
+   indexes is now pointing at a different server */
+    forget_pings(s);
+    if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
+    s->refresh_in_progress = 0;
+    if (s->engine.store.n >= STORE_MAX_SERVERS)
+        snprintf(msg, cap, "refreshed %zu server(s) (list full)", added);
+    else
+        snprintf(msg, cap, "refreshed %zu server(s)", added);
+    return 0;
 }
 
 static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
@@ -819,11 +1376,17 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         return;
     }
 
+    if (cmd.kind == CTL_CMD_CONNECT || cmd.kind == CTL_CMD_DISCONNECT ||
+        cmd.kind == CTL_CMD_DEL_SERVER || cmd.kind == CTL_CMD_DEL_SUB ||
+        cmd.kind == CTL_CMD_CLEAR_MANUAL || cmd.kind == CTL_CMD_RESTORE)
+        cancel_retry(s);
+
     if (cmd.kind == CTL_CMD_EXPORT || cmd.kind == CTL_CMD_RESTORE) {
         char reply[128]; size_t rn = 0;
         int restore = cmd.kind == CTL_CMD_RESTORE;
         int ok = s->backup && s->backup(s->apply_ctx, restore,
                                         &s->engine.store) == 0;
+        if (ok && restore) forget_pings(s);
         if (ok) {
             if (ctl_build_ok(restore ? "backup restored" : "backup exported",
                              reply, sizeof reply, &rn) == CTL_OK)
@@ -832,6 +1395,216 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
                                  reply, sizeof reply, &rn) == CTL_OK) {
             client_write(c, reply, rn);
         }
+        return;
+    }
+
+    if ((cmd.kind == CTL_CMD_SET && strcmp(cmd.name, "rule") == 0) ||
+        cmd.kind == CTL_CMD_DEL_RULE) {
+        char reply[128];
+        size_t reply_len = 0;
+        if (s->engine.state == CTL_STATE_CONNECTED ||
+            s->engine.state == CTL_STATE_CONNECTING) {
+            if (ctl_build_err("disconnect before changing rules", reply,
+                              sizeof reply, &reply_len) == CTL_OK)
+                client_write(c, reply, reply_len);
+            return;
+        }
+        if (cmd.kind == CTL_CMD_DEL_RULE) {
+            if (store_remove_rule(&s->engine.store,
+                                  (size_t)cmd.server_index) != STORE_OK) {
+                if (ctl_build_err("no such rule", reply, sizeof reply,
+                                  &reply_len) == CTL_OK)
+                    client_write(c, reply, reply_len);
+                return;
+            }
+            if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
+            if (ctl_build_ok("rule removed", reply, sizeof reply,
+                             &reply_len) == CTL_OK)
+                client_write(c, reply, reply_len);
+            return;
+        }
+        size_t index = 0;
+        store_status_t status = store_add_rule(&s->engine.store, cmd.text,
+                                               strlen(cmd.text), &index);
+        if (status != STORE_OK) {
+            const char *reason = status == STORE_ERR_FULL
+                ? "rule list full" : "invalid rule";
+            if (ctl_build_err(reason, reply, sizeof reply, &reply_len) == CTL_OK)
+                client_write(c, reply, reply_len);
+            return;
+        }
+        if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
+        char message[64];
+        snprintf(message, sizeof message, "rule saved %zu", index);
+        if (ctl_build_ok(message, reply, sizeof reply, &reply_len) == CTL_OK)
+            client_write(c, reply, reply_len);
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_RULES) {
+        char line[512];
+        size_t line_len = 0;
+        for (size_t i = 0; i < s->engine.store.rules.count; ++i) {
+            const rule_t *rule = &s->engine.store.rules.entries[i];
+            if (ctl_build_rule(i, rule_action_name(rule->action),
+                               rule_type_name(rule->type),
+                               rule_hit_count(rule), rule->value,
+                               line, sizeof line, &line_len) == CTL_OK)
+                client_write(c, line, line_len);
+        }
+        if (ctl_build_ruleend(s->engine.store.rules.count, line, sizeof line,
+                              &line_len) == CTL_OK)
+            client_write(c, line, line_len);
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_DIAG) {
+        char report[4096];
+        size_t off = 0;
+        size_t from_daemon = 0;
+
+/* what only this side knows: the published state, the redial schedule, the
+   egress it watches and the transport the selection would dial */
+        diag_line(report, sizeof report, &off, "state", "%s",
+                  ctl_state_name(s->engine.state));
+        if (s->engine.state == CTL_STATE_CONNECTED)
+            diag_line(report, sizeof report, &off, "state.uptime", "%ld s",
+                      ctl_engine_uptime(&s->engine));
+        if (s->retry_at_ms)
+            diag_line(report, sizeof report, &off, "redial",
+                      "attempt %d in %ld ms", s->retry_attempts,
+                      s->retry_at_ms - ctl_now_ms());
+        else
+            diag_line(report, sizeof report, &off, "redial", "none scheduled");
+        diag_line(report, sizeof report, &off, "egress", "%s",
+                  s->egress_iface[0] ? s->egress_iface : "not sampled yet");
+        if (s->egress_iface[0])
+            diag_line(report, sizeof report, &off, "egress.address", "%s", s->egress_ip);
+        diag_line(report, sizeof report, &off, "catalog",
+                  "%zu server(s), %zu rule(s)", s->engine.store.n,
+                  s->engine.store.rules.count);
+        diag_selected_server(s, report, sizeof report, &off);
+
+        if (s->diag && s->diag(s->apply_ctx, report + off, sizeof report - off,
+                               &from_daemon) == 0)
+            off += from_daemon;
+
+        client_write(c, report, off);
+        char reply[32]; size_t rn = 0;
+        if (ctl_build_diagend(reply, sizeof reply, &rn) == CTL_OK)
+            client_write(c, reply, rn);
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_FWCONF) {
+        char reply[96]; size_t rn = 0;
+        if (!s->fwconf) {
+            if (ctl_build_err("no firewall ruleset: this device is not on the pf or ipfw backend", reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        char *conf = (char *)malloc(FWCONF_MAX);
+        size_t clen = 0;
+        if (!conf) {
+            if (ctl_build_err("out of memory", reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        if (s->fwconf(s->apply_ctx, conf, FWCONF_MAX, &clen) != 0 || clen == 0) {
+            free(conf);
+            if (ctl_build_err("no firewall ruleset: this device is not on the pf or ipfw backend", reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+/* the ruleset goes out one line at a time so a client can rebuild it without
+   guessing where the text ends */
+        char *p = conf;
+        char *end = conf + clen;
+        while (p < end) {
+            char *nl = (char *)memchr(p, '\n', (size_t)(end - p));
+            size_t n = nl ? (size_t)(nl - p) : (size_t)(end - p);
+            if (n >= FWLINE_MAX) n = FWLINE_MAX - 1;
+            char text[FWLINE_MAX];
+            memcpy(text, p, n);
+            text[n] = '\0';
+            char line[FWLINE_MAX + 16];
+            size_t ln = 0;
+            if (ctl_build_fwline(text, line, sizeof line, &ln) == CTL_OK)
+                client_write(c, line, ln);
+            if (!nl) break;
+            p = nl + 1;
+        }
+        free(conf);
+        if (ctl_build_fwend(reply, sizeof reply, &rn) == CTL_OK)
+            client_write(c, reply, rn);
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_FLUSH) {
+        char reply[128]; size_t rn = 0;
+        char reason[96];
+        reason[0] = '\0';
+        if (strcmp(cmd.name, "rules") == 0) {
+/* the ruleset belongs to the store, so it is cleared here and saved with it
+   rather than behind the daemon's back */
+            size_t had = s->engine.store.rules.count;
+            ruleset_init(&s->engine.store.rules);
+            if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
+            char msg[64];
+            snprintf(msg, sizeof msg, "%zu rule(s) removed", had);
+            if (ctl_build_ok(msg, reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        if (!s->flush || s->flush(s->apply_ctx, cmd.name, reason, sizeof reason) != 0) {
+            if (ctl_build_err(reason[0] ? reason : "nothing to flush",
+                              reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        if (strcmp(cmd.name, "config") == 0 && s->persist)
+            s->persist(s->apply_ctx, &s->engine.store);
+        if (ctl_build_ok("flushed", reply, sizeof reply, &rn) == CTL_OK)
+            client_write(c, reply, rn);
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_HWID_RESET) {
+        char reply[128]; size_t rn = 0;
+        char hwid[65];
+        hwid[0] = '\0';
+        url_device_hwid_reset(hwid, sizeof hwid);
+        if (!hwid[0]) {
+            if (ctl_build_err("could not write a new device id",
+                              reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        if (ctl_build_ok(hwid, reply, sizeof reply, &rn) == CTL_OK)
+            client_write(c, reply, rn);
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_SETTINGS) {
+/* the engine keeps no settings of its own: the daemon owns the copy and this
+   server only reads it, so the dump is answered here. the lines are the same
+   SET lines the verb accepts, so a client can hand one straight back */
+        char reply[128]; size_t rn = 0;
+        char dump[512];
+        size_t dn = 0;
+        if (!s->settings) {
+            if (ctl_build_err("settings unavailable", reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        if (daemon_settings_serialize(s->settings, dump, sizeof dump, &dn) != 0) {
+            if (ctl_build_err("settings too long", reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        client_write(c, dump, dn);
+        if (ctl_build_setend(reply, sizeof reply, &rn) == CTL_OK)
+            client_write(c, reply, rn);
         return;
     }
 
@@ -845,9 +1618,27 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         }
         char reason[96];
         reason[0] = '\0';
+        ctl_check_trace_t trace;
+        memset(&trace, 0, sizeof trace);
         int ms = s->check(s->apply_ctx, cmd.name,
                           &s->engine.store.servers[cmd.server_index],
+                          cmd.want_stages ? &trace : NULL,
                           reason, sizeof reason);
+/* tcp and handshake dial the node; proxy and tunnel measure whatever the live
+   tunnel currently carries, which is not this entry */
+        if (strcmp(cmd.name, "tcp") == 0 || strcmp(cmd.name, "handshake") == 0)
+            record_ping(s, cmd.server_index, ms);
+/* the stages go out before the verdict so a client reading line by line has
+   the whole path in hand by the time it sees PONG or ERR */
+        if (cmd.want_stages) {
+            for (size_t i = 0; i < trace.count; ++i) {
+                char line[128];
+                size_t ln = 0;
+                if (ctl_build_stage(trace.stages[i].name, trace.stages[i].ms,
+                                    trace.stages[i].ok, line, sizeof line, &ln) == CTL_OK)
+                    client_write(c, line, ln);
+            }
+        }
         if (ms >= 0) {
             if (ctl_build_pong(cmd.server_index, ms, reply, sizeof reply, &rn) == CTL_OK)
                 client_write(c, reply, rn);
@@ -867,6 +1658,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
             return;
         }
         size_t removed = 0;
+        forget_pings(s);
         if (store_clear_manual(&s->engine.store, &removed) != STORE_OK) {
             if (ctl_build_err("could not clear manual servers",
                               reply, sizeof reply, &rn) == CTL_OK)
@@ -938,6 +1730,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
                 skipped++;
         }
         free(parsed);
+        if (added) forget_pings(s);
         if (added && s->persist) s->persist(s->apply_ctx, &s->engine.store);
         char msg[96];
         if (skipped)
@@ -1005,6 +1798,83 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         return;
     }
 
+    if (cmd.kind == CTL_CMD_NATIVE_CONFIG) {
+        char reply[128];
+        size_t rn = 0;
+        if (!s->native_config || cmd.server_index < 0 ||
+            (size_t)cmd.server_index >= s->engine.store.n) {
+            if (ctl_build_err("native VPN configuration unavailable", reply,
+                              sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        size_t cap = 256 * 1024;
+        char *json = (char *)malloc(cap);
+        if (!json) {
+            if (ctl_build_err("native VPN configuration is too large", reply,
+                              sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        size_t json_len = 0;
+        if (s->native_config(s->apply_ctx,
+                             &s->engine.store.servers[cmd.server_index],
+                             json, cap,
+                             &json_len) != 0 || json_len == 0 ||
+            json_len >= cap) {
+            free(json);
+            if (ctl_build_err("server cannot run in native VPN", reply,
+                              sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        const size_t chunk_size = 48 * 1024;
+        size_t encoded_cap = b64_encoded_maxlen(chunk_size) + 1;
+        char *encoded = (char *)malloc(encoded_cap);
+        char *line = (char *)malloc(encoded_cap + 8);
+        if (!encoded || !line) {
+            free(line);
+            free(encoded);
+            free(json);
+            if (ctl_build_err("native VPN configuration is too large", reply,
+                              sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        size_t off = 0;
+        while (off < json_len) {
+            size_t chunk = json_len - off;
+            if (chunk > chunk_size) chunk = chunk_size;
+            size_t encoded_len = 0;
+            if (b64_encode((const unsigned char *)json + off, chunk,
+                           encoded, encoded_cap, &encoded_len) != 0) {
+                free(line);
+                free(encoded);
+                free(json);
+                if (ctl_build_err("native VPN configuration encoding failed",
+                                  reply, sizeof reply, &rn) == CTL_OK)
+                    client_write(c, reply, rn);
+                return;
+            }
+            int n = snprintf(line, encoded_cap + 8, "NCFG %s\n", encoded);
+            if (n <= 0 || (size_t)n >= encoded_cap + 8) {
+                free(line);
+                free(encoded);
+                free(json);
+                return;
+            }
+            client_write(c, line, (size_t)n);
+            off += chunk;
+        }
+        int n = snprintf(reply, sizeof reply, "NCFGEND %zu\n", json_len);
+        if (n > 0 && (size_t)n < sizeof reply)
+            client_write(c, reply, (size_t)n);
+        free(line);
+        free(encoded);
+        free(json);
+        return;
+    }
+
     if (cmd.kind == CTL_CMD_LIST) {
         store_normalize(&s->engine.store);
         const store_t *st = &s->engine.store;
@@ -1056,7 +1926,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
             int sel = (st->selected >= 0 && (size_t)st->selected == i) ? 1 : 0;
             if (ctl_build_srv((int)i, sel, st->group[i],
                               server_proto_name(sv), server_net_name(sv),
-                              vl_sec_name(sv->security), server_supported(sv),
+                              server_sec_name(sv), server_supported(sv),
                               sv->host, sv->port, sv->remark,
                               ln, sizeof ln, &lnn) == CTL_OK)
                 client_write(c, ln, lnn);
@@ -1083,6 +1953,18 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         return;
     }
 
+    if (cmd.kind == CTL_CMD_ADD_SERVER || cmd.kind == CTL_CMD_REPLACE_SERVER ||
+        cmd.kind == CTL_CMD_DEL_SERVER || cmd.kind == CTL_CMD_REPLACE_SUB ||
+        cmd.kind == CTL_CMD_DEL_SUB || cmd.kind == CTL_CMD_MOVE_MANUAL ||
+        cmd.kind == CTL_CMD_MOVE_SECTION)
+        forget_pings(s);
+
+    if (cmd.kind == CTL_CMD_STATUS) {
+        char line[64];
+        size_t n = build_stats(s, line, sizeof line);
+        if (n) client_write(c, line, n);
+    }
+
     char out[512]; size_t on = 0;
     ctl_action_t action;
     ctl_engine_handle(&s->engine, &cmd, out, sizeof out, &on, &action);
@@ -1094,7 +1976,8 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
     else if (on > 4)
         ok_line = strstr(out, "\nOK ");
     if (s->persist && ok_line &&
-        (cmd.kind == CTL_CMD_ADD_SERVER || cmd.kind == CTL_CMD_ADD_SUB ||
+        (cmd.kind == CTL_CMD_ADD_SERVER || cmd.kind == CTL_CMD_REPLACE_SERVER ||
+         cmd.kind == CTL_CMD_ADD_SUB || cmd.kind == CTL_CMD_REPLACE_SUB ||
          cmd.kind == CTL_CMD_SET_SUB_HEADER ||
          cmd.kind == CTL_CMD_DEL_SERVER || cmd.kind == CTL_CMD_DEL_SUB) &&
         (ok_line == out || ok_line[0] == '\n')) {
@@ -1106,101 +1989,57 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         s->persist(s->apply_ctx, &s->engine.store);
     }
 
-    if (action.kind == CTL_ACT_REFRESH) {
-        int si = action.server_index;
-        char reply[128]; size_t rn = 0;
-        if (!s->fetch) {
-            if (ctl_build_err("refresh not supported", reply, sizeof reply, &rn) == CTL_OK)
+    if (action.kind == CTL_ACT_SET) {
+/* the reply echoes the key and the value back, and a user agent fills the
+   whole value, so both buffers are sized from the protocol rather than from
+   the shorter settings this verb started with */
+        char reply[CTL_ACT_KEY_MAX + CTL_ACT_VALUE_MAX + 48]; size_t rn = 0;
+        int r = s->apply ? s->apply(s->apply_ctx, &action) : -1;
+        if (r == 0) {
+            char msg[CTL_ACT_KEY_MAX + CTL_ACT_VALUE_MAX + 2];
+            snprintf(msg, sizeof msg, "%s %s", action.key, action.value);
+/* the settings live in the config file beside the catalog, so one save keeps
+   both, and a reboot keeps what was just changed */
+            if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
+            if (ctl_build_ok(msg, reply, sizeof reply, &rn) == CTL_OK)
                 client_write(c, reply, rn);
             return;
         }
-        if (si < 0 || si >= STORE_MAX_SUBS || !s->engine.store.subs[si].used) {
-            if (ctl_build_err("no such subscription", reply, sizeof reply, &rn) == CTL_OK)
-                client_write(c, reply, rn);
-            return;
-        }
-        unsigned char *blob = NULL;
-        size_t blen = 0;
-        ctl_fetch_meta_t meta;
-        memset(&meta, 0, sizeof meta);
-        if (fetch_body_alloc(s, s->engine.store.subs[si].url,
-                             s->engine.store.subs[si].header,
-                             &blob, &blen, &meta) != 0) {
-            if (ctl_build_err("fetch failed", reply, sizeof reply, &rn) == CTL_OK)
-                client_write(c, reply, rn);
-            return;
-        }
-/* a panel that answered the happ user agent with a bundle senko cannot open is
-   asked once more under senko's own name, which is what makes it serve the
-   plain feed. a subscription that carries its own header is left alone: the
-   user chose that one */
-        if (unreadable_happ_body(blob, blen) &&
-            !s->engine.store.subs[si].header[0]) {
-            unsigned char *plain_blob = NULL;
-            size_t plain_len = 0;
-            ctl_fetch_meta_t plain_meta;
-            memset(&plain_meta, 0, sizeof plain_meta);
-            if (fetch_body_alloc(s, s->engine.store.subs[si].url, SENKO_PLAIN_UA,
-                                 &plain_blob, &plain_len, &plain_meta) == 0) {
-                free(blob);
-                blob = plain_blob;
-                blen = plain_len;
-                meta = plain_meta;
-            }
-        }
-        if (meta.gated) {
-/* the panel answers a device it will not serve with a one entry placeholder
-   profile, so keeping the previous nodes is the only correct outcome */
-            free(blob);
-            char msg[320];
-            snprintf(msg, sizeof msg, "subscription refused this device: %s",
-                     meta.gate_reason);
-            char gerr[352]; size_t gn = 0;
-            if (ctl_build_err(msg, gerr, sizeof gerr, &gn) == CTL_OK)
-                client_write(c, gerr, gn);
-            return;
-        }
-        size_t added = 0;
-        if (store_refresh_sub(&s->engine.store, (size_t)si, (const char *)blob, blen, &added) != STORE_OK) {
-/* "parse failed" tells the user nothing they can act on, and the two answers a
-   panel actually gives instead of a feed are both nameable */
-            const char *why = cfg_reject_reason((const char *)blob, blen,
-                                                s->engine.store.subs[si].url);
-            char detail[224];
-            size_t dn = 0;
-            free(blob);
-            if (ctl_build_err(why ? why : "refresh parse failed",
-                              detail, sizeof detail, &dn) == CTL_OK)
-                client_write(c, detail, dn);
-            return;
-        }
-        free(blob);
-        if (meta.expire)
-            store_set_sub_expire(&s->engine.store, (size_t)si, meta.expire);
-        store_set_sub_meta(&s->engine.store, (size_t)si, meta.upload,
-                           meta.download, meta.total, meta.description,
-                           meta.support_url);
-        if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
-        char msg[96];
-        if (s->engine.store.n >= STORE_MAX_SERVERS)
-            snprintf(msg, sizeof msg, "refreshed %zu server(s) (list full)", added);
-        else
-            snprintf(msg, sizeof msg, "refreshed %zu server(s)", added);
-        if (ctl_build_ok(msg, reply, sizeof reply, &rn) == CTL_OK)
+        const char *why = "could not apply setting";
+        if (r == DCTL_ERR_SETTING_KEY) why = "unknown setting";
+        else if (r == DCTL_ERR_SETTING_VALUE) why = "value out of range";
+        if (ctl_build_err(why, reply, sizeof reply, &rn) == CTL_OK)
             client_write(c, reply, rn);
         return;
     }
 
-    if (action.kind == CTL_ACT_PING) {
-        int ms = -1;
-        if ((s->engine.state == CTL_STATE_CONNECTED ||
-             s->engine.state == CTL_STATE_CONNECTING) && s->tunnel_probe)
-            ms = s->tunnel_probe(s->apply_ctx);
-        else if (s->probe)
-            ms = s->probe(s->apply_ctx, action.server.host, action.server.port);
-        char reply[64]; size_t rn = 0;
-        if (ctl_build_pong(action.server_index, ms, reply, sizeof reply, &rn) == CTL_OK)
+    if (action.kind == CTL_ACT_REFRESH) {
+        char detail[352];
+        char reply[384]; size_t rn = 0;
+        int r = refresh_subscription(s, action.server_index, detail, sizeof detail);
+        if (r == 0) {
+            if (ctl_build_ok(detail, reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+        } else if (ctl_build_err(detail, reply, sizeof reply, &rn) == CTL_OK) {
             client_write(c, reply, rn);
+        }
+        return;
+    }
+
+    if (action.kind == CTL_ACT_PING) {
+        if (!s->server_probe && !s->probe) {
+            char reply[64]; size_t rn = 0;
+            if (ctl_build_pong(action.server_index, -1,
+                               reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        if (start_ping_job(s, c, action.server_index, &action.server) != 0) {
+            char err[96]; size_t en = 0;
+            if (ctl_build_err("too many pings in progress", err,
+                              sizeof err, &en) == CTL_OK)
+                client_write(c, err, en);
+        }
         return;
     }
 
@@ -1235,14 +2074,21 @@ static void service_client(ctl_server_t *s, ctl_client_t *c) {
 
 ctls_status_t ctl_server_step(ctl_server_t *s, int timeout_ms) {
     if (!s) return CTLS_ERR_ARG;
+    broadcast_stats(s);
+    if (s->stats && (timeout_ms < 0 || timeout_ms > 1000)) timeout_ms = 1000;
 
-    struct pollfd pfd[1 + CTL_SERVER_MAX_CLIENTS];
-    ctl_client_t *map[1 + CTL_SERVER_MAX_CLIENTS];
+    struct pollfd pfd[2 + CTL_SERVER_MAX_CLIENTS];
+    int map[2 + CTL_SERVER_MAX_CLIENTS];
     nfds_t nf = 0;
 
     pfd[nf].fd = s->listen_fd;
     pfd[nf].events = POLLIN;
-    map[nf] = NULL;
+    map[nf] = -2;
+    nf++;
+
+    pfd[nf].fd = s->ping_pipe[0];
+    pfd[nf].events = POLLIN;
+    map[nf] = -1;
     nf++;
 
     for (size_t i = 0; i < CTL_SERVER_MAX_CLIENTS; ++i) {
@@ -1251,7 +2097,7 @@ ctls_status_t ctl_server_step(ctl_server_t *s, int timeout_ms) {
         pfd[nf].events = POLLIN;
         if (s->clients[i].out_len > s->clients[i].out_off)
             pfd[nf].events |= POLLOUT;
-        map[nf] = &s->clients[i];
+        map[nf] = (int)i;
         nf++;
     }
 
@@ -1261,9 +2107,14 @@ ctls_status_t ctl_server_step(ctl_server_t *s, int timeout_ms) {
 
     if (pfd[0].revents & POLLIN) accept_one(s);
 
-    for (nfds_t i = 1; i < nf; ++i) {
-        ctl_client_t *c = map[i];
-        if (!c || c->fd < 0) continue;
+    if (pfd[1].revents & (POLLIN | POLLHUP | POLLERR))
+        drain_ping_results(s);
+
+    for (nfds_t i = 2; i < nf; ++i) {
+        int slot = map[i];
+        if (slot < 0 || slot >= CTL_SERVER_MAX_CLIENTS) continue;
+        ctl_client_t *c = &s->clients[slot];
+        if (c->fd < 0) continue;
         if (pfd[i].revents & POLLOUT)
             (void)client_flush(c);
         if (c->fd < 0) continue;
@@ -1292,10 +2143,21 @@ size_t ctl_server_client_count(const ctl_server_t *s) {
 
 void ctl_server_close(ctl_server_t *s) {
     if (!s) return;
+    while (s->ping_active > 0) {
+        struct pollfd pfd;
+        pfd.fd = s->ping_pipe[0];
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+        if (poll(&pfd, 1, 1000) > 0)
+            drain_ping_results(s);
+    }
     for (size_t i = 0; i < CTL_SERVER_MAX_CLIENTS; ++i)
         if (s->clients[i].fd >= 0) drop_client(&s->clients[i]);
     if (s->listen_fd >= 0) { close(s->listen_fd); s->listen_fd = -1; }
     if (s->sock_path[0]) (void)remove_stale_socket(s->sock_path);
     if (s->token_path[0]) (void)unlink(s->token_path);
     s->token[0] = '\0';
+    if (s->ping_pipe[0] >= 0) close(s->ping_pipe[0]);
+    if (s->ping_pipe[1] >= 0) close(s->ping_pipe[1]);
+    s->ping_pipe[0] = s->ping_pipe[1] = -1;
 }

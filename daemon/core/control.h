@@ -15,7 +15,9 @@ typedef enum {
     CTL_CMD_STATUS,
     CTL_CMD_PING,
     CTL_CMD_ADD_SERVER,
+    CTL_CMD_REPLACE_SERVER,
     CTL_CMD_ADD_SUB,
+    CTL_CMD_REPLACE_SUB,
     CTL_CMD_REFRESH, /* refresh a subscription */
     CTL_CMD_DEL_SERVER, /* delete a server */
     CTL_CMD_DEL_SUB, /* delete a subscription */
@@ -32,7 +34,16 @@ typedef enum {
     CTL_CMD_HWID, /* report the device id sent to subscription panels */
     CTL_CMD_LOGS, /* stream the daemon log tail to a client that cannot read it */
     CTL_CMD_IMPORT,       /* parse the staged file and add what it holds */
-    CTL_CMD_CLEAR_MANUAL  /* drop every manual server */
+    CTL_CMD_CLEAR_MANUAL, /* drop every manual server */
+    CTL_CMD_SET,          /* change one daemon setting */
+    CTL_CMD_SETTINGS,     /* dump every setting as SET lines */
+    CTL_CMD_RULES,
+    CTL_CMD_DEL_RULE,
+    CTL_CMD_DIAG, /* report which rung of every fallback ladder was taken */
+    CTL_CMD_FWCONF, /* dump the firewall ruleset the kernel is running */
+    CTL_CMD_FLUSH,  /* drop one piece of accumulated state by name */
+    CTL_CMD_HWID_RESET, /* issue a new device id for the subscription panels */
+    CTL_CMD_NATIVE_CONFIG /* render a provider configuration for iOS 12+ */
 } ctl_cmd_kind_t;
 
 typedef struct {
@@ -42,6 +53,10 @@ typedef struct {
 /* keep the url and name separate */
     char           text[2048];
     char           name[64];
+    char           value[512];
+/* CHECK only: report the stage timings as well as the total. old clients do
+   not ask, and get exactly the reply they always got */
+    int            want_stages;
 } ctl_cmd_t;
 
 typedef enum {
@@ -68,11 +83,43 @@ ctl_status_t ctl_build_add_sub(const char *url, const char *name,
                                char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_refresh(int sub_index, char *buf, size_t cap, size_t *n);
 
-/* uptime is appended only when it is greater than zero */
+/* the settings dump answers in the same words the SET verb accepts, so a client
+   can hand a line straight back instead of owning a second encoding */
+ctl_status_t ctl_build_set(const char *key, const char *value,
+                           char *buf, size_t cap, size_t *n);
+ctl_status_t ctl_build_settings(char *buf, size_t cap, size_t *n);
+ctl_status_t ctl_build_setend(char *buf, size_t cap, size_t *n);
+
+/* one diagnostic fact. the value may carry spaces, so a reader splits on the
+   first one only; unknown keys are meant to be shown verbatim, which is what
+   lets an older app display a newer daemon's answer */
+ctl_status_t ctl_build_diag(const char *key, const char *value,
+                            char *buf, size_t cap, size_t *n);
+ctl_status_t ctl_build_diagend(char *buf, size_t cap, size_t *n);
+
+/* one line of the firewall ruleset. the text is sent verbatim, so a reader
+   joins the lines back in order instead of parsing them */
+ctl_status_t ctl_build_fwline(const char *text, char *buf, size_t cap, size_t *n);
+ctl_status_t ctl_build_fwend(char *buf, size_t cap, size_t *n);
+
+/* one stage of a check and how long it took. a check that fails says which
+   stage it reached, which "check failed" never did */
+ctl_status_t ctl_build_stage(const char *name, int ms, int ok,
+                             char *buf, size_t cap, size_t *n);
+ctl_status_t ctl_build_rule(size_t index, const char *action, const char *type,
+                            uint64_t hits, const char *value,
+                            char *buf, size_t cap, size_t *n);
+ctl_status_t ctl_build_ruleend(size_t count, char *buf, size_t cap, size_t *n);
+
+/* connected carries an explicit zero so a new session is distinguishable from
+   an older daemon that never reported session age */
 ctl_status_t ctl_build_state(ctl_state_t st, long uptime,
                              char *buf, size_t cap, size_t *n);
+ctl_status_t ctl_parse_state(const char *line, size_t len,
+                             ctl_state_t *state, long *uptime);
 ctl_status_t ctl_build_pong(int server_index, int ms, char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_stat(uint64_t up, uint64_t down, char *buf, size_t cap, size_t *n);
+ctl_status_t ctl_parse_stat(const char *line, size_t len, uint64_t *up, uint64_t *down);
 ctl_status_t ctl_build_ok(const char *msg, char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_err(const char *msg, char *buf, size_t cap, size_t *n);
 

@@ -55,6 +55,19 @@ static const char kClash[] =
 "    port: 8388\n"
 "    cipher: aes-128-gcm\n"
 "    password: secret\n"
+"  - name: unrunnable node\n"
+"    type: vmess\n"
+"    server: 198.51.100.5\n"
+"    port: 8389\n"
+"  - name: hy2 node\n"
+"    type: hysteria2\n"
+"    server: hy.example.com\n"
+"    port: 44300\n"
+"    password: hy2pw\n"
+"    obfs: salamander\n"
+"    obfs-password: obfspw\n"
+"    sni: hy2.sni.example\n"
+"    ports: 44300,45000-46000\n"
 "  - {name: flow style, type: socks5, server: 192.0.2.7, port: 1080, username: u, password: p}\n"
 "proxy-groups:\n"
 "  - name: sel\n"
@@ -67,7 +80,10 @@ static const char kSurge[] =
 "[Proxy]\n"
 "\xF0\x9F\x87\xBA\xF0\x9F\x87\xB8 US = vless, us.example.org, 443, password=99999999-8888-7777-6666-555555555555, obfs=websocket, obfs-host=edge.example.org, obfs-uri=/vl, tls=1, peer=edge.example.org\n"
 "local socks = socks5, 192.0.2.1, 1080, alice, s3cret\n"
-"broken = trojan, t.example.org, 443, password=x\n"
+"runnable trojan = trojan, t.example.org, 443, password=x\n"
+"hy2 = hysteria2, hy.example.org, 44300, password=hy2pw, obfs=salamander, "
+"obfs-password=obfspw, sni=hy2.sni.example, ports=45000-46000\n"
+"broken = vmess, v.example.org, 443, username=x\n"
 "[Rule]\n"
 "FINAL,PROXY\n";
 
@@ -82,7 +98,7 @@ int main(void) {
 
     memset(servers, 0, sizeof servers);
     n = profiles_parse_clash(kClash, sizeof kClash - 1, servers, 16);
-    ok("clash keeps only runnable nodes", n == 3);
+    ok("clash keeps only runnable nodes", n == 5);
     if (n >= 1) {
         ok("clash reality host", strcmp(servers[0].host, "nl.example.com") == 0);
         ok("clash reality port", servers[0].port == 443);
@@ -102,11 +118,27 @@ int main(void) {
         ok("clash ws tls", servers[1].security == VL_SEC_TLS);
     }
     if (n >= 3) {
-        ok("clash flow style socks", servers[2].proto == VL_PROTO_SOCKS5);
-        ok("clash flow style host", strcmp(servers[2].host, "192.0.2.7") == 0);
-        ok("clash flow style port", servers[2].port == 1080);
-        ok("clash flow style user", strcmp(servers[2].user, "u") == 0);
-        ok("clash flow style pass", strcmp(servers[2].pass, "p") == 0);
+        ok("clash ss proto", servers[2].proto == VL_PROTO_SHADOWSOCKS);
+        ok("clash ss cipher", strcmp(servers[2].encryption, "aes-128-gcm") == 0);
+        ok("clash ss pass", strcmp(servers[2].pass, "secret") == 0);
+    }
+    if (n >= 4) {
+        ok("clash hy2 proto", servers[3].proto == VL_PROTO_HYSTERIA2);
+        ok("clash hy2 host", strcmp(servers[3].host, "hy.example.com") == 0);
+        ok("clash hy2 port", servers[3].port == 44300);
+        ok("clash hy2 pass", strcmp(servers[3].pass, "hy2pw") == 0);
+        ok("clash hy2 sni", strcmp(servers[3].sni, "hy2.sni.example") == 0);
+        ok("clash hy2 obfs", strcmp(servers[3].obfs, "salamander") == 0);
+        ok("clash hy2 obfs password", strcmp(servers[3].obfs_password, "obfspw") == 0);
+        ok("clash hy2 port hop",
+           strcmp(servers[3].port_hop, "44300,45000-46000") == 0);
+    }
+    if (n >= 5) {
+        ok("clash flow style socks", servers[4].proto == VL_PROTO_SOCKS5);
+        ok("clash flow style host", strcmp(servers[4].host, "192.0.2.7") == 0);
+        ok("clash flow style port", servers[4].port == 1080);
+        ok("clash flow style user", strcmp(servers[4].user, "u") == 0);
+        ok("clash flow style pass", strcmp(servers[4].pass, "p") == 0);
     }
 
     ok("surge detected", profiles_looks_like_surge(kSurge, sizeof kSurge - 1));
@@ -114,7 +146,7 @@ int main(void) {
        cfg_content_kind(kSurge, sizeof kSurge - 1) == CFG_CONTENT_SURGE);
     memset(servers, 0, sizeof servers);
     n = profiles_parse_surge(kSurge, sizeof kSurge - 1, servers, 16);
-    ok("surge keeps only runnable nodes", n == 2);
+    ok("surge keeps only runnable nodes", n == 4);
     if (n >= 1) {
         ok("surge vless host", strcmp(servers[0].host, "us.example.org") == 0);
         ok("surge vless uuid",
@@ -130,18 +162,32 @@ int main(void) {
         ok("surge socks user", strcmp(servers[1].user, "alice") == 0);
         ok("surge socks pass", strcmp(servers[1].pass, "s3cret") == 0);
     }
+    if (n >= 3) {
+        ok("surge trojan proto", servers[2].proto == VL_PROTO_TROJAN);
+        ok("surge trojan pass", strcmp(servers[2].pass, "x") == 0);
+    }
+    if (n >= 4) {
+        ok("surge hy2 proto", servers[3].proto == VL_PROTO_HYSTERIA2);
+        ok("surge hy2 host", strcmp(servers[3].host, "hy.example.org") == 0);
+        ok("surge hy2 port", servers[3].port == 44300);
+        ok("surge hy2 pass", strcmp(servers[3].pass, "hy2pw") == 0);
+        ok("surge hy2 sni", strcmp(servers[3].sni, "hy2.sni.example") == 0);
+        ok("surge hy2 obfs", strcmp(servers[3].obfs, "salamander") == 0);
+        ok("surge hy2 obfs password", strcmp(servers[3].obfs_password, "obfspw") == 0);
+        ok("surge hy2 port hop", strcmp(servers[3].port_hop, "45000-46000") == 0);
+    }
 
     /* the subscription entry point has to route both profile formats */
     memset(servers, 0, sizeof servers);
     n = 0;
     ok("clash through subscription parser",
        cfg_parse_subscription(kClash, sizeof kClash - 1, servers, 16, &n) == CFG_OK &&
-       n == 3);
+       n == 5);
     memset(servers, 0, sizeof servers);
     n = 0;
     ok("surge through subscription parser",
        cfg_parse_subscription(kSurge, sizeof kSurge - 1, servers, 16, &n) == CFG_OK &&
-       n == 2);
+       n == 4);
 
     /* classification the ui turns into "unknown content type" */
     {

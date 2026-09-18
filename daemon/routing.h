@@ -3,6 +3,8 @@
 
 #include <stddef.h>
 
+#include "core/rules.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -44,6 +46,10 @@ typedef enum {
 } routing_pf_mode_t;
 
 #define ROUTING_PF_MODE_COUNT 8
+
+/* the syntax variant by name, for the log line and the diagnostics screen: a
+   bare mode number tells a tester nothing they can repeat */
+const char *routing_pf_mode_name(routing_pf_mode_t mode);
 #define ROUTING_MAX_IFS       8
 
 routing_status_t routing_pf_conf(const char *server_ips,
@@ -52,12 +58,26 @@ routing_status_t routing_pf_conf(const char *server_ips,
                                  routing_pf_mode_t mode,
                                  char *buf, size_t cap, size_t *out_len);
 
+routing_status_t routing_pf_conf_rules(const char *server_ips,
+                                       const ruleset_t *rules,
+                                       const char ifnames[][32], size_t if_count,
+                                       int redir_port, int dns_local_port,
+                                       routing_pf_mode_t mode,
+                                       char *buf, size_t cap, size_t *out_len);
+
 /* anchors accept filtering and translation rules, but reject global set options */
 routing_status_t routing_pf_anchor_conf(const char *server_ips,
                                         const char ifnames[][32], size_t if_count,
                                         int redir_port, int dns_local_port,
                                         routing_pf_mode_t mode,
                                         char *buf, size_t cap, size_t *out_len);
+
+routing_status_t routing_pf_anchor_conf_rules(const char *server_ips,
+                                              const ruleset_t *rules,
+                                              const char ifnames[][32], size_t if_count,
+                                              int redir_port, int dns_local_port,
+                                              routing_pf_mode_t mode,
+                                              char *buf, size_t cap, size_t *out_len);
 
 #ifdef __cplusplus
 }

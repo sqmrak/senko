@@ -47,6 +47,7 @@ typedef struct {
     char       open_ws_host[256];
     char       open_xhttp_mode[16];
     char       open_peer_host[256];
+    int        open_insecure;
     transport_tls_cfg_t open_tls_cfg;
     void      *open_th;
 
@@ -95,10 +96,13 @@ typedef struct loop {
     char     ws_host[256];
     char     xhttp_mode[16];
     char     peer_host[256]; /* dial target, authority fallback for http/2 */
+    int      insecure; /* skip tls certificate/hostname verification */
     transport_tls_cfg_t tls_cfg;
 
 /* keep the listener bound while rejecting clients without a server */
     int      active;
+    uint64_t bytes_up;
+    uint64_t bytes_down;
 
     loop_conn_t conns[LOOP_MAX_CONNS];
     size_t      nconns;
@@ -130,7 +134,7 @@ uint16_t loop_listen_port(const loop_t *lp);
 void loop_set_tls(loop_t *lp, const char *sni, const char *fingerprint,
                   const char *reality_pbk, const char *reality_sid,
                   const char *path, const char *ws_host,
-                  const char *xhttp_mode, const char *peer_host);
+                  const char *xhttp_mode, const char *peer_host, int insecure);
 
 /* replace the active path and drop connections tied to the old server */
 loop_status_t loop_set_server(loop_t *lp, const transport_vt_t *vt,
@@ -141,7 +145,8 @@ loop_status_t loop_set_server(loop_t *lp, const transport_vt_t *vt,
                               const char *sni, const char *fingerprint,
                               const char *reality_pbk, const char *reality_sid,
                               const char *path, const char *ws_host,
-                              const char *xhttp_mode, const char *peer_host);
+                              const char *xhttp_mode, const char *peer_host,
+                              int insecure);
 
 /* stop traffic while keeping the listener ready for the next selection */
 void loop_stop(loop_t *lp);

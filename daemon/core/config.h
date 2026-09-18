@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "rules.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,7 +30,12 @@ typedef enum {
     VL_PROTO_VLESS = 0,
     VL_PROTO_SOCKS5,
     VL_PROTO_HTTP,
-    VL_PROTO_HTTPS
+    VL_PROTO_HTTPS,
+    VL_PROTO_TROJAN,
+    VL_PROTO_SHADOWSOCKS,
+/* quic only: no senko transport carries it, the go core's own hysteria client
+   does. see transport_for_server and daemon_ctl_apply's CTL_ACT_START */
+    VL_PROTO_HYSTERIA2
 } vl_proto_t;
 
 /* fixed storage avoids heap ownership ambiguity on old ios */
@@ -48,13 +54,30 @@ typedef struct {
     char     sni[256];
     char     ws_host[256];
     char     flow[32];
-    char     encryption[16];
+    char     encryption[32];
     char     fp[32];
     char     pbk[128];
     char     sid[32];
     char     path[256];
     char     mode[16]; /* preserve xhttp mode for transport selection */
     char     remark[256];
+/* skip certificate and hostname verification for this server's tls
+   connection. plenty of trojan/vless nodes run behind a bare ip or a
+   self-signed cert and rely on the client honoring this instead of
+   presenting a real chain */
+    int      insecure;
+/* hysteria2 fields. the go core removed allowInsecure entirely, so a
+   self-signed node has to be pinned by hash instead of waved through */
+    char     pin_sha256[128];
+/* hysteria2 obfuscation: only "salamander" reaches the go core's finalmask
+   udp mask (transport/internet/finalmask/salamander), so any other value
+   fails validation instead of connecting unobfuscated */
+    char     obfs[32];
+    char     obfs_password[128];
+/* hysteria2 "multi-port" hop list, kept verbatim ("123,5000-6000"): the go
+   core dials one port from it at random and rotates through the rest
+   (transport/internet/hysteria/udphop). empty when the link names one port */
+    char     port_hop[128];
 } vl_server_t;
 
 typedef enum {
@@ -76,6 +99,16 @@ int url_percent_decode(const char *src, size_t src_len, char *dst, size_t cap);
 const char *vl_sec_name(vl_sec_t s);
 
 cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out);
+
+/* hysteria2's "multi-port" hop list ("123,5000-6000"): validates the charset
+   and every port/range, copies the field verbatim into dst (may be NULL to
+   only validate), and reports the first port for callers that still need one
+   fixed port number */
+int cfg_parse_port_hop(const char *text, size_t len, char *dst, size_t dst_cap,
+                       uint16_t *first_port_out);
+
+/* config files store one rule after the SET rule prefix */
+rules_status_t cfg_parse_rule(const char *text, size_t len, rule_t *out);
 
 /* validate after parsing so unsupported combinations fail explicitly */
 int cfg_validate_server(const vl_server_t *s, char *reason, size_t reason_cap);

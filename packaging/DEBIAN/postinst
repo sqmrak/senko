@@ -20,17 +20,20 @@ fi
 SUBSTRATE_FILTER=${PAYLOAD_ROOT}/usr/lib/senkotlsfix/substrate-filter.plist
 TLSFIX_DYLIB=${PAYLOAD_ROOT}/usr/lib/senkotlsfix.dylib
 TLSFIX_DIR=${PAYLOAD_ROOT}/usr/lib/senkotlsfix
-VPNICON_DYLIB=${PAYLOAD_ROOT}/usr/lib/senkovpnicon.dylib
-VPNICON_PLIST=${PAYLOAD_ROOT}/usr/lib/senkovpnicon.plist
+STATUS_DYLIB=${PAYLOAD_ROOT}/usr/lib/senkostatus.dylib
+STATUS_PLIST=${PAYLOAD_ROOT}/usr/lib/senkostatus.plist
 APP=${PAYLOAD_ROOT}/Applications/Senko.app
-[ -n "$JBROOT" ] || APP=/Applications/Senko.app
 KICK=${PAYLOAD_ROOT}/usr/bin/senko-kick
 KILLALL=${JBROOT}/usr/bin/killall
 [ -x "$KILLALL" ] || KILLALL=/usr/bin/killall
 [ -x "$KILLALL" ] || KILLALL=/bin/killall
 UICACHE=${JBROOT}/usr/bin/uicache
 [ -x "$UICACHE" ] || UICACHE=/usr/bin/uicache
-VPNICON_STATE=/var/mobile/Library/Preferences/com.senko.vpnicon.state
+LAUNCHCTL=${JBROOT}/bin/launchctl
+[ -x "$LAUNCHCTL" ] || LAUNCHCTL=${JBROOT}/usr/bin/launchctl
+[ -x "$LAUNCHCTL" ] || LAUNCHCTL=/bin/launchctl
+[ -x "$LAUNCHCTL" ] || LAUNCHCTL=/usr/bin/launchctl
+STATUS_STATE=/var/mobile/Library/Preferences/com.senko.status.state
 UPDATE_AWG_MARKER=/var/run/senkoawgd.upgrade
 CFG=/var/root/Library/Preferences/senko.cfg
 LEGACY_CFG=/var/mobile/Library/Preferences/senko.cfg
@@ -49,10 +52,10 @@ install_rootful_link() {
   ln -sf "$source_path" "$target_path" 2>/dev/null || true
 }
 
-# springboard on ios 13 and later refuses to launch a bundle whose path leaves
-# /Applications, and a symlinked bundle resolved to /var/jb: the app opened on a
-# black screen and was killed. the rootful layout gets a real directory
+# rootful springboard requires the bundle on the system Applications volume.
+# rootless jailbreaks register /var/jb/Applications with their own uicache
 install_rootful_app_bundle() {
+  [ -z "$JBROOT" ] || return 0
   source_path="${PAYLOAD_ROOT}/Applications/Senko.app"
   target_path=/Applications/Senko.app
   [ -d "$source_path" ] || return 0
@@ -68,6 +71,24 @@ install_rootful_app_bundle() {
   return 0
 }
 
+install_rootful_daemon_plist() {
+  source_path="${PAYLOAD_ROOT}/Library/LaunchDaemons/com.senko.senkod.plist"
+  target_path=/Library/LaunchDaemons/com.senko.senkod.plist
+  [ -f "$source_path" ] || return 0
+  mkdir -p "${target_path%/*}" 2>/dev/null || return 1
+  temp_path="${target_path}.dpkg-new"
+  rm -f "$temp_path" 2>/dev/null || true
+  sed 's#<string>/var/jb/usr/bin/senkod</string>#<string>/usr/bin/senkod</string>#' \
+    "$source_path" > "$temp_path" || return 1
+  if [ -e "$target_path" ] || [ -L "$target_path" ]; then
+    rm -f "$target_path" 2>/dev/null || return 1
+  fi
+  mv "$temp_path" "$target_path" || return 1
+  chown root:wheel "$target_path" 2>/dev/null || true
+  chmod 644 "$target_path" 2>/dev/null || true
+  return 0
+}
+
 install_rootful_layout() {
   [ -z "$JBROOT" ] || return 0
   for name in senkod senkoctl senko-kick senkoawgd; do
@@ -75,11 +96,9 @@ install_rootful_layout() {
   done
   install_rootful_link "${PAYLOAD_ROOT}/usr/lib/senkotlsfix.dylib" "/usr/lib/senkotlsfix.dylib" || true
   install_rootful_link "${PAYLOAD_ROOT}/usr/lib/senkotlsfix" "/usr/lib/senkotlsfix" || true
-  install_rootful_link "${PAYLOAD_ROOT}/usr/lib/senkovpnicon.dylib" "/usr/lib/senkovpnicon.dylib" || true
-  install_rootful_link "${PAYLOAD_ROOT}/usr/lib/senkovpnicon.plist" "/usr/lib/senkovpnicon.plist" || true
-  install_rootful_app_bundle || true
-  install_rootful_link "${PAYLOAD_ROOT}/Library/LaunchDaemons/com.senko.senkod.plist" \
-    "/Library/LaunchDaemons/com.senko.senkod.plist" || true
+  install_rootful_link "${PAYLOAD_ROOT}/usr/lib/senkostatus.dylib" "/usr/lib/senkostatus.dylib" || true
+  install_rootful_link "${PAYLOAD_ROOT}/usr/lib/senkostatus.plist" "/usr/lib/senkostatus.plist" || true
+  install_rootful_daemon_plist || true
   if [ ! -e /usr/bin/head ] && [ -e "${PAYLOAD_ROOT}/usr/lib/senko/head" ]; then
     install_rootful_link "${PAYLOAD_ROOT}/usr/lib/senko/head" "/usr/bin/head" || true
   fi
@@ -88,8 +107,31 @@ install_rootful_layout() {
   fi
 }
 
+# rootful systems need a real system-volume bundle. Dopamine keeps its writable
+# app bundles in /var/jb/Applications, because /Applications is sealed
+install_rootful_app_bundle || true
+[ -z "$JBROOT" ] && APP=/Applications/Senko.app
+
 # rootful systems need canonical links because armv7 code uses /usr paths
 install_rootful_layout || true
+
+launchd_stop() {
+  [ -x "$LAUNCHCTL" ] || return 0
+  "$LAUNCHCTL" bootout "system/com.senko.senkod" >/dev/null 2>&1 || \
+    "$LAUNCHCTL" bootout system "$PLIST" >/dev/null 2>&1 || \
+    "$LAUNCHCTL" unload "$PLIST" >/dev/null 2>&1 || true
+  "$LAUNCHCTL" remove com.senko.senkod >/dev/null 2>&1 || true
+}
+
+launchd_start() {
+  [ -x "$LAUNCHCTL" ] || return 1
+  "$LAUNCHCTL" bootstrap system "$PLIST" >/dev/null 2>&1 || \
+    "$LAUNCHCTL" load -w "$PLIST" >/dev/null 2>&1 || \
+    "$LAUNCHCTL" load "$PLIST" >/dev/null 2>&1 || return 1
+  "$LAUNCHCTL" enable system/com.senko.senkod >/dev/null 2>&1 || true
+  "$LAUNCHCTL" kickstart -k system/com.senko.senkod >/dev/null 2>&1 || \
+    "$LAUNCHCTL" start com.senko.senkod >/dev/null 2>&1 || true
+}
 
 tlsfix_installed() {
   dpkg -s com.tlsfix >/dev/null 2>&1 && return 0
@@ -147,9 +189,22 @@ disable_senkotlsfix_hooks() {
   remove_senkod_injection
 }
 
-disable_senkovpnicon_hooks() {
-  rm -f "${SUBSTRATE_DIR}/senkovpnicon.dylib"
-  rm -f "${SUBSTRATE_DIR}/senkovpnicon.plist"
+disable_senkostatus_hooks() {
+  rm -f "${SUBSTRATE_DIR}/senkostatus.dylib"
+  rm -f "${SUBSTRATE_DIR}/senkostatus.plist"
+}
+
+remove_rootful_legacy_links() {
+  [ -L /usr/lib/senkotlsfix.dylib ] && rm -f /usr/lib/senkotlsfix.dylib || true
+  [ -L /usr/lib/senkotlsfix ] && rm -f /usr/lib/senkotlsfix || true
+  [ -L /usr/lib/senkostatus.dylib ] && rm -f /usr/lib/senkostatus.dylib || true
+  [ -L /usr/lib/senkostatus.plist ] && rm -f /usr/lib/senkostatus.plist || true
+}
+
+remove_modern_legacy_payload() {
+  # ios 12 and later use system tls and native status handling
+  rm -f "$TLSFIX_DYLIB" "$STATUS_DYLIB" "$STATUS_PLIST"
+  rm -rf "$TLSFIX_DIR"
 }
 
 remove_senkod_injection() {
@@ -180,14 +235,14 @@ enable_senkotlsfix_hooks() {
   remove_senkod_injection
 }
 
-enable_senkovpnicon_hooks() {
-  [ -f "${VPNICON_DYLIB}" ] || return 0
-  [ -f "${VPNICON_PLIST}" ] || return 0
+enable_senkostatus_hooks() {
+  [ -f "${STATUS_DYLIB}" ] || return 0
+  [ -f "${STATUS_PLIST}" ] || return 0
   mkdir -p "${SUBSTRATE_DIR}" || return 0
-  ln -sf "${VPNICON_DYLIB}" "${SUBSTRATE_DIR}/senkovpnicon.dylib" || return 0
-  cp "${VPNICON_PLIST}" "${SUBSTRATE_DIR}/senkovpnicon.plist" || return 0
-  chown root:wheel "${SUBSTRATE_DIR}/senkovpnicon.plist" || true
-  chmod 644 "${SUBSTRATE_DIR}/senkovpnicon.plist" || true
+  ln -sf "${STATUS_DYLIB}" "${SUBSTRATE_DIR}/senkostatus.dylib" || return 0
+  cp "${STATUS_PLIST}" "${SUBSTRATE_DIR}/senkostatus.plist" || return 0
+  chown root:wheel "${SUBSTRATE_DIR}/senkostatus.plist" || true
+  chmod 644 "${SUBSTRATE_DIR}/senkostatus.plist" || true
 }
 
 chown root:wheel "$PLIST" || true
@@ -197,48 +252,52 @@ for bin in "${PAYLOAD_ROOT}/usr/bin/senkod" "${PAYLOAD_ROOT}/usr/bin/senkoctl"; 
   [ -e "$bin" ] && chown root:wheel "$bin" && chmod 755 "$bin" || true
 done
 [ -e "${PAYLOAD_ROOT}/usr/bin/senkoawgd" ] && chown root:wheel "${PAYLOAD_ROOT}/usr/bin/senkoawgd" && chmod 755 "${PAYLOAD_ROOT}/usr/bin/senkoawgd" || true
-# setuid is required because the sandboxed app cannot signal the root daemon
+# setuid is required because the sandboxed app cannot signal the root daemon.
+# this bit silently failing to take is the one failure mode that leaves dpkg
+# reporting success while the app is left unable to ever reach root, so the
+# chmod result and the bit it was supposed to set are both checked rather
+# than swallowed
 if [ -e "$KICK" ]; then
   chown root:wheel "$KICK" || true
-  chmod 4755 "$KICK" || true
+  if chmod 4755 "$KICK"; then
+    if [ ! -u "$KICK" ]; then
+      echo "senko-kick: chmod 4755 reported success but $KICK has no setuid bit (filesystem likely mounted nosuid)" \
+        >> /var/log/senko-kick.log 2>/dev/null || true
+    fi
+  else
+    echo "senko-kick: chmod 4755 failed on $KICK during install" \
+      >> /var/log/senko-kick.log 2>/dev/null || true
+  fi
 fi
 # the obsolete helper would compete for the local proxy port
 rm -f "${JBROOT}/usr/bin/redsocks-senko" "${PAYLOAD_ROOT}/usr/bin/redsocks-senko" /var/run/senko-redsocks.conf >/dev/null 2>&1 || true
 [ -e "$TLSFIX_DYLIB" ] && chown root:wheel "$TLSFIX_DYLIB" && chmod 755 "$TLSFIX_DYLIB" || true
-[ -e "$VPNICON_DYLIB" ] && chown root:wheel "$VPNICON_DYLIB" && chmod 755 "$VPNICON_DYLIB" || true
-[ -e "$VPNICON_PLIST" ] && chown root:wheel "$VPNICON_PLIST" && chmod 644 "$VPNICON_PLIST" || true
+[ -e "$STATUS_DYLIB" ] && chown root:wheel "$STATUS_DYLIB" && chmod 755 "$STATUS_DYLIB" || true
+[ -e "$STATUS_PLIST" ] && chown root:wheel "$STATUS_PLIST" && chmod 644 "$STATUS_PLIST" || true
 mkdir -p "${TLSFIX_DIR}/roots" || true
 
 IOS_MAJOR="$(firmware_major)"
 if [ "$IOS_MAJOR" -ge 12 ] 2>/dev/null; then
-  # injecting the legacy shim on ios 12 adds crash surface without fixing TLS
+  # modern ios has system tls and native status handling, so these hooks only add crash surface
   disable_senkotlsfix_hooks
-elif [ "$IOS_MAJOR" = "5" ]; then
-  if substrate_installed; then
-    # ios 5 needs this dylib for application routing while its TLS hooks stay gated
-    enable_senkotlsfix_hooks
-  else
-    disable_senkotlsfix_hooks
-  fi
-  disable_senkovpnicon_hooks
+  disable_senkostatus_hooks
+  remove_rootful_legacy_links
+  remove_modern_legacy_payload
 elif tlsfix_installed; then
   disable_senkotlsfix_hooks
+  enable_senkostatus_hooks
 elif substrate_installed; then
   enable_senkotlsfix_hooks
+  enable_senkostatus_hooks
 else
   disable_senkotlsfix_hooks
-fi
-
-if [ "$IOS_MAJOR" != "5" ] && substrate_installed; then
-  enable_senkovpnicon_hooks
-else
-  disable_senkovpnicon_hooks
+  disable_senkostatus_hooks
 fi
 
 mkdir -p /var/mobile/Library/Preferences || true
-printf '0\n' > "$VPNICON_STATE" 2>/dev/null || true
-chown mobile:mobile "$VPNICON_STATE" >/dev/null 2>&1 || true
-chmod 644 "$VPNICON_STATE" >/dev/null 2>&1 || true
+printf '0\n' > "$STATUS_STATE" 2>/dev/null || true
+chown mobile:mobile "$STATUS_STATE" >/dev/null 2>&1 || true
+chmod 644 "$STATUS_STATE" >/dev/null 2>&1 || true
 [ -e /var/mobile/Library/Preferences/com.senko.senkotlsfix.plist ] && \
   chown mobile:mobile /var/mobile/Library/Preferences/com.senko.senkotlsfix.plist && \
   chmod 644 /var/mobile/Library/Preferences/com.senko.senkotlsfix.plist || true
@@ -289,8 +348,7 @@ chmod 600 "$CFG" >/dev/null 2>&1 || true
 # the update helper owns kick.lock, so a second restart would race its recovery
 if [ "${SENKO_UPDATE:-0}" != "1" ]; then
   # SIGTERM lets senkod remove routes before launchd starts the replacement
-  launchctl unload "$PLIST" >/dev/null 2>&1 || true
-  launchctl remove com.senko.senkod >/dev/null 2>&1 || true
+  launchd_stop
   "$KILLALL" -TERM senkod >/dev/null 2>&1 || true
   sleep 1
   "$KILLALL" -TERM senkod >/dev/null 2>&1 || true
@@ -298,9 +356,7 @@ if [ "${SENKO_UPDATE:-0}" != "1" ]; then
   "$KILLALL" -9 senkod >/dev/null 2>&1 || true
   rm -f /var/tmp/senkod.sock /var/tmp/senkod.token
 
-  # -w keeps the daemon enabled after reboot on jailbreaks that persist overrides
-  launchctl load -w "$PLIST" >/dev/null 2>&1 || launchctl load "$PLIST" >/dev/null 2>&1 || true
-  launchctl start com.senko.senkod >/dev/null 2>&1 || true
+  launchd_start || true
 
   if [ -s "$UPDATE_AWG_MARKER" ] && [ -x "$KICK" ]; then
     upgrade_config="$(sed -n '1p' "$UPDATE_AWG_MARKER" 2>/dev/null || true)"
@@ -318,7 +374,7 @@ fi
 echo "Senko installed successfully. control socket: /var/tmp/senkod.sock"
 
 # backgrounding avoids an ios 6 uicache deadlock while the old app is alive
-( "$UICACHE" -p "$APP" >/dev/null 2>&1 || "$UICACHE" -p /Applications/Senko.app >/dev/null 2>&1 || "$UICACHE" >/dev/null 2>&1 || true ) </dev/null &
+( "$UICACHE" -p "$APP" >/dev/null 2>&1 || "$UICACHE" >/dev/null 2>&1 || true ) </dev/null &
 
 if [ "${SENKO_SKIP_RESPRING:-0}" = "1" ]; then
   exit 0

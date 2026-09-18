@@ -1,6 +1,7 @@
 #import "control_client.h"
 #include "../common/senko_paths.h"
 #include "../daemon/core/b64.h"
+#include "../daemon/core/control.h"
 
 #import <sys/socket.h>
 #import <sys/un.h>
@@ -22,6 +23,8 @@ extern char **environ;
     [net release];
     [host release];
     [remark release];
+    [link release];
+    [dupIndexes release];
     [super dealloc];
 }
 @end
@@ -37,7 +40,45 @@ extern char **environ;
 }
 @end
 
+@implementation SenkoRule
+- (void)dealloc {
+    [action release];
+    [type release];
+    [value release];
+    [super dealloc];
+}
+@end
+
+@implementation SenkoDiagFact
+- (void)dealloc {
+    [key release];
+    [value release];
+    [super dealloc];
+}
+@end
+
+@implementation SenkoCheckStage
+- (void)dealloc {
+    [name release];
+    [super dealloc];
+}
+@end
+
 @implementation SenkoControl
+
+NSString *SenkoControlStateFromReply(NSString *reply, long *uptime) {
+    if (uptime) *uptime = 0;
+    for (NSString *line in [reply componentsSeparatedByString:@"\n"]) {
+        NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+        ctl_state_t state;
+        long age;
+        if (ctl_parse_state([data bytes], [data length], &state, &age) != CTL_OK)
+            continue;
+        if (uptime) *uptime = age;
+        return [NSString stringWithUTF8String:ctl_state_name(state)];
+    }
+    return nil;
+}
 
 - (id)initWithSocketPath:(NSString *)path {
     if ((self = [super init])) {
@@ -67,6 +108,10 @@ static int reply_complete(const char *buf, size_t len) {
         if (llen > 0) {
             const char *ln = buf + start;
             int stream =
+                (llen >= 5 && memcmp(ln, "STAT ", 5) == 0) ||
+                (llen >= 4 && memcmp(ln, "SET ", 4) == 0) ||
+                (llen >= 5 && memcmp(ln, "RULE ", 5) == 0) ||
+                (llen >= 5 && memcmp(ln, "DIAG ", 5) == 0) ||
                 (llen >= 4 && memcmp(ln, "SRV ", 4) == 0) ||
                 (llen >= 4 && memcmp(ln, "SUB ", 4) == 0) ||
                 (llen >= 8 && memcmp(ln, "SUBMETA ", 8) == 0) ||
@@ -99,6 +144,36 @@ static int list_reply_complete(const char *buf, size_t len) {
     return 0;
 }
 
+/* RULES streams one record per rule and closes with RULEEND */
+static int rules_reply_complete(const char *buf, size_t len) {
+    size_t start = 0;
+    for (size_t i = 0; i < len; ++i) {
+        if (buf[i] != '\n') continue;
+        size_t llen = i - start;
+        const char *ln = buf + start;
+        if ((llen >= 8 && memcmp(ln, "RULEEND ", 8) == 0) ||
+            (llen >= 4 && memcmp(ln, "ERR ", 4) == 0))
+            return 1;
+        start = i + 1;
+    }
+    return 0;
+}
+
+/* DIAG streams one fact per line and closes with DIAGEND */
+static int diag_reply_complete(const char *buf, size_t len) {
+    size_t start = 0;
+    for (size_t i = 0; i < len; ++i) {
+        if (buf[i] != '\n') continue;
+        size_t llen = i - start;
+        const char *ln = buf + start;
+        if ((llen >= 7 && memcmp(ln, "DIAGEND", 7) == 0) ||
+            (llen >= 4 && memcmp(ln, "ERR ", 4) == 0))
+            return 1;
+        start = i + 1;
+    }
+    return 0;
+}
+
 /* FETCH, LOGS and every other blob reply ends with FDEND */
 static int blob_reply_complete(const char *buf, size_t len) {
     size_t start = 0;
@@ -107,6 +182,20 @@ static int blob_reply_complete(const char *buf, size_t len) {
         size_t llen = i - start;
         const char *ln = buf + start;
         if ((llen >= 6 && memcmp(ln, "FDEND ", 6) == 0) ||
+            (llen >= 4 && memcmp(ln, "ERR ", 4) == 0))
+            return 1;
+        start = i + 1;
+    }
+    return 0;
+}
+
+static int native_config_reply_complete(const char *buf, size_t len) {
+    size_t start = 0;
+    for (size_t i = 0; i < len; ++i) {
+        if (buf[i] != '\n') continue;
+        size_t llen = i - start;
+        const char *ln = buf + start;
+        if ((llen >= 8 && memcmp(ln, "NCFGEND ", 8) == 0) ||
             (llen >= 4 && memcmp(ln, "ERR ", 4) == 0))
             return 1;
         start = i + 1;
@@ -156,6 +245,23 @@ static NSString *senkoLoadCtlToken(NSString *sockPath) {
     if (![raw length]) return nil;
     return [raw stringByTrimmingCharactersInSet:
             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
+/* rootful jailbreaks expose the payload through /usr, while rootless
+   jailbreaks keep it under /var/jb. the same app binary can be copied between
+   those layouts, so resolve the setuid helper at launch instead of baking one
+   filesystem root into the arm64 slice */
+static const char *SenkoKickPath(void) {
+    static const char *paths[] = {
+        SENKO_USR_BIN "/senko-kick",
+        "/var/jb/usr/bin/senko-kick",
+        "/usr/bin/senko-kick",
+        "/bin/senko-kick",
+        NULL
+    };
+    for (NSUInteger i = 0; paths[i]; ++i)
+        if (access(paths[i], X_OK) == 0) return paths[i];
+    return paths[0];
 }
 
 static int write_all_fd(int fd, const void *buf, size_t len) {
@@ -231,10 +337,16 @@ static int senkoCtlAuth(int fd, NSString *sockPath) {
     int is_tunnel = ([cmd hasPrefix:@"CONNECT "] || [cmd isEqualToString:@"DISCONNECT"] ||
                      [cmd isEqualToString:@"DISCONNECT\n"]);
     int is_list = [cmd hasPrefix:@"LIST"];
+    int is_rules = [cmd hasPrefix:@"RULES"];
+    int is_diag = [cmd hasPrefix:@"DIAG"];
     int is_blob = [cmd hasPrefix:@"LOGS"] || [cmd hasPrefix:@"FETCH "];
     int (*done_fn)(const char *, size_t) = reply_complete;
     if (is_tunnel) done_fn = tunnel_reply_complete;
     else if (is_list) done_fn = list_reply_complete;
+    else if (is_rules) done_fn = rules_reply_complete;
+    else if (is_diag) done_fn = diag_reply_complete;
+    else if ([cmd hasPrefix:@"NATIVE_CONFIG "])
+        done_fn = native_config_reply_complete;
     else if (is_blob) done_fn = blob_reply_complete;
 
     NSMutableData *acc = [NSMutableData data];
@@ -309,6 +421,203 @@ static NSString *senkoDecodeBlobReply(NSString *reply) {
     return text;
 }
 
+/* the dump is the same SET lines the verb accepts, so the screen can hand one
+   straight back instead of owning a second encoding. SETEND closes it */
+- (void)daemonSettings:(void (^)(NSDictionary *))done {
+    [self sendCommand:@"SETTINGS" timeoutMs:3000 reply:^(NSString *reply) {
+        if (![reply length]) {
+            if (done) done(nil);
+            return;
+        }
+        NSMutableDictionary *values = [NSMutableDictionary dictionary];
+        BOOL sawEnd = NO;
+        for (NSString *ln in [reply componentsSeparatedByString:@"\n"]) {
+            if ([ln hasPrefix:@"SETEND"]) { sawEnd = YES; break; }
+            if (![ln hasPrefix:@"SET "]) continue;
+            NSString *pair = [ln substringFromIndex:4];
+            NSRange sp = [pair rangeOfString:@" "];
+            if (sp.location == NSNotFound) continue;
+            NSString *key = [pair substringToIndex:sp.location];
+            NSString *value = [[pair substringFromIndex:sp.location + 1]
+                stringByTrimmingCharactersInSet:
+                    [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if ([key length]) [values setObject:value forKey:key];
+        }
+        if (done) done(sawEnd ? values : nil);
+    }];
+}
+
+- (void)setSetting:(NSString *)key value:(NSString *)value
+             reply:(void (^)(NSString *))done {
+    if (![key length] || ![value length]) {
+        if (done) done(@"ERR bad setting");
+        return;
+    }
+    [self sendCommand:[NSString stringWithFormat:@"SET %@ %@", key, value]
+            timeoutMs:3000
+                reply:done];
+}
+
+/* RULE <index> <action> <type> <hits> <value>. the value is the last field and
+   never carries a space, because the daemon refuses a rule that has one */
+static SenkoRule *parseRULE(NSString *line) {
+    NSArray *t = [line componentsSeparatedByString:@" "];
+    if ([t count] < 6) return nil;
+    SenkoRule *r = [[[SenkoRule alloc] init] autorelease];
+    r->index = [[t objectAtIndex:1] intValue];
+    r->action = [[t objectAtIndex:2] copy];
+    r->type = [[t objectAtIndex:3] copy];
+    r->hits = (unsigned long long)[[t objectAtIndex:4] longLongValue];
+    r->value = [[t objectAtIndex:5] copy];
+    return r;
+}
+
+- (void)listRules:(void (^)(NSArray *))done {
+    [self sendCommand:@"RULES" timeoutMs:3000 reply:^(NSString *reply) {
+        if (![reply length]) {
+            if (done) done(nil);
+            return;
+        }
+        NSMutableArray *rules = [NSMutableArray array];
+        BOOL sawEnd = NO;
+        for (NSString *ln in [reply componentsSeparatedByString:@"\n"]) {
+            if ([ln hasPrefix:@"RULEEND "]) { sawEnd = YES; break; }
+            if (![ln hasPrefix:@"RULE "]) continue;
+            SenkoRule *r = parseRULE(ln);
+            if (r) [rules addObject:r];
+        }
+        if (done) done(sawEnd ? rules : nil);
+    }];
+}
+
+- (void)addRuleAction:(NSString *)action type:(NSString *)type
+                value:(NSString *)value reply:(void (^)(NSString *))done {
+    if (![action length] || ![type length] || ![value length]) {
+        if (done) done(@"ERR bad rule");
+        return;
+    }
+    [self sendCommand:[NSString stringWithFormat:@"SET rule %@ %@ %@",
+                                                 action, type, value]
+            timeoutMs:3000
+                reply:done];
+}
+
+- (void)deleteRuleIndex:(int)index reply:(void (^)(NSString *))done {
+    [self sendCommand:[NSString stringWithFormat:@"DELRULE %d", index]
+            timeoutMs:3000
+                reply:done];
+}
+
+- (void)daemonDiagnostics:(void (^)(NSArray *))done {
+    [self sendCommand:@"DIAG" timeoutMs:5000 reply:^(NSString *reply) {
+        if (![reply length]) {
+            if (done) done(nil);
+            return;
+        }
+        NSMutableArray *facts = [NSMutableArray array];
+        BOOL sawEnd = NO;
+        for (NSString *ln in [reply componentsSeparatedByString:@"\n"]) {
+            if ([ln hasPrefix:@"DIAGEND"]) { sawEnd = YES; break; }
+            if (![ln hasPrefix:@"DIAG "]) continue;
+            NSString *rest = [ln substringFromIndex:5];
+            NSRange sp = [rest rangeOfString:@" "];
+            if (sp.location == NSNotFound) continue;
+            SenkoDiagFact *fact = [[[SenkoDiagFact alloc] init] autorelease];
+            fact->key = [[rest substringToIndex:sp.location] copy];
+            fact->value = [[[rest substringFromIndex:sp.location + 1]
+                stringByTrimmingCharactersInSet:
+                    [NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
+            [facts addObject:fact];
+        }
+        if (done) done(sawEnd ? facts : nil);
+    }];
+}
+
+/* the stage lines arrive before the verdict, so one pass over the reply yields
+   both. an older daemon sends none and the caller still gets its result */
+- (void)checkIndex:(int)idx mode:(NSString *)mode
+            stages:(void (^)(NSArray *, int, NSString *))done {
+    NSArray *safeMode = [NSArray arrayWithObjects:@"tcp", @"proxy", @"tunnel", @"handshake", nil];
+    if (![safeMode containsObject:mode]) {
+        if (done) done(nil, -1, @"unknown check type");
+        return;
+    }
+    [self sendCommand:[NSString stringWithFormat:@"CHECK %@ %d stages", mode, idx]
+            timeoutMs:12000 reply:^(NSString *reply) {
+        NSMutableArray *stages = [NSMutableArray array];
+        int ms = -1;
+        NSString *error = nil;
+        for (NSString *raw in [reply componentsSeparatedByString:@"\n"]) {
+            NSString *ln = [raw stringByTrimmingCharactersInSet:
+                            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if ([ln hasPrefix:@"STAGE "]) {
+                NSString *rest = [ln substringFromIndex:6];
+                NSRange first = [rest rangeOfString:@" "];
+                if (first.location == NSNotFound) continue;
+                NSString *okText = [rest substringToIndex:first.location];
+                NSString *after = [rest substringFromIndex:first.location + 1];
+                NSRange second = [after rangeOfString:@" "];
+                if (second.location == NSNotFound) continue;
+                SenkoCheckStage *stage = [[[SenkoCheckStage alloc] init] autorelease];
+                stage->ok = [okText intValue] != 0;
+                stage->ms = [[after substringToIndex:second.location] intValue];
+                stage->name = [[after substringFromIndex:second.location + 1] copy];
+                [stages addObject:stage];
+                continue;
+            }
+            if ([ln hasPrefix:@"PONG "]) {
+                NSArray *parts = [ln componentsSeparatedByString:@" "];
+                if ([parts count] >= 3) ms = [[parts objectAtIndex:2] intValue];
+                continue;
+            }
+            if ([ln hasPrefix:@"ERR "]) error = [ln substringFromIndex:4];
+        }
+        if (ms < 0 && ![error length]) error = @"the daemon did not answer";
+        if (done) done(stages, ms, ms >= 0 ? nil : error);
+    }];
+}
+
+- (void)firewallConfig:(void (^)(NSString *, NSString *))done {
+    [self sendCommand:@"FWCONF" timeoutMs:6000 reply:^(NSString *reply) {
+        NSMutableString *text = [NSMutableString string];
+        BOOL sawEnd = NO;
+        NSString *error = nil;
+        for (NSString *raw in [reply componentsSeparatedByString:@"\n"]) {
+            NSString *ln = [raw stringByTrimmingCharactersInSet:
+                            [NSCharacterSet newlineCharacterSet]];
+            if ([ln hasPrefix:@"FWEND"]) { sawEnd = YES; break; }
+            if ([ln hasPrefix:@"FWLINE "]) {
+                [text appendString:[ln substringFromIndex:7]];
+                [text appendString:@"\n"];
+                continue;
+            }
+            if ([ln hasPrefix:@"ERR "]) error = [ln substringFromIndex:4];
+        }
+        if (done) done(sawEnd ? text : nil,
+                       sawEnd ? nil : (error ?: @"the daemon did not answer"));
+    }];
+}
+
+- (void)flushTarget:(NSString *)what reply:(void (^)(NSString *))done {
+    NSArray *known = [NSArray arrayWithObjects:@"dns", @"bypass", @"rules", @"config", nil];
+    if (![known containsObject:what]) { if (done) done(@"ERR unknown flush target"); return; }
+    [self sendCommand:[NSString stringWithFormat:@"FLUSH %@", what]
+            timeoutMs:6000 reply:done];
+}
+
+- (void)resetDeviceHWID:(void (^)(NSString *, NSString *))done {
+    [self sendCommand:@"HWIDRESET" timeoutMs:6000 reply:^(NSString *reply) {
+        if ([reply hasPrefix:@"OK "]) {
+            NSString *value = [[reply substringFromIndex:3] stringByTrimmingCharactersInSet:
+                               [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if ([value length]) { if (done) done(value, nil); return; }
+        }
+        NSString *error = [reply hasPrefix:@"ERR "] ? [reply substringFromIndex:4] : reply;
+        if (done) done(nil, [error length] ? error
+                                           : @"the daemon did not answer");
+    }];
+}
+
 - (void)daemonLogTail:(void (^)(NSString *))done {
     [self sendCommand:@"LOGS" timeoutMs:6000 reply:^(NSString *reply) {
         if (done) done(senkoDecodeBlobReply(reply));
@@ -352,16 +661,36 @@ static NSString *senkoDecodeBlobReply(NSString *reply) {
 
 - (void)sendCommand:(NSString *)cmd timeoutMs:(int)timeoutMs reply:(void (^)(NSString *))done {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
         NSString *reply = [self blockingSend:cmd timeoutMs:timeoutMs];
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (done) done(reply);
+            if ([cmd isEqualToString:@"STATUS"]) _trafficKnown = NO;
+            NSMutableString *clean = reply ? [NSMutableString string] : nil;
+            for (NSString *line in [reply componentsSeparatedByString:@"\n"]) {
+                if ([line hasPrefix:@"STAT "]) {
+                    uint64_t up, down;
+                    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+                    if (ctl_parse_stat([data bytes], [data length], &up, &down) == CTL_OK) {
+                        _trafficUp = up;
+                        _trafficDown = down;
+                        _trafficKnown = YES;
+                    } else {
+                        _trafficKnown = NO;
+                        NSLog(@"senko: invalid traffic counters");
+                    }
+                } else if ([line length]) {
+                    [clean appendFormat:@"%@\n", line];
+                }
+            }
+            if (done) done(clean);
         });
+        [pool drain];
     });
 }
 
 - (void)probeDaemon:(void (^)(BOOL))done {
     [self sendCommand:@"STATUS" timeoutMs:1500 reply:^(NSString *reply) {
-        BOOL up = (reply != nil && [reply hasPrefix:@"STATE "]);
+        BOOL up = SenkoControlStateFromReply(reply, NULL) != nil;
         if (done) done(up);
     }];
 }
@@ -370,8 +699,25 @@ static NSString *senkoDecodeBlobReply(NSString *reply) {
    without a daemon: when the daemon is what failed to start, that file is the
    only thing that knows why, and telling the user to go and open it is not an
    answer on a phone */
+/* senko-kick falls back to this path when it fails before becoming root: the
+   one case where /var/log/senko-kick.log cannot be written is exactly the one
+   the user most needs explained. picking by mtime rather than always
+   preferring one file keeps a stale setuid failure from masking whatever the
+   next run actually reported through the other path */
+static NSString *SenkoKickLogPath(void) {
+    NSString * const primary = @"/var/log/senko-kick.log";
+    NSString * const fallback = @(SENKO_CRASH_DIR "/kick.log");
+    NSDictionary *pAttrs = [[NSFileManager defaultManager] attributesOfItemAtPath:primary error:NULL];
+    NSDictionary *fAttrs = [[NSFileManager defaultManager] attributesOfItemAtPath:fallback error:NULL];
+    NSDate *pDate = [pAttrs objectForKey:NSFileModificationDate];
+    NSDate *fDate = [fAttrs objectForKey:NSFileModificationDate];
+    if (fDate && (!pDate || [fDate compare:pDate] == NSOrderedDescending))
+        return fallback;
+    return pDate ? primary : (fDate ? fallback : primary);
+}
+
 static NSString *SenkoKickLogTail(void) {
-    NSData *blob = [NSData dataWithContentsOfFile:@"/var/log/senko-kick.log"];
+    NSData *blob = [NSData dataWithContentsOfFile:SenkoKickLogPath()];
     if (![blob length]) return nil;
     NSUInteger want = [blob length] > 4096 ? 4096 : [blob length];
     NSData *slice = [blob subdataWithRange:NSMakeRange([blob length] - want, want)];
@@ -407,7 +753,11 @@ static NSString *SenkoKickFailureText(int status, pid_t reaped) {
     }
     int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
     switch (code) {
-        case 1: return @"senko-kick is not setuid root: reinstall the package";
+/* the tail now carries which of the two setuid failures this actually is
+   (bit missing vs. a nosuid mount); the flat text is only what is left to
+   say when neither log file could be read at all */
+        case 1: return [tail length] ? tail
+                     : @"senko-kick is not setuid root: reinstall the package";
         case 2: return @"senkod is missing: reinstall the package";
         case 3: return @"another daemon start is still running";
         case 5: return @"senkod did not open its control socket";
@@ -420,7 +770,7 @@ static NSString *SenkoKickFailureText(int status, pid_t reaped) {
 
 - (void)kickDaemon:(void (^)(BOOL, NSString *))done {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        const char *path = SENKO_USR_BIN "/senko-kick";
+        const char *path = SenkoKickPath();
         BOOL ok = NO;
         NSString *detail = nil;
         if (access(path, X_OK) != 0) {
@@ -470,7 +820,8 @@ static NSString *SenkoKickFailureText(int status, pid_t reaped) {
                 BOOL up2 = NO;
                 for (int i = 0; i < 24 && !up2; ++i) {
                     NSString *r = [self blockingSend:@"STATUS" timeoutMs:800];
-                    if (r && [r hasPrefix:@"STATE "]) up2 = YES;
+                    if (r && ([r hasPrefix:@"STATE "] ||
+                        [r rangeOfString:@"\nSTATE "].location != NSNotFound)) up2 = YES;
                     else usleep(250000);
                 }
                 dispatch_async(dispatch_get_main_queue(), ^{
@@ -489,18 +840,21 @@ static NSString *SenkoKickFailureText(int status, pid_t reaped) {
 
 static BOOL tokenIsProto(NSString *s) {
     return [s isEqualToString:@"vless"] || [s isEqualToString:@"socks5"] ||
-           [s isEqualToString:@"http"] || [s isEqualToString:@"https"];
+           [s isEqualToString:@"http"] || [s isEqualToString:@"https"] ||
+           [s isEqualToString:@"trojan"] || [s isEqualToString:@"shadowsocks"] ||
+           [s isEqualToString:@"ss"] || [s isEqualToString:@"hysteria2"];
 }
 
 static BOOL tokenIsNet(NSString *s) {
     return [s isEqualToString:@"tcp"] || [s isEqualToString:@"ws"] ||
            [s isEqualToString:@"grpc"] || [s isEqualToString:@"http"] ||
-           [s isEqualToString:@"xhttp"];
+           [s isEqualToString:@"xhttp"] || [s isEqualToString:@"quic"];
 }
 
 static BOOL tokenIsSecurity(NSString *s) {
     return [s isEqualToString:@"none"] || [s isEqualToString:@"tls"] ||
-           [s isEqualToString:@"reality"] || [s isEqualToString:@"unknown"];
+           [s isEqualToString:@"reality"] || [s isEqualToString:@"unknown"] ||
+           [s hasPrefix:@"aes-"] || [s hasPrefix:@"chacha20"] || [s isEqualToString:@"aead"];
 }
 
 /* parse old server rows */
@@ -675,26 +1029,67 @@ static SenkoSub *parseSUB(NSString *line) {
     }];
 }
 
-- (void)statusStateWithUptime:(void (^)(NSString *, long))done {
-    [self sendCommand:@"STATUS" reply:^(NSString *reply) {
-        NSString *state = nil;
-        long uptime = 0;
-        if ([reply hasPrefix:@"STATE "]) {
-            NSString *tail = [[reply substringFromIndex:6]
-                              stringByTrimmingCharactersInSet:
-                              [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-            /* the age is an optional trailing token, so a daemon that predates
-               it still answers with a state this parser accepts */
-            NSRange sp = [tail rangeOfString:@" "];
-            if (sp.location == NSNotFound) {
-                state = tail;
-            } else {
-                state = [tail substringToIndex:sp.location];
-                uptime = [[tail substringFromIndex:sp.location + 1] intValue];
-                if (uptime < 0) uptime = 0;
+- (void)nativeConfigurationIndex:(int)idx
+                            reply:(void (^)(NSString *, NSString *))done {
+    [self sendCommand:[NSString stringWithFormat:@"NATIVE_CONFIG %d", idx]
+            timeoutMs:10000
+                reply:^(NSString *reply) {
+        if (!reply) {
+            if (done) done(nil, @"daemon did not return a native VPN configuration");
+            return;
+        }
+        NSMutableData *jsonData = [NSMutableData data];
+        NSUInteger expected = NSNotFound;
+        for (NSString *line in [reply componentsSeparatedByString:@"\n"]) {
+            if ([line hasPrefix:@"ERR "]) {
+                if (done) done(nil, [line substringFromIndex:4]);
+                return;
+            }
+            if ([line hasPrefix:@"NCFG "]) {
+                NSString *encoded = [line substringFromIndex:5];
+                NSData *ascii = [encoded dataUsingEncoding:NSUTF8StringEncoding];
+                size_t cap = ascii ? b64_decoded_maxlen([ascii length]) : 0;
+                NSMutableData *chunk = cap ? [NSMutableData dataWithLength:cap] : nil;
+                size_t got = 0;
+                if (!chunk || b64_decode([ascii bytes], [ascii length],
+                                          [chunk mutableBytes], cap, &got) != 0) {
+                    if (done) done(nil, @"native VPN configuration is corrupt");
+                    return;
+                }
+                [chunk setLength:got];
+                [jsonData appendData:chunk];
+            } else if ([line hasPrefix:@"NCFGEND "]) {
+                expected = (NSUInteger)[[line substringFromIndex:8] longLongValue];
             }
         }
+        if (expected == NSNotFound || expected != [jsonData length]) {
+            if (done) done(nil, @"native VPN configuration is truncated");
+            return;
+        }
+        NSString *json = [[[NSString alloc] initWithData:jsonData
+                                                  encoding:NSUTF8StringEncoding]
+                           autorelease];
+        if (!json || ![json length]) {
+            if (done) done(nil, @"native VPN configuration is not UTF-8");
+            return;
+        }
+        if (done) done(json, nil);
+    }];
+}
+
+- (void)statusStateWithUptime:(void (^)(NSString *, long))done {
+    [self sendCommand:@"STATUS" reply:^(NSString *reply) {
+        long uptime = 0;
+        NSString *state = SenkoControlStateFromReply(reply, &uptime);
         if (done) done(state, uptime);
+    }];
+}
+
+- (void)traffic:(void (^)(BOOL, uint64_t, uint64_t))done {
+    [self sendCommand:@"STATUS" reply:^(NSString *reply) {
+        BOOL connected = [SenkoControlStateFromReply(reply, NULL)
+                          isEqualToString:@"connected"];
+        if (done) done(connected && _trafficKnown, _trafficUp, _trafficDown);
     }];
 }
 
@@ -720,6 +1115,12 @@ static SenkoSub *parseSUB(NSString *line) {
     [self sendCommand:[NSString stringWithFormat:@"ADDSRV %@", link] reply:done];
 }
 
+- (void)replaceServerIndex:(int)idx link:(NSString *)link
+                     reply:(void (^)(NSString *))done {
+    [self sendCommand:[NSString stringWithFormat:@"REPLACESRV %d %@", idx, link]
+                reply:done];
+}
+
 - (void)addSubscriptionURL:(NSString *)url name:(NSString *)name
                      reply:(void (^)(NSString *))done {
     NSString *safeURL = [url stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
@@ -731,6 +1132,25 @@ static SenkoSub *parseSUB(NSString *line) {
     }
     [self sendCommand:[NSString stringWithFormat:@"ADDSUB %@ %@", safeURL, safeName]
                 reply:done];
+}
+
+- (void)replaceSubscriptionIndex:(int)idx name:(NSString *)name url:(NSString *)url
+                           header:(NSString *)header reply:(void (^)(NSString *))done {
+    NSString *safeURL = [url stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+    NSString *safeName = [name stringByReplacingOccurrencesOfString:@"\r" withString:@" "];
+    safeName = [safeName stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+    NSString *safeHeader = [header ? header : @""
+                            stringByReplacingOccurrencesOfString:@"\r" withString:@" "];
+    safeHeader = [safeHeader stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+    safeHeader = [safeHeader stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+    safeHeader = [safeHeader stringByReplacingOccurrencesOfString:@"+" withString:@"%2B"];
+    if (!safeURL || ![safeURL length] || ![safeName length] || !safeHeader) {
+        if (done) done(nil);
+        return;
+    }
+    if (![safeHeader length]) safeHeader = @"-";
+    [self sendCommand:[NSString stringWithFormat:@"REPLACESUB %d %@ %@ %@",
+                       idx, safeURL, safeHeader, safeName] reply:done];
 }
 
 - (void)deleteServerIndex:(int)idx reply:(void (^)(NSString *))done {
@@ -772,41 +1192,37 @@ static SenkoSub *parseSUB(NSString *line) {
                 reply:done];
 }
 
-- (void)pingIndex:(int)idx reply:(void (^)(int))done {
-/* keep two tcp samples under the control timeout */
-    [self sendCommand:[NSString stringWithFormat:@"PING %d", idx]
-            timeoutMs:5000
-                reply:^(NSString *reply) {
-        int ms = -1;
-        if ([reply hasPrefix:@"PONG "]) {
-            NSArray *t = [[reply stringByTrimmingCharactersInSet:
-                           [NSCharacterSet whitespaceAndNewlineCharacterSet]]
-                          componentsSeparatedByString:@" "];
-            if ([t count] >= 3) ms = [[t objectAtIndex:2] intValue];
-        }
-        if (done) done(ms);
-    }];
-}
-
 - (void)checkIndex:(int)idx mode:(NSString *)mode
               reply:(void (^)(int, NSString *))done {
     NSArray *safeMode = [NSArray arrayWithObjects:@"tcp", @"proxy", @"tunnel", @"handshake", nil];
     if (![safeMode containsObject:mode]) { if (done) done(-1, @"unknown check type"); return; }
-    [self sendCommand:[NSString stringWithFormat:@"CHECK %@ %d", mode, idx]
+    NSString *command = [mode isEqualToString:@"tcp"]
+        ? [NSString stringWithFormat:@"PING %d", idx]
+        : [NSString stringWithFormat:@"CHECK %@ %d", mode, idx];
+    [self sendCommand:command
             timeoutMs:12000 reply:^(NSString *reply) {
         int ms = -1;
-        if ([reply hasPrefix:@"PONG "]) {
-            NSArray *parts = [[reply stringByTrimmingCharactersInSet:
-                [NSCharacterSet whitespaceAndNewlineCharacterSet]] componentsSeparatedByString:@" "];
-            if ([parts count] >= 3) ms = [[parts objectAtIndex:2] intValue];
+        NSString *error = nil;
+        /* STAT is broadcast independently of a check. on a busy ios 6 daemon
+           it can arrive before PONG, so checking only the first reply line
+           turned a completed tcp check into a timeout on screen. */
+        for (NSString *raw in [reply componentsSeparatedByString:@"\n"]) {
+            NSString *line = [raw stringByTrimmingCharactersInSet:
+                              [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if ([line hasPrefix:@"PONG "]) {
+                NSArray *parts = [line componentsSeparatedByString:@" "];
+                if ([parts count] >= 3) ms = [[parts objectAtIndex:2] intValue];
+            } else if ([line hasPrefix:@"ERR "]) {
+                error = [line substringFromIndex:4];
+            }
         }
-        if (done) done(ms, ms >= 0 ? nil : reply);
+        if (done) done(ms, ms >= 0 ? nil : (error ? error : reply));
     }];
 }
 
 - (void)runAWGHelper:(NSArray *)args reply:(void (^)(NSString *))done {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        const char *path = SENKO_USR_BIN "/senko-kick";
+        const char *path = SenkoKickPath();
         NSMutableArray *argvData = [NSMutableArray array];
         [argvData addObject:[NSData dataWithBytes:path length:strlen(path) + 1]];
         for (NSString *arg in args) {
@@ -916,7 +1332,7 @@ static BOOL senkoAWGIdle(void) {
         return;
     }
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        const char *bin = SENKO_USR_BIN "/senko-kick";
+        const char *bin = SenkoKickPath();
         if (access(bin, X_OK) != 0) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (done) done(@"UPDATE ERR senko-kick missing");

@@ -21,9 +21,11 @@ OUT="${ROOT}/senko-v${PKG_VERSION}.deb"
 # thin armv7 sdk: fat dylib remap is flaky on linux aarch64 hosts
 SDK_V7="${SENKO_SDK_V7:?set SENKO_SDK_V7 to the armv7 sdk}"
 SDK_V64="${SENKO_SDK_V64:?set SENKO_SDK_V64 to the arm64 sdk}"
+SDK_VE="${SENKO_SDK_VE:-${SDK_V64}}"
 CRT_V7="${SENKO_CRT_V7:?set SENKO_CRT_V7 to the armv7 startup object}"
 OSSL_V7="${SENKO_OSSL_V7:?set SENKO_OSSL_V7 to the armv7 openssl prefix}"
 OSSL_V64="${SENKO_OSSL_V64:?set SENKO_OSSL_V64 to the arm64 openssl prefix}"
+OSSL_VE="${SENKO_OSSL_VE:-${OSSL_V64}-arm64e}"
 # static mbedtls for the tlsfix hook (no device-side dylib)
 MBED="${SENKO_MBED:?set SENKO_MBED to the mbedtls output directory}"
 GO_CORE_SRC="${SENKO_GO_CORE_SRC:?set SENKO_GO_CORE_SRC to the pinned go core source}"
@@ -34,14 +36,26 @@ SLICE="${ROOT}/.build-slices"
 JBROOT="/var/jb"
 ARM64_ROOT_FLAGS="-DSENKO_ROOTLESS=1"
 ARM64_TLSFIX_INSTALL_NAME="/var/jb/usr/lib/senkotlsfix.dylib"
-ARM64_VPNICON_INSTALL_NAME="/var/jb/usr/lib/senkovpnicon.dylib"
+ARM64_STATUS_INSTALL_NAME="/var/jb/usr/lib/senkostatus.dylib"
 PAYLOAD="${STAGE}${JBROOT}"
+APP_RESOURCES=(
+  Icon.png Icon@2x.png Icon-72.png Icon-72@2x.png
+  Icon-60@2x.png Icon-60@3x.png Icon-76.png Icon-76@2x.png
+  Icon-83.5@2x.png sqmrak.jpg about-bg.png boykisser.png
+  meow.caf meow.wav ouch.wav miside-bg.jpg frutiger-bg.jpg
+  server-placeholder.png ios26-bg-light.jpg ios26-bg-dark.jpg
+  Default.png Default@2x.png Default-568h@2x.png Default-667h@2x.png
+  Default-736h@3x.png Default-812h@3x.png Default-844h@3x.png
+  Default-896h@2x.png Default-896h@3x.png Default-926h@3x.png
+  Default-Portrait.png Default-Portrait@2x.png
+)
 
 cleanup_build_outputs() {
   rm -rf "${STAGE}" "${SLICE}" "${ROOT}/app/build" "${ROOT}/daemon/build"
   rm -f "${ROOT}/senkotlsfix/senkotlsfix.dylib" \
         "${ROOT}/senkotlsfix/senkotlsfix-armv7.dylib" \
-        "${ROOT}/senkotlsfix/senkotlsfix-arm64.dylib"
+        "${ROOT}/senkotlsfix/senkotlsfix-arm64.dylib" \
+        "${ROOT}/senkotlsfix/senkotlsfix-arm64e.dylib"
   env PATH="${SENKO_HOST_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}" \
     make -C "${ROOT}/tests" clean >/dev/null 2>&1 || true
 }
@@ -62,6 +76,13 @@ make_fat() {
   "${LIPO}" -create "$@" -output "${out}"
 }
 
+strip_local_symbols() {
+  local binary
+  for binary in "$@"; do
+    "${TC}/strip" -x "${binary}"
+  done
+}
+
 echo "==> host tests"
 # keep system compiler first so host tests are not built with the ios clang
 HOST_PATH="${SENKO_HOST_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
@@ -77,23 +98,36 @@ bash "${ROOT}/scripts/build_openssl_armv7.sh"
 echo "==> openssl arm64"
 bash "${ROOT}/scripts/build_openssl_arm64.sh"
 
+echo "==> openssl arm64e"
+env SENKO_OSSL_PREFIX="${OSSL_VE}" SENKO_OSSL_BLD="${OSSL_VE}/build-arm64e" \
+  SENKO_OSSL_ARCH=arm64e SENKO_OSSL_TRIPLE=arm64e-apple-darwin \
+  SENKO_OSSL_SDK="${SDK_VE}" bash "${ROOT}/scripts/build_openssl_arm64.sh"
+
 if [[ ! -f "${MBED}/lib/libmbedtls-armv7.a" || \
       ! -f "${MBED}/lib/libmbedx509-armv7.a" || \
       ! -f "${MBED}/lib/libmbedcrypto-armv7.a" || \
       ! -f "${MBED}/lib/libmbedtls-arm64.a" || \
       ! -f "${MBED}/lib/libmbedx509-arm64.a" || \
-      ! -f "${MBED}/lib/libmbedcrypto-arm64.a" ]]; then
+      ! -f "${MBED}/lib/libmbedcrypto-arm64.a" || \
+      ! -f "${MBED}/lib/libmbedtls-arm64e.a" || \
+      ! -f "${MBED}/lib/libmbedx509-arm64e.a" || \
+      ! -f "${MBED}/lib/libmbedcrypto-arm64e.a" ]]; then
   echo "==> bootstrap mbedtls"
   bash "${ROOT}/scripts/build_mbedtls.sh" "${MBED}"
 fi
 
 rm -rf "${SLICE}"
-mkdir -p "${SLICE}/armv7" "${SLICE}/arm64"
+mkdir -p "${SLICE}/armv7" "${SLICE}/arm64" "${SLICE}/arm64e"
 
 echo "==> go backend core arm64 (iOS 12+)"
 env SENKO_GO_CORE_SRC="${GO_CORE_SRC}" SENKO_GO="${GO_BIN}" \
   SENKO_TC="${TC}" SENKO_SDK_V64="${SDK_V64}" \
   bash "${ROOT}/scripts/build_go_core.sh" "${SLICE}/senko-core"
+
+echo "==> native packet tunnel extension arm64 (iOS 9+)"
+make -C "${ROOT}/native" clean all \
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" SDK="${SDK_V64}" \
+  GO="${GO_BIN}" GO_CORE_SRC="${GO_CORE_SRC}" BUILD="${SLICE}/native"
 
 echo "==> daemon armv7"
 make -C "${ROOT}/daemon" -f Makefile.ios clean \
@@ -123,11 +157,31 @@ cp "${ROOT}/daemon/build/ios-arm64/senkoctl" "${SLICE}/arm64/senkoctl"
 cp "${ROOT}/daemon/build/ios-arm64/senko-kick" "${SLICE}/arm64/senko-kick"
 cp "${ROOT}/daemon/build/ios-arm64/senkoawgd" "${SLICE}/arm64/senkoawgd"
 
-make_fat "${SLICE}/senkod" "${SLICE}/armv7/senkod" "${SLICE}/arm64/senkod"
-make_fat "${SLICE}/senkoctl" "${SLICE}/armv7/senkoctl" "${SLICE}/arm64/senkoctl"
-make_fat "${SLICE}/senko-kick" "${SLICE}/armv7/senko-kick" "${SLICE}/arm64/senko-kick"
-make_fat "${SLICE}/senkoawgd" "${SLICE}/armv7/senkoawgd" "${SLICE}/arm64/senkoawgd"
-"${TC}/ldid" -S "${SLICE}/senkod" "${SLICE}/senkoctl" "${SLICE}/senko-kick" "${SLICE}/senkoawgd"
+echo "==> daemon arm64e"
+make -C "${ROOT}/daemon" -f Makefile.ios clean \
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" SDK="${SDK_VE}" OSSL="${OSSL_VE}"
+make -C "${ROOT}/daemon" -f Makefile.ios \
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
+  TRIPLE=arm64e-apple-darwin SDK="${SDK_VE}" \
+  ARCH="-arch arm64e -miphoneos-version-min=12.0" OSSL="${OSSL_VE}" \
+  EXTRA_CFLAGS="${ARM64_ROOT_FLAGS}" IOS_BINDIR=build/ios-arm64e all
+for name in senkod senkoctl senko-kick senkoawgd; do
+  cp "${ROOT}/daemon/build/ios-arm64e/${name}" "${SLICE}/arm64e/${name}"
+done
+
+make_fat "${SLICE}/senkod" "${SLICE}/armv7/senkod" "${SLICE}/arm64/senkod" "${SLICE}/arm64e/senkod"
+make_fat "${SLICE}/senkoctl" "${SLICE}/armv7/senkoctl" "${SLICE}/arm64/senkoctl" "${SLICE}/arm64e/senkoctl"
+make_fat "${SLICE}/senko-kick" "${SLICE}/armv7/senko-kick" "${SLICE}/arm64/senko-kick" "${SLICE}/arm64e/senko-kick"
+make_fat "${SLICE}/senkoawgd" "${SLICE}/armv7/senkoawgd" "${SLICE}/arm64/senkoawgd" "${SLICE}/arm64e/senkoawgd"
+strip_local_symbols "${SLICE}/senkod" "${SLICE}/senkoctl" \
+  "${SLICE}/senko-kick" "${SLICE}/senkoawgd"
+"${TC}/ldid" -S "${SLICE}/senkod" "${SLICE}/senkoctl" "${SLICE}/senkoawgd"
+# senko-kick setuid-escalates from inside the app's sandboxed process tree, which
+# a stricter jailbreak sandbox (seen on Odyssey/libhooker) refuses for a binary
+# with no sandbox exemption of its own, killing it with SIGKILL before it runs a
+# single instruction. the app already needs this same entitlement to talk to a
+# raw socket outside its container, so it costs senko-kick nothing new to trust
+"${TC}/ldid" -S"${ROOT}/app/entitlements.plist" "${SLICE}/senko-kick"
 
 echo "==> app armv7"
 make -C "${ROOT}/app" clean \
@@ -149,7 +203,16 @@ make -C "${ROOT}/app" \
   OBJDIR=build/obj-arm64 BIN=build/senko-arm64
 cp "${ROOT}/app/build/senko-arm64" "${SLICE}/senko-arm64"
 
-make_fat "${SLICE}/senko" "${SLICE}/senko-armv7" "${SLICE}/senko-arm64"
+echo "==> app arm64e"
+make -C "${ROOT}/app" \
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
+  TRIPLE=arm64e-apple-darwin SDK="${SDK_VE}" \
+  ARCH="-arch arm64e -miphoneos-version-min=12.0" \
+  EXTRA_CFLAGS="${ARM64_ROOT_FLAGS}" OBJDIR=build/obj-arm64e BIN=build/senko-arm64e
+cp "${ROOT}/app/build/senko-arm64e" "${SLICE}/senko-arm64e"
+
+make_fat "${SLICE}/senko" "${SLICE}/senko-armv7" "${SLICE}/senko-arm64" "${SLICE}/senko-arm64e"
+strip_local_symbols "${SLICE}/senko"
 "${TC}/ldid" -S"${ROOT}/app/entitlements.plist" "${SLICE}/senko"
 
 echo "==> senkotlsfix armv7"
@@ -174,37 +237,58 @@ make -C "${ROOT}/senkotlsfix" -f Makefile.ios \
   OUT=senkotlsfix-arm64.dylib
 cp "${ROOT}/senkotlsfix/senkotlsfix-arm64.dylib" "${SLICE}/"
 
+echo "==> senkotlsfix arm64e"
+make -C "${ROOT}/senkotlsfix" -f Makefile.ios \
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
+  TRIPLE=arm64e-apple-darwin SDK="${SDK_VE}" \
+  ARCH="-arch arm64e -miphoneos-version-min=12.0" \
+  EXTRA_CFLAGS="${ARM64_ROOT_FLAGS}" INSTALL_NAME="${ARM64_TLSFIX_INSTALL_NAME}" \
+  MBED="${MBED}" MBEDLIBS="${MBED}/lib/libmbedtls-arm64e.a ${MBED}/lib/libmbedx509-arm64e.a ${MBED}/lib/libmbedcrypto-arm64e.a" \
+  OUT=senkotlsfix-arm64e.dylib
+cp "${ROOT}/senkotlsfix/senkotlsfix-arm64e.dylib" "${SLICE}/"
+
 make_fat "${SLICE}/senkotlsfix.dylib" \
-  "${SLICE}/senkotlsfix-armv7.dylib" "${SLICE}/senkotlsfix-arm64.dylib"
+  "${SLICE}/senkotlsfix-armv7.dylib" "${SLICE}/senkotlsfix-arm64.dylib" "${SLICE}/senkotlsfix-arm64e.dylib"
+strip_local_symbols "${SLICE}/senkotlsfix.dylib"
 "${TC}/ldid" -S "${SLICE}/senkotlsfix.dylib"
 
-echo "==> senkovpnicon armv7"
+echo "==> senkostatus armv7"
 "${TC}/clang" -target arm-apple-darwin11 -B "${TC}" \
   -fno-objc-arc -Wall -Wextra -O2 -fPIC \
   -arch armv7 -miphoneos-version-min=5.0 -isysroot "${SDK_V7}" \
-  "${ROOT}/vpnicon/senko_vpnicon.m" \
-  -o "${SLICE}/senkovpnicon-armv7.dylib" \
+  "${ROOT}/status/senko_status.m" \
+  -o "${SLICE}/senkostatus-armv7.dylib" \
   -dynamiclib \
   -Wl,-no_warn_inits \
-  -install_name /usr/lib/senkovpnicon.dylib \
+  -install_name /usr/lib/senkostatus.dylib \
   -framework Foundation -framework UIKit -framework CoreFoundation -lobjc
-"${TC}/ldid" -S "${SLICE}/senkovpnicon-armv7.dylib"
+"${TC}/ldid" -S "${SLICE}/senkostatus-armv7.dylib"
 
-echo "==> senkovpnicon arm64"
+echo "==> senkostatus arm64"
 "${TC}/clang" -target arm64-apple-darwin -B "${TC}" \
   -fno-objc-arc -Wall -Wextra -O2 -fPIC ${ARM64_ROOT_FLAGS} \
   -arch arm64 -miphoneos-version-min=7.0 -isysroot "${SDK_V64}" \
-  "${ROOT}/vpnicon/senko_vpnicon.m" \
-  -o "${SLICE}/senkovpnicon-arm64.dylib" \
+  "${ROOT}/status/senko_status.m" \
+  -o "${SLICE}/senkostatus-arm64.dylib" \
   -dynamiclib \
   -Wl,-no_warn_inits \
-  -install_name "${ARM64_VPNICON_INSTALL_NAME}" \
+  -install_name "${ARM64_STATUS_INSTALL_NAME}" \
   -framework Foundation -framework UIKit -framework CoreFoundation -lobjc
-"${TC}/ldid" -S "${SLICE}/senkovpnicon-arm64.dylib"
+"${TC}/ldid" -S "${SLICE}/senkostatus-arm64.dylib"
 
-make_fat "${SLICE}/senkovpnicon.dylib" \
-  "${SLICE}/senkovpnicon-armv7.dylib" "${SLICE}/senkovpnicon-arm64.dylib"
-"${TC}/ldid" -S "${SLICE}/senkovpnicon.dylib"
+echo "==> senkostatus arm64e"
+"${TC}/clang" -target arm64e-apple-darwin -B "${TC}" \
+  -fno-objc-arc -Wall -Wextra -O2 -fPIC ${ARM64_ROOT_FLAGS} \
+  -arch arm64e -miphoneos-version-min=12.0 -isysroot "${SDK_VE}" \
+  "${ROOT}/status/senko_status.m" -o "${SLICE}/senkostatus-arm64e.dylib" \
+  -dynamiclib -Wl,-no_warn_inits -install_name "${ARM64_STATUS_INSTALL_NAME}" \
+  -framework Foundation -framework UIKit -framework CoreFoundation -lobjc
+"${TC}/ldid" -S "${SLICE}/senkostatus-arm64e.dylib"
+
+make_fat "${SLICE}/senkostatus.dylib" \
+  "${SLICE}/senkostatus-armv7.dylib" "${SLICE}/senkostatus-arm64.dylib" "${SLICE}/senkostatus-arm64e.dylib"
+strip_local_symbols "${SLICE}/senkostatus.dylib"
+"${TC}/ldid" -S "${SLICE}/senkostatus.dylib"
 
 echo "==> stage packaging"
 rm -rf "${STAGE}"
@@ -215,7 +299,7 @@ mkdir -p "${STAGE}/DEBIAN" \
          "${PAYLOAD}/etc" \
          "${PAYLOAD}/Library/LaunchDaemons" \
          "${STAGE}/var/mobile/Library/Preferences" \
-         "${PAYLOAD}/Applications/Senko.app"
+         "${PAYLOAD}/Applications/Senko.app/PlugIns"
 cp "${ROOT}/packaging/DEBIAN/control" "${STAGE}/DEBIAN/control"
 cp "${ROOT}/packaging/DEBIAN/postinst" "${STAGE}/DEBIAN/postinst"
 cp "${ROOT}/packaging/DEBIAN/postrm" "${STAGE}/DEBIAN/postrm"
@@ -226,8 +310,8 @@ cp "${ROOT}/packaging/etc/pf.os" "${PAYLOAD}/etc/pf.os"
 cp "${ROOT}/packaging/Library/LaunchDaemons/com.senko.senkod.plist" \
   "${PAYLOAD}/Library/LaunchDaemons/com.senko.senkod.plist"
 cp "${SLICE}/senkotlsfix.dylib" "${PAYLOAD}/usr/lib/senkotlsfix.dylib"
-cp "${SLICE}/senkovpnicon.dylib" "${PAYLOAD}/usr/lib/senkovpnicon.dylib"
-cp "${ROOT}/vpnicon/senkovpnicon.plist" "${PAYLOAD}/usr/lib/senkovpnicon.plist"
+cp "${SLICE}/senkostatus.dylib" "${PAYLOAD}/usr/lib/senkostatus.dylib"
+cp "${ROOT}/status/senkostatus.plist" "${PAYLOAD}/usr/lib/senkostatus.plist"
 cp "${ROOT}/senkotlsfix/substrate-filter.plist" \
    "${PAYLOAD}/usr/lib/senkotlsfix/substrate-filter.plist"
 cp "${ROOT}/senkotlsfix/cacert.pem" "${PAYLOAD}/usr/lib/senkotlsfix/cacert.pem"
@@ -244,9 +328,14 @@ fi
 cp "${SLICE}/senko-core" "${PAYLOAD}/usr/lib/senko-core"
 cp "${ROOT}/packaging/go-core-NOTICE" "${PAYLOAD}/usr/share/doc/senko/"
 cp "${GO_CORE_SRC}/LICENSE" "${PAYLOAD}/usr/share/doc/senko/go-core-LICENSE"
+cp "${ROOT}/packaging/zbar-NOTICE" "${PAYLOAD}/usr/share/doc/senko/"
+cp "${ROOT}/app/third_party/zbar/COPYING" "${PAYLOAD}/usr/share/doc/senko/zbar-LICENSE"
 cp "${SLICE}/senko" "${PAYLOAD}/Applications/Senko.app/senko"
 cp "${ROOT}/app/Info.plist" "${PAYLOAD}/Applications/Senko.app/"
-cp "${ROOT}/app/icons/"* "${PAYLOAD}/Applications/Senko.app/" 2>/dev/null || true
+# a wildcard also packages source-only chrome icons and their duplicate copies
+for resource in "${APP_RESOURCES[@]}"; do
+  cp "${ROOT}/app/icons/${resource}" "${PAYLOAD}/Applications/Senko.app/"
+done
 cp "${ROOT}/app/icons/flags/"*.png "${PAYLOAD}/Applications/Senko.app/" 2>/dev/null || true
 
 # normalized metadata prevents legacy dpkg from rejecting builder ownership
@@ -255,7 +344,7 @@ chmod 755 "${PAYLOAD}/usr/bin/senkod" "${PAYLOAD}/usr/bin/senkoctl" "${PAYLOAD}/
           "${PAYLOAD}/Applications/Senko.app" \
           "${PAYLOAD}/Applications/Senko.app/senko" \
           "${PAYLOAD}/usr/lib/senkotlsfix.dylib" \
-          "${PAYLOAD}/usr/lib/senkovpnicon.dylib"
+          "${PAYLOAD}/usr/lib/senkostatus.dylib"
 if [ -f "${PAYLOAD}/usr/lib/senko/head" ]; then
   chmod 755 "${PAYLOAD}/usr/lib/senko/head"
 fi
@@ -263,8 +352,13 @@ fi
 chown 0:0 "${PAYLOAD}/usr/bin/senko-kick" 2>/dev/null || true
 chmod 4755 "${PAYLOAD}/usr/bin/senko-kick"
 find "${PAYLOAD}/Applications/Senko.app" -type f ! -name senko -exec chmod 644 {} +
+cp -R "${SLICE}/native/SenkoTunnel.appex" \
+  "${PAYLOAD}/Applications/Senko.app/PlugIns/"
+chmod 755 "${PAYLOAD}/Applications/Senko.app/PlugIns/SenkoTunnel.appex/SenkoTunnel"
+find "${PAYLOAD}/Applications/Senko.app/PlugIns/SenkoTunnel.appex" \
+  -type f ! -name SenkoTunnel -exec chmod 644 {} +
 find "${PAYLOAD}/usr/lib/senkotlsfix" -type f -exec chmod 644 {} +
-chmod 644 "${PAYLOAD}/usr/lib/senkovpnicon.plist"
+chmod 644 "${PAYLOAD}/usr/lib/senkostatus.plist"
 chmod 644 "${PAYLOAD}/usr/share/doc/senko/"*
 chmod 644 "${PAYLOAD}/etc/pf.os"
 chmod 644 "${PAYLOAD}/Library/LaunchDaemons/"*.plist
@@ -282,15 +376,20 @@ for bin in "${PAYLOAD}/usr/bin/senkod" \
   info="$(file "${bin}")"
   echo "${info}"
   case "${info}" in
-    *armv7*arm64*|*arm64*armv7*) ;;
-    *) echo "missing armv7+arm64 slices in ${bin}" >&2; exit 1 ;;
+    *armv7*arm64*arm64e*|*armv7*arm64e*arm64*|*arm64*armv7*arm64e*|*arm64*arm64e*armv7*|*arm64e*armv7*arm64*|*arm64e*arm64*armv7*) ;;
+    *) echo "missing armv7+arm64+arm64e slices in ${bin}" >&2; exit 1 ;;
   esac
   "${LIPO}" -info "${bin}"
 done
 
-echo "==> verify vpn icon hook"
-file "${PAYLOAD}/usr/lib/senkovpnicon.dylib"
-"${LIPO}" -info "${PAYLOAD}/usr/lib/senkovpnicon.dylib"
+echo "==> verify status hook"
+status_info="$(file "${PAYLOAD}/usr/lib/senkostatus.dylib")"
+echo "${status_info}"
+case "${status_info}" in
+  *armv7*arm64*arm64e*|*armv7*arm64e*arm64*|*arm64*armv7*arm64e*|*arm64*arm64e*armv7*|*arm64e*armv7*arm64*|*arm64e*arm64*armv7*) ;;
+  *) echo "missing armv7+arm64+arm64e slices in senkostatus" >&2; exit 1 ;;
+esac
+"${LIPO}" -info "${PAYLOAD}/usr/lib/senkostatus.dylib"
 
 echo "==> verify go backend core"
 file "${PAYLOAD}/usr/lib/senko-core" | grep -q 'Mach-O 64-bit arm64 executable'
@@ -334,7 +433,7 @@ pack_tar() {
       --owner=0 --group=0 --numeric-owner \
       --mtime='2020-01-01 00:00:00' \
       --sort=name \
-      -czf "${out}" "$@"
+      -cf - "$@" | gzip -9n > "${out}"
 }
 
 (

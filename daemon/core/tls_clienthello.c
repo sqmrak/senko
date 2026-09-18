@@ -146,6 +146,11 @@ static void ext_versions_chrome(w_t *w, uint16_t grease) {
     w_u16(w, 0x002b); w_u16(w, 0x0007); w_u8(w, 0x06);
     w_u16(w, grease); w_u16(w, 0x0304); w_u16(w, 0x0303);
 }
+static void ext_versions_edge(w_t *w, uint16_t grease) {
+    w_u16(w, 0x002b); w_u16(w, 0x000b); w_u8(w, 0x0a);
+    w_u16(w, grease); w_u16(w, 0x0304); w_u16(w, 0x0303);
+    w_u16(w, 0x0302); w_u16(w, 0x0301);
+}
 static void ext_versions_firefox(w_t *w) {
     w_u16(w, 0x002b); w_u16(w, 0x0005); w_u8(w, 0x04);
     w_u16(w, 0x0304); w_u16(w, 0x0303);
@@ -208,6 +213,14 @@ static void ciphers_firefox(w_t *w) {
       for (size_t i = 0; i < sizeof c / sizeof c[0]; i++) w_u16(w, c[i]);
     w_patch_u16(w, at);
 }
+static void ciphers_edge(w_t *w, uint16_t grease) {
+    static const uint16_t c[] = {0x1301,0x1302,0x1303,0xc02b,0xc02f,0xc02c,
+        0xc030,0xcca9,0xcca8,0xc013,0xc014,0x002f,0x0035};
+    size_t at = w_mark_u16(w);
+      w_u16(w, grease);
+      for (size_t i = 0; i < sizeof c / sizeof c[0]; i++) w_u16(w, c[i]);
+    w_patch_u16(w, at);
+}
 static void ciphers_min(w_t *w) { /* randomized: 1301 + 1303 (our two) */
     size_t at = w_mark_u16(w);
       w_u16(w, 0x1301); w_u16(w, 0x1303);
@@ -242,6 +255,28 @@ static void exts_chrome(w_t *w, const tls_ch_params_t *p, prng_t *pr, int edge) 
 
 static void exts_qq(w_t *w, const tls_ch_params_t *p, prng_t *pr) {
     exts_chrome(w, p, pr, 0);
+}
+
+static void exts_edge(w_t *w, const tls_ch_params_t *p, prng_t *pr) {
+    uint16_t g1 = prng_grease(pr), g2 = prng_grease(pr);
+    uint16_t gg = prng_grease(pr), gv = prng_grease(pr);
+    size_t exts = w_mark_u16(w);
+      ext_grease_empty(w, g1);
+      if (p->sni && p->sni[0]) ext_sni(w, p->sni);
+      ext_ems(w);
+      ext_reneg(w);
+      ext_groups_chrome(w, gg);
+      ext_ec_points(w);
+      ext_session_ticket(w);
+      ext_alpn(w);
+      ext_status_request(w);
+      ext_sigalgs_default(w);
+      ext_sct(w);
+      ext_key_share_x25519(w, p->x25519_pub, gg);
+      ext_psk_modes(w);
+      ext_versions_edge(w, gv);
+      ext_grease_1byte(w, g2);
+    w_patch_u16(w, exts);
 }
 
 static void exts_firefox(w_t *w, const tls_ch_params_t *p, prng_t *pr) {
@@ -299,6 +334,7 @@ tls_ch_status_t tls_build_clienthello(const tls_ch_params_t *p,
 
     switch (p->fp) {
         case TLS_FP_FIREFOX:    ciphers_firefox(&w); break;
+        case TLS_FP_EDGE:       ciphers_edge(&w, cipher_grease); break;
         case TLS_FP_RANDOMIZED: ciphers_min(&w); break;
         default:                ciphers_chrome(&w, cipher_grease); break;
     }
@@ -309,7 +345,7 @@ tls_ch_status_t tls_build_clienthello(const tls_ch_params_t *p,
         case TLS_FP_FIREFOX:    exts_firefox(&w, p, &pr); break;
         case TLS_FP_QQ:         exts_qq(&w, p, &pr); break;
         case TLS_FP_RANDOMIZED: exts_randomized(&w, p); break;
-        case TLS_FP_EDGE:       exts_chrome(&w, p, &pr, 1); break;
+        case TLS_FP_EDGE:       exts_edge(&w, p, &pr); break;
         default:                exts_chrome(&w, p, &pr, 0); break;
     }
 

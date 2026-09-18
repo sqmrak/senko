@@ -14,7 +14,7 @@
 #include "proc_detach.h"
 #include "storefile.h"
 #include "settings.h"
-#include "vpn_icon.h"
+#include "status.h"
 
 #include <openssl/crypto.h>
 
@@ -71,7 +71,7 @@ static int run_single(const char *link, int port) {
         return 1;
     }
     loop_set_tls(&lp, srv.sni, srv.fp, srv.pbk, srv.sid, srv.path, srv.ws_host,
-                 srv.mode, srv.host);
+                 srv.mode, srv.host, srv.insecure);
 
     install_signals();
     fprintf(stderr, "senkod: socks5 on 127.0.0.1:%u -> %s:%u (%s)\n",
@@ -137,7 +137,7 @@ static int run_managed(const char *ctl_path, const char *config_path,
     daemon_ctl_set_full_device(&dc, full_device);
     daemon_ctl_set_settings(&dc, settings);
 
-    vpn_icon_set(0);
+    status_set(0);
 
     /* a crash can leave either rule set behind, and only the go backend
        installs none of them */
@@ -155,6 +155,7 @@ static int run_managed(const char *ctl_path, const char *config_path,
     ctl_server_set_fetch(&cs, daemon_ctl_fetch);
 
     ctl_server_set_probe(&cs, daemon_ctl_probe);
+    ctl_server_set_server_probe(&cs, daemon_ctl_probe_server);
 
     ctl_server_set_verify(&cs, daemon_ctl_verify_tunnel);
 
@@ -163,9 +164,21 @@ static int run_managed(const char *ctl_path, const char *config_path,
     ctl_server_set_backup(&cs, daemon_ctl_backup);
     ctl_server_set_check(&cs, daemon_ctl_check);
     ctl_server_set_reason(&cs, daemon_ctl_last_reason);
+/* one live copy of the settings from here on: the daemon writes it, the control
+   server reads it for the SETTINGS dump and for the schedules it runs */
+    ctl_server_set_settings(&cs, &dc.settings);
+    ctl_server_set_diag(&cs, daemon_ctl_diag);
+    ctl_server_set_fwconf(&cs, daemon_ctl_fwconf);
+    ctl_server_set_flush(&cs, daemon_ctl_flush);
+    ctl_server_set_native_config(&cs, daemon_ctl_native_config);
+    ctl_server_set_stats(&cs, daemon_ctl_stats);
+    daemon_ctl_set_rules(&dc, &cs.engine.store.rules);
 
     if (config_path && config_path[0]) {
-        if (storefile_load(&cs.engine.store, settings, config_path) == STOREFILE_OK)
+/* the settings were merged from this file and the command line before the
+   listener was bound, and reading them again here would put the file back on
+   top of the arguments */
+        if (storefile_load(&cs.engine.store, NULL, config_path) == STOREFILE_OK)
             fprintf(stderr, "senkod: loaded %zu server(s) from %s\n",
                     cs.engine.store.n, config_path);
     }
@@ -181,17 +194,30 @@ static int run_managed(const char *ctl_path, const char *config_path,
             socks_public ? "0.0.0.0" : "127.0.0.1",
             loop_listen_port(&lp), ctl_path);
 
+/* a daemon started by senko-kick after a reboot has no client to ask for the
+   tunnel, so the stored selection is what brings routing back */
+    if (dc.settings.auto_connect) {
+        if (ctl_server_restore_tunnel(&cs) == 0)
+            fprintf(stderr, "senkod: auto-connected to server %d\n",
+                    cs.engine.store.selected);
+        else
+            fprintf(stderr, "senkod: auto-connect found no server to start\n");
+    }
+
     while (!g_stop) {
         if (loop_step(&lp, 50) != LOOP_OK) break;
         ctl_server_step(&cs, 50);
+/* the backend can die between two control commands, and the redial schedule
+   lives with the store that knows which server to dial */
         if (daemon_ctl_maintain(&dc) != 0)
-            cs.engine.state = CTL_STATE_ERROR;
+            ctl_server_tunnel_lost(&cs);
+        ctl_server_tick(&cs);
     }
 
     fprintf(stderr, "senkod: shutting down\n");
     daemon_ctl_shutdown(&dc);
     if (config_path && config_path[0])
-        storefile_save(&cs.engine.store, settings, config_path);
+        storefile_save(&cs.engine.store, &dc.settings, config_path);
     ctl_server_close(&cs);
     loop_close(&lp);
     return 0;

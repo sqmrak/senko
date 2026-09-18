@@ -1,8 +1,10 @@
 # build outputs
 build/
 app/build/
+app/build-arm64/
 daemon/build/
 .build-slices/
+.ipa-build/
 
 # host / device binaries (rebuild via Makefile / build_deb.sh)
 daemon/senkod
@@ -19,7 +21,7 @@ tests/fuzz_*
 !tests/fuzz_*.c
 !tests/fuzz_*.h
 senkotlsfix/*.dylib
-vpnicon/*.dylib
+status/*.dylib
 
 # packaging stage (templates under DEBIAN/Library/var stay)
 packaging/usr/
@@ -28,6 +30,7 @@ packaging/Applications/
 # release artifacts
 *.deb
 *.Packages
+*.ipa
 
 # objects / archives
 *.o

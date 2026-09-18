@@ -1,6 +1,20 @@
 #import "main_vc_priv.h"
 #import "crash_report.h"
 
+#import <fcntl.h>
+
+/* the injected status bar badge is retired: it never earned its keep against
+   an outright wrong build gate (it ran on the jailbreak build, which has no
+   other vpn indicator, and skipped the stock build, which actually needed
+   it). writing the marker senkostatus already understands turns it off for
+   both without touching the substrate hook itself */
+static void SenkoDisableInjectedStatusBadge(void) {
+    int fd = open(SENKO_VPN_BADGE_OFF_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    (void)write(fd, "removed\n", 8);
+    close(fd);
+}
+
 @implementation MainVC
 
 - (void)dealloc {
@@ -20,6 +34,7 @@
     _actionSheet.delegate = nil;
     [_actionSheet release];
     [_ctl release];
+    [_nativeVPN release];
     [_servers release];
     [_subs release];
     [_sectionOrder release];
@@ -32,7 +47,8 @@
     [_serverStatus release];
     [_pingingSubs release];
     [_pingQueue release];
-    [_pingMode release];
+    [_busyOverlay removeFromSuperview];
+    [_busyOverlay release];
     [_pendingUpdatePath release];
     [_pendingInsecureURL release];
     [_sectionDragSnapshot removeFromSuperview];
@@ -42,6 +58,8 @@
     _sectionDragHeader = nil;
     [_uptimeTimer invalidate];
     _uptimeTimer = nil;
+    [_statusTimer invalidate];
+    _statusTimer = nil;
     [_sheet removeFromSuperview];
     [_sheet release];
     [NSObject cancelPreviousPerformRequestsWithTarget:_emptyState];
@@ -142,7 +160,10 @@
     BOOL pad = ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad);
     BOOL compact = (!pad && SenkoViewBounds(self.view).size.height <= 568.0f);
     CGFloat size = pad ? 28.0f : (compact ? 22.0f : 25.0f);
-    title.textAlignment = NSTextAlignmentLeft;
+/* the classic header centres the wordmark, and this runs again on every theme
+   change, so it has to agree with the layout rather than reset it */
+    title.textAlignment = SenkoClassicHomeEnabled() ? NSTextAlignmentCenter
+                                                    : NSTextAlignmentLeft;
     title.backgroundColor = [UIColor clearColor];
     title.shadowColor = nil;
     title.shadowOffset = CGSizeZero;
@@ -191,6 +212,11 @@
     SenkoCrashScreen("server list");
 /* the id used to be asked for only while the empty list was on screen, so a
    catalog that never arrived meant it was never asked for at all */
+/* the retry budget is spent per appearance, not for the life of the process:
+   a daemon that was still starting up when it ran out left the plate reading
+   "not available yet" for the rest of the session even after the daemon came
+   up, since nothing else ever asked again */
+    if (![_deviceHWID length]) _hwidRetries = 0;
     [self requestDeviceHWID];
     [self applyState];
     [self syncUptimeTicker];
@@ -198,6 +224,7 @@
     [self syncBubbleField];
     [_boyField setPaused:NO];
     [_bubbleField setPaused:NO];
+    [self startStatusHeartbeat];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -206,6 +233,7 @@
        outlive the screen being on top */
     [_uptimeTimer invalidate];
     _uptimeTimer = nil;
+    [self stopStatusHeartbeat];
     [_sheet dismiss];
     [_boyField setPaused:YES];
     [_bubbleField setPaused:YES];
@@ -218,11 +246,15 @@
        the pill and the rows slide past each other on the way round */
     BOOL animating = [UIView areAnimationsEnabled];
     if (_rotating && animating) [UIView setAnimationsEnabled:NO];
-    SenkoHomeLayout(self.view, &_ui, _listHeaderProgress);
+    if (SenkoClassicHomeEnabled())
+        SenkoHomeLayoutClassic(self.view, &_ui, _listHeaderProgress);
+    else
+        SenkoHomeLayout(self.view, &_ui, _listHeaderProgress);
     [self layoutStatusGlow];
-    if (_emptyState && !_emptyState.hidden &&
-        !CGRectEqualToRect(_emptyState.frame, _table.frame))
-        _emptyState.frame = _table.frame;
+    /* a narrow orientation can leave no room below the list and hide this
+       panel. always resync it here, otherwise returning to a larger layout
+       leaves the empty catalog blank until a later catalog refresh. */
+    [self syncEmptyState];
     if (_boyField && !CGSizeEqualToSize(_boyField.bounds.size, self.view.bounds.size))
         _boyField.frame = self.view.bounds;
     if (_bubbleField && !CGSizeEqualToSize(_bubbleField.bounds.size, self.view.bounds.size))
@@ -235,6 +267,8 @@
 }
 
 - (void)layoutMainChrome {
+    if (_layingOutChrome) return;
+    _layingOutChrome = YES;
     [self layoutMainChromeGeometry];
     CGSize sz = self.view.bounds.size;
     NSString *key = [self backgroundStatusKey];
@@ -254,6 +288,7 @@
         else
             [self layoutWallpaperStack];
     }
+    _layingOutChrome = NO;
 }
 
 - (void)viewDidLayoutSubviews {
@@ -295,11 +330,11 @@
 - (void)finishRotation {
     if (!_rotating) return;
     _rotating = NO;
-    [self.view setNeedsLayout];
-    [self.view layoutIfNeeded];
-    [self layoutMainChrome];
     _listHeaderProgress = 0.0f;
-    [self scrollViewDidScroll:_table];
+    /* ios 5 can enter viewDidLayoutSubviews again while this callback is
+       forcing layout. leave the next pass to UIKit, which already owns the
+       rotation transaction */
+    [self.view setNeedsLayout];
 }
 
 - (void)didRotateFromInterfaceOrientation:(UIInterfaceOrientation)io {
@@ -316,9 +351,12 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     _ctl = [[SenkoControl alloc] initWithSocketPath:SENKO_SOCK];
+    _nativeVPN = [[SenkoNativeVPN alloc] init];
+    SenkoDisableInjectedStatusBadge();
     _selectedSrvIdx = -1;
     _menuSubIdx = -1;
     _subscriptionMutationBusy = NO;
+    _catalogLoaded = NO;
     _selectedBackend = [[NSUserDefaults standardUserDefaults] integerForKey:SENKO_SELECTED_BACKEND_KEY];
     if (_selectedBackend != SenkoBackendAmneziaWG)
         _selectedBackend = SenkoBackendServer;
@@ -329,6 +367,7 @@
     _checkGeneration = 0;
     _catalogGeneration = 0;
     _sections = [[NSMutableArray alloc] init];
+    _servers = [[NSMutableArray alloc] init];
     _subs = [[NSMutableArray alloc] init];
     _collapsedSubs = [[NSMutableSet alloc] init];
     _listHeaderProgress = 0.0f;
@@ -343,6 +382,14 @@
                                              selector:@selector(appDidBecomeActive:)
                                                  name:UIApplicationDidBecomeActiveNotification
                                                object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(appWillResignActive:)
+                                                 name:UIApplicationWillResignActiveNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(widgetToggleRequested:)
+                                                 name:SENKO_WIDGET_TOGGLE_NOTIFICATION
+                                               object:nil];
 
     _revealedRows = [[NSMutableSet alloc] init];
     SenkoCrashTheme([SenkoThemeCurrentId() UTF8String]);
@@ -353,9 +400,6 @@
     [self styleHeaderTitle:title];
     [self.view addSubview:title];
 
-    UIButton *refresh = [self makeHeaderButton:@selector(refreshPressed)
-                                            tag:SenkoHomeTagRefresh];
-    [self.view addSubview:refresh];
     UIButton *gear = [self makeHeaderButton:@selector(settingsPressed)
                                          tag:SenkoHomeTagGear];
     [self.view addSubview:gear];
@@ -406,7 +450,6 @@
 
     _ui.title = title;
     _ui.gear = gear;
-    _ui.refresh = refresh;
     _ui.plus = plus;
     _ui.card = _statusCard;
     _ui.connect = _connectBtn;
@@ -469,15 +512,29 @@
     [self bringMainChromeToFront];
 }
 
+- (void)widgetToggleRequested:(NSNotification *)note {
+    (void)note;
+    [self togglePressed];
+}
+
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     /* the sort order lives in defaults and can change while settings are up */
     [self rebuildSections];
+    [self layoutMainChrome];
     [_table reloadData];
+    [_table layoutIfNeeded];
+    [self syncEmptyState];
+    if (!_catalogLoaded)
+        [self showBusyOverlay:SenkoLocalizedText(@"Loading servers and subscriptions...")];
     [self ensureDaemonThenRefresh];
 }
 
 - (void)ensureDaemonThenRefresh {
+#if SENKO_STOCK_NATIVE
+    [self refreshNativeCatalog];
+    return;
+#else
     /* probing during a live tunnel can overwrite its status with stale state */
     BOOL quiet = [self isTunnelActive];
     [_ctl ensureDaemon:^(BOOL up, NSString *detail) {
@@ -492,19 +549,43 @@
             [self applyState];
             return;
         }
-        /* an already-running daemon has no startup detail to show */
+        /* an already-running daemon has no startup detail to show, and the
+           label already holds whatever was correct before this screen
+           appeared: overwriting it with the idle placeholder here flashed
+           "idle" over a valid detail for the round trip refresh needs to
+           confirm nothing changed */
         if (!quiet && detail && [detail length])
             SetStatusRefresh(_statusLabel, detail);
-        else if (!quiet)
-            SetStatusDefault(_statusLabel, @"idle");
         [self refresh];
     }];
+#endif
 }
 
 
 - (void)appDidBecomeActive:(NSNotification *)n {
     (void)n;
     [self applyState];
+/* nothing polled the daemon while the app was away, so the card was still
+   showing the state the last user action left behind. the tunnel outlives the
+   app, and coming back is the first chance to find out what it is doing */
+    [self startStatusHeartbeat];
+#if SENKO_STOCK_NATIVE
+    [self refreshNativeCatalog];
+#else
+    [self ensureDaemonThenRefresh];
+#endif
+/* the daemon may have come up while the app was suspended, so give the hwid
+   plate a fresh retry budget instead of leaving it on whatever ran out before
+   backgrounding */
+    if (![_deviceHWID length]) _hwidRetries = 0;
+    [self requestDeviceHWID];
+}
+
+/* timers do not fire while the app is suspended, and one left scheduled fires
+   immediately on the way back, before the daemon socket is reachable again */
+- (void)appWillResignActive:(NSNotification *)n {
+    (void)n;
+    [self stopStatusHeartbeat];
 }
 
 - (void)settingsPressed {

@@ -7,6 +7,11 @@
    device id panels bind a subscription to, and the two fastest ways in */
 @interface SenkoEmptyStateView : UIView {
 @public
+/* the text sits on its own translucent plate: over a patterned wallpaper a bare
+   caption is unreadable, and on a 3.5 inch screen the block does not always
+   fit, so everything above the button row scrolls */
+    UIScrollView *scroll;
+    UIView   *textPlate;
     UILabel  *headline;
     UILabel  *body;
     UIView   *hwidPlate;

@@ -19,6 +19,7 @@ NSString *SenkoServerDisplayName(NSString *remark);
     UILabel *_transport;
     UILabel *_unsupported;
     UILabel *_ping;
+    UIActivityIndicatorView *_pingActivity;
     UIButton *_pingButton;
     UIImageView *_serverIcon;
     UIImageView *_chevron;
@@ -26,7 +27,6 @@ NSString *SenkoServerDisplayName(NSString *remark);
 }
 - (void)configureWithServer:(SenkoServer *)server
                       picked:(BOOL)picked
-                   hideLinks:(BOOL)hideLinks
                      pingVal:(NSNumber *)ping
                  displayName:(NSString *)displayName;
 - (void)configureWithTitle:(NSString *)title

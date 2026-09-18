@@ -22,8 +22,8 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     }
     CAGradientLayer *fill = [CAGradientLayer layer];
     fill.name = @"serverPrimaryFill";
-    fill.startPoint = CGPointMake(0.0f, 0.5f);
-    fill.endPoint = CGPointMake(1.0f, 0.5f);
+    fill.startPoint = CGPointMake(0.5f, 0.0f);
+    fill.endPoint = CGPointMake(0.5f, 1.0f);
     fill.actions = [NSDictionary dictionaryWithObjectsAndKeys:
                     [NSNull null], @"colors",
                     [NSNull null], @"bounds",
@@ -31,6 +31,31 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
                     [NSNull null], @"cornerRadius", nil];
     [button.layer insertSublayer:fill atIndex:0];
     return fill;
+}
+
+static NSString *ServerPingText(NSNumber *ping) {
+    if (!ping) return nil;
+    if ([ping intValue] >= 0)
+        return [NSString stringWithFormat:@"%d ms", [ping intValue]];
+    if ([ping intValue] == -3) return SenkoLocalizedText(@"checking");
+    return SenkoLocalizedText(@"unreachable");
+}
+
+static void ServerPingButtonBusy(UIButton *button, BOOL busy) {
+    if (!button) return;
+    UIView *glyph = [button viewWithTag:901];
+    CALayer *layer = glyph ? glyph.layer : button.layer;
+    [layer removeAnimationForKey:@"serverSheetPing"];
+    button.enabled = !busy;
+    button.alpha = busy ? 0.62f : 1.0f;
+    if (!busy) return;
+    CAKeyframeAnimation *pulse = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+    pulse.values = [NSArray arrayWithObjects:@0.82f, @1.10f, @0.94f, @1.0f, nil];
+    pulse.duration = 0.92;
+    pulse.repeatCount = HUGE_VALF;
+    pulse.timingFunction = [CAMediaTimingFunction
+        functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    [layer addAnimation:pulse forKey:@"serverSheetPing"];
 }
 
 @implementation SenkoServerSheet
@@ -105,9 +130,18 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     [_rows addSubview:key];
 
     UILabel *val = [self makeLabel:13.0f bold:YES muted:NO];
-    val.text = [value length] ? value : @"—";
+    val.text = [value length] ? value : @"-";
     val.textAlignment = NSTextAlignmentRight;
-    val.lineBreakMode = NSLineBreakByTruncatingMiddle;
+/* a host or a uuid clipped in the middle reads as neither, so the face shrinks
+   first and only the tail goes when that is not enough */
+    val.lineBreakMode = NSLineBreakByTruncatingTail;
+    val.adjustsFontSizeToFitWidth = YES;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    val.minimumFontSize = 10.0f;
+#pragma clang diagnostic pop
+    if ([val respondsToSelector:@selector(setMinimumScaleFactor:)])
+        val.minimumScaleFactor = 0.75f;
     [_rows addSubview:val];
     if (store) *store = val;
 }
@@ -168,7 +202,9 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     [_card addSubview:_close];
 
     _badge = [[[UIImageView alloc] initWithFrame:CGRectZero] autorelease];
-    _badge.contentMode = UIViewContentModeScaleAspectFit;
+    _badge.contentMode = UIViewContentModeScaleAspectFill;
+    _badge.layer.cornerRadius = 8.0f;
+    _badge.layer.masksToBounds = YES;
     NSString *code = SenkoServerFlagCode(server->remark);
     UIImage *flag = [code length]
         ? [UIImage imageNamed:[NSString stringWithFormat:@"flag-%@.png", code]]
@@ -176,6 +212,7 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     /* a drawn globe stands in for the missing flag, so a server without a
        country marker still gets the same badge geometry */
     _badge.image = flag ? flag : SenkoIconGlobe(30.0f, kAccentBlue);
+    if (!flag) _badge.contentMode = UIViewContentModeScaleAspectFit;
     [_content addSubview:_badge];
 
     _title = [self makeLabel:19.0f bold:YES muted:NO];
@@ -200,11 +237,10 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     [self addRowTitle:@"Protocol" value:server->proto store:NULL];
     [self addRowTitle:@"Transport" value:server->net store:NULL];
     [self addRowTitle:@"Security" value:server->security store:NULL];
-/* the row carries a tcp handshake to the server's own address, not a request
-   carried through the tunnel the way happ and v2ray report theirs, and a bare
-   "latency" made the two look like the same measurement */
-    [self addRowTitle:@"TCP latency"
-                value:ping ? [NSString stringWithFormat:@"%d ms", [ping intValue]] : nil
+/* the row carries the selected profile handshake when idle, matching the
+   useful latency shown by happ instead of a bare socket connect */
+    [self addRowTitle:SenkoLocalizedText(@"Latency")
+                value:ServerPingText(ping)
                 store:&_pingValue];
     [self addRowTitle:@"Source" value:source store:NULL];
     [self addRowTitle:@"Link" value:SenkoLocalizedText(@"loading") store:&_linkValue];
@@ -227,7 +263,8 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     primaryFill.colors = [NSArray arrayWithObjects:(id)primaryTop.CGColor,
                           (id)primaryBottom.CGColor, nil];
     UIColor *primaryInk = SenkoPillLabelColor(primaryTop);
-    _primary.layer.masksToBounds = YES;
+    _primary.layer.borderWidth = 1.0f;
+    _primary.layer.borderColor = [UIColor colorWithWhite:0.0f alpha:0.22f].CGColor;
 
     /* the label owns the full button width, so its centre is the pill centre.
        UIButton otherwise centres the icon and title as one run and shifts the
@@ -318,6 +355,7 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     _pingValue.text = ms && [ms intValue] >= 0
         ? [NSString stringWithFormat:@"%d ms", [ms intValue]]
         : SenkoLocalizedText(@"unreachable");
+    ServerPingButtonBusy([_actionButtons count] ? [_actionButtons objectAtIndex:0] : nil, NO);
 }
 
 /* everything below the grabber band, at its natural height. the card clamps to
@@ -417,15 +455,22 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     CAGradientLayer *primaryFill = ServerPrimaryFill(_primary);
     SenkoSetLayerFrame(primaryFill, _primary.bounds);
     primaryFill.cornerRadius = 24.0f;
-    _primaryTitle.frame = _primary.bounds;
+    primaryFill.masksToBounds = YES;
+    UIColor *primaryTop = _active ? kIdleGrey : kConnOn;
+    UIColor *primaryBottom = _active ? kIdleGreyLo : kConnOnLo;
+    SenkoApplyRelief(_primary, primaryFill, primaryTop, primaryBottom, 24.0f);
     CGFloat primaryTextW = ceilf(SenkoTextWidth(_primaryTitle.text, _primaryTitle.font));
     CGFloat primaryGlyphSide = 19.0f;
-    CGFloat primaryGlyphX = floorf(CGRectGetMidX(_primary.bounds) -
-                                   primaryTextW * 0.5f - 8.0f - primaryGlyphSide);
-    if (primaryGlyphX < 12.0f) primaryGlyphX = 12.0f;
-    _primaryGlyph.frame = CGRectMake(primaryGlyphX,
+    CGFloat primaryGap = 8.0f;
+    CGFloat primaryGroupW = primaryGlyphSide + primaryGap + primaryTextW;
+    CGFloat primaryGroupX = floorf((_primary.bounds.size.width - primaryGroupW) * 0.5f);
+    if (primaryGroupX < 12.0f) primaryGroupX = 12.0f;
+    _primaryGlyph.frame = CGRectMake(primaryGroupX,
         floorf((_primary.bounds.size.height - primaryGlyphSide) * 0.5f),
         primaryGlyphSide, primaryGlyphSide);
+    _primaryTitle.frame = CGRectMake(primaryGroupX + primaryGlyphSide + primaryGap,
+                                     0.0f, primaryTextW,
+                                     _primary.bounds.size.height);
     y += 48.0f + 12.0f;
 
     NSUInteger count = [_actionButtons count];
@@ -444,18 +489,6 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     }
 }
 
-/* the card is a rounded, clipped view holding a scroll view, so every frame of
-   the slide costs an offscreen pass. flattening it to one cached bitmap for the
-   duration is what takes the stutter out of the entrance on an a5 ipad */
-- (void)setTransitionCache:(BOOL)on {
-    if (on) {
-        _card.layer.rasterizationScale = [UIScreen mainScreen].scale;
-        _card.layer.shouldRasterize = YES;
-    } else {
-        _card.layer.shouldRasterize = NO;
-    }
-}
-
 - (void)presentInView:(UIView *)host {
     if (!host) return;
     self.frame = host.bounds;
@@ -463,30 +496,33 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
     [host addSubview:self];
     [self layoutIfNeeded];
     CGFloat travel = self.bounds.size.height - _card.frame.origin.y;
-    _card.transform = CGAffineTransformMakeTranslation(0, travel);
-    [self setTransitionCache:YES];
-    SenkoAnimate(0.22, ^{ _backdrop.alpha = 1.0f; }, NULL);
-    /* a spring overshoots past the bottom edge and back, which is two more
-       composited passes than the card is worth; one settled ease is steadier */
-    SenkoAnimate(0.26, ^{
+    if (travel > 46.0f) travel = 46.0f;
+    _card.transform = CGAffineTransformConcat(CGAffineTransformMakeTranslation(0, travel),
+                                               CGAffineTransformMakeScale(0.985f, 0.985f));
+    _card.alpha = 0.0f;
+    /* one short transform is smoother than a two-step overshoot on the older
+       gpu. limiting the travel also avoids moving the sheet's whole backing
+       store across the screen before its controls can be used. */
+    [UIView animateWithDuration:0.24
+                          delay:0
+                        options:UIViewAnimationOptionBeginFromCurrentState |
+                                UIViewAnimationOptionCurveEaseOut
+                     animations:^{
+        _backdrop.alpha = 1.0f;
         _card.transform = CGAffineTransformIdentity;
-    }, ^(BOOL done) {
-        (void)done;
-        [self setTransitionCache:NO];
-    });
+        _card.alpha = 1.0f;
+    } completion:NULL];
 }
 
 - (void)dismiss {
     if (_dismissing) return;
     _dismissing = YES;
     CGFloat travel = self.bounds.size.height - _card.frame.origin.y;
-    [self setTransitionCache:YES];
-    SenkoAnimate(0.24, ^{
+    SenkoAnimate(0.18, ^{
         _backdrop.alpha = 0.0f;
         _card.transform = CGAffineTransformMakeTranslation(0, travel);
     }, ^(BOOL done) {
         (void)done;
-        [self setTransitionCache:NO];
         [self removeFromSuperview];
     });
 }
@@ -566,6 +602,7 @@ static CAGradientLayer *ServerPrimaryFill(UIButton *button) {
 
 - (void)pingTapped {
     _pingValue.text = SenkoLocalizedText(@"checking");
+    ServerPingButtonBusy([_actionButtons count] ? [_actionButtons objectAtIndex:0] : nil, YES);
     [self report:SenkoServerSheetActionPing];
 }
 

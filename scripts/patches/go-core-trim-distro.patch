@@ -1,0 +1,75 @@
+diff --git a/main/distro/senko/senko.go b/main/distro/senko/senko.go
+new file mode 100644
+index 00000000..1e3e811e
+--- /dev/null
++++ b/main/distro/senko/senko.go
+@@ -0,0 +1,56 @@
++// package senko registers only the xray-core features senko actually drives.
++//
++// daemon/go_config.c is the only writer of senko-core's config, and it only
++// ever emits: a "tun" inbound, a "vless" outbound (network tcp/ws/grpc/xhttp,
++// security tls/reality) or a "socks"/"http" fallback outbound, a "freedom"
++// direct outbound, a "blackhole" block outbound, and field routing rules by
++// domain or ip. senko-core is invoked as "run -c <file>.json", nothing else.
++//
++// main/distro/all additionally links vmess, trojan, shadowsocks, wireguard,
++// dokodemo, loopback, kcp, httpupgrade, dns/fakedns/geodata, and the full
++// commander/observatory/reverse/metrics/stats/toml/yaml/remote-config stack,
++// none of which senko ever configures. vless, trojan, shadowsocks, and
++// reality already have a native C implementation in daemon/core for the
++// non-tun path, so senko-core does not need xray's copies of them either.
++package senko
++
++import (
++	// mandatory: build inbound/outbound handlers and dispatch traffic
++	_ "github.com/xtls/xray-core/app/dispatcher"
++	_ "github.com/xtls/xray-core/app/proxyman/inbound"
++	_ "github.com/xtls/xray-core/app/proxyman/outbound"
++
++	// go_config.c always emits a top-level "log" block and "routing" rules
++	_ "github.com/xtls/xray-core/app/log"
++	_ "github.com/xtls/xray-core/app/router"
++
++	// fixes a dependency cycle caused by core import in the internet package
++	_ "github.com/xtls/xray-core/transport/internet/tagged/taggedimpl"
++
++	// proxies go_config.c can emit: tun inbound, vless outbound, the plain
++	// socks/http fallback outbound, freedom direct, blackhole block
++	_ "github.com/xtls/xray-core/proxy/blackhole"
++	_ "github.com/xtls/xray-core/proxy/freedom"
++	_ "github.com/xtls/xray-core/proxy/http"
++	_ "github.com/xtls/xray-core/proxy/socks"
++	_ "github.com/xtls/xray-core/proxy/tun"
++	_ "github.com/xtls/xray-core/proxy/vless/inbound"
++	_ "github.com/xtls/xray-core/proxy/vless/outbound"
++
++	// transports network_name() in go_config.c can produce, plus their
++	// security settings
++	_ "github.com/xtls/xray-core/transport/internet/grpc"
++	_ "github.com/xtls/xray-core/transport/internet/reality"
++	_ "github.com/xtls/xray-core/transport/internet/splithttp"
++	_ "github.com/xtls/xray-core/transport/internet/tcp"
++	_ "github.com/xtls/xray-core/transport/internet/tls"
++	_ "github.com/xtls/xray-core/transport/internet/udp"
++	_ "github.com/xtls/xray-core/transport/internet/websocket"
++
++	// senko-core is only ever run with "-c config.json"
++	_ "github.com/xtls/xray-core/main/json"
++
++	// confloader/external.ConfigLoader is what reads the -c path from disk;
++	// without it confloader.LoadConfig falls back to reading stdin instead
++	_ "github.com/xtls/xray-core/main/confloader/external"
++)
+diff --git a/main/main.go b/main/main.go
+index e8824e6f..35e181f0 100644
+--- a/main/main.go
++++ b/main/main.go
+@@ -5,7 +5,7 @@ import (
+ 	"os"
+ 
+ 	"github.com/xtls/xray-core/main/commands/base"
+-	_ "github.com/xtls/xray-core/main/distro/all"
++	_ "github.com/xtls/xray-core/main/distro/senko"
+ )
+ 
+ func main() {

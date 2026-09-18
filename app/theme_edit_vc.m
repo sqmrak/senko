@@ -71,6 +71,8 @@ static NSString * const kChannelNames[4] = { @"R", @"G", @"B", @"A" };
     self.title = SenkoLocalizedText(SenkoThemeSlotTitle(_slot));
     if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
         ((void (*)(id, SEL, NSUInteger))objc_msgSend)(self, @selector(setEdgesForExtendedLayout:), 0);
+    if ([self respondsToSelector:@selector(setAutomaticallyAdjustsScrollViewInsets:)])
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(self, @selector(setAutomaticallyAdjustsScrollViewInsets:), NO);
     self.view.backgroundColor = kBG;
 
     CGFloat top = 20.0f;
@@ -177,7 +179,88 @@ static NSString * const kChannelNames[4] = { @"R", @"G", @"B", @"A" };
 
 @end
 
-/* ---------------------------------------------------------------------- */
+/* the style rows carry a segmented control and a slider. hung off accessoryView
+   each one is stuck at a fixed width, which on a 320pt screen left the three
+   segment titles overlapping each other and clipped the row caption to an
+   ellipsis: the row only read correctly in landscape. the control gets a line
+   of its own under the caption instead, measured from the cell the table
+   actually hands out, so it fits in either orientation and on ipad */
+@interface ThemeControlCell : UITableViewCell {
+    UILabel *_caption;
+    UILabel *_value;
+    UIView  *_control;
+}
++ (CGFloat)rowHeight;
+- (void)setCaptionText:(NSString *)caption;
+- (void)setValueText:(NSString *)value;
+- (void)setControlView:(UIView *)control;
+@end
+
+@implementation ThemeControlCell
+
++ (CGFloat)rowHeight { return 70.0f; }
+
+- (id)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)cid {
+    if ((self = [super initWithStyle:style reuseIdentifier:cid])) {
+        _caption = [[UILabel alloc] initWithFrame:CGRectZero];
+        _caption.backgroundColor = [UIColor clearColor];
+        _caption.font = [UIFont boldSystemFontOfSize:15.0f];
+        [self.contentView addSubview:_caption];
+
+        _value = [[UILabel alloc] initWithFrame:CGRectZero];
+        _value.backgroundColor = [UIColor clearColor];
+        _value.font = [UIFont systemFontOfSize:15.0f];
+        _value.textAlignment = NSTextAlignmentRight;
+        [self.contentView addSubview:_value];
+
+        self.selectionStyle = UITableViewCellSelectionStyleNone;
+    }
+    return self;
+}
+
+- (void)dealloc {
+    [_caption release];
+    [_value release];
+    [_control release];
+    [super dealloc];
+}
+
+- (void)setCaptionText:(NSString *)caption {
+    _caption.text = caption;
+    SenkoStyleInkLabel(_caption);
+}
+
+- (void)setValueText:(NSString *)value {
+    _value.text = value;
+    SenkoStyleMutedLabel(_value);
+    [self setNeedsLayout];
+}
+
+- (void)setControlView:(UIView *)control {
+    if (_control == control) return;
+    [_control removeFromSuperview];
+    [_control release];
+    _control = [control retain];
+    if (_control) [self.contentView addSubview:_control];
+    [self setNeedsLayout];
+}
+
+- (void)layoutSubviews {
+    CGRect b;
+    CGFloat pad = 14.0f;
+    CGFloat w;
+    CGFloat valueW;
+    [super layoutSubviews];
+    b = self.contentView.bounds;
+    w = b.size.width - pad * 2.0f;
+    if (w < 60.0f) w = 60.0f;
+    valueW = [_value.text length] ? 72.0f : 0.0f;
+    _caption.frame = CGRectMake(pad, 8.0f, w - valueW, 20.0f);
+    _value.frame = CGRectMake(pad + w - valueW, 8.0f, valueW, 20.0f);
+    _control.frame = CGRectMake(pad, 32.0f, w, 30.0f);
+}
+
+@end
 
 @interface ThemeEditVC () <UITableViewDataSource, UITableViewDelegate,
                            UITextFieldDelegate, UIAlertViewDelegate> {
@@ -216,6 +299,9 @@ enum { SecName = 0, SecStyle, SecVariant, SecColors, SecActions, SecCount };
 /* ios 5 releases the view of an offscreen controller, so the retained table
    must go with it instead of pointing into a freed hierarchy */
 - (void)viewDidUnload {
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:SenkoThemeDidChangeNotification
+                                                  object:nil];
     _tv.dataSource = nil;
     _tv.delegate = nil;
     [_tv release];
@@ -234,6 +320,10 @@ enum { SecName = 0, SecStyle, SecVariant, SecColors, SecActions, SecCount };
                                        style:UITableViewStyleGrouped];
     _tv.dataSource = self;
     _tv.delegate = self;
+    _tv.alwaysBounceVertical = YES;
+    SenkoScrollViewUseManualInsets(_tv);
+    _tv.contentInset = UIEdgeInsetsMake(8.0f, 0.0f, 16.0f, 0.0f);
+    _tv.scrollIndicatorInsets = _tv.contentInset;
     _tv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     _tv.backgroundColor = kBG;
     if ([_tv respondsToSelector:@selector(setBackgroundView:)])
@@ -313,9 +403,16 @@ enum { SecName = 0, SecStyle, SecVariant, SecColors, SecActions, SecCount };
     return [[self headerTitleForSection:s] length] ? 32.0f : 12.0f;
 }
 
+- (BOOL)isStackedControlRow:(NSIndexPath *)ip {
+    if (ip.section == SecStyle) return YES;
+    return ip.section == SecVariant && SenkoCustomDraftAllowsDark(_draft);
+}
+
 - (CGFloat)tableView:(UITableView *)tv heightForRowAtIndexPath:(NSIndexPath *)ip {
     (void)tv;
-    return ip.section == SecColors ? 54.0f : 44.0f;
+    if (ip.section == SecColors) return 54.0f;
+    if ([self isStackedControlRow:ip]) return [ThemeControlCell rowHeight];
+    return 44.0f;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
@@ -341,6 +438,53 @@ enum { SecName = 0, SecStyle, SecVariant, SecColors, SecActions, SecCount };
         swatch.layer.borderColor = [[UIColor colorWithWhite:0.5f alpha:0.45f] CGColor];
         cell.accessoryView = swatch;
         cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+    } else if ([self isStackedControlRow:ip]) {
+        NSString *cid = ip.section == SecStyle
+            ? (ip.row == 0 ? @"look" : @"radius")
+            : @"variant";
+        ThemeControlCell *row = (ThemeControlCell *)[tv dequeueReusableCellWithIdentifier:cid];
+        if (!row)
+            row = [[[ThemeControlCell alloc]
+                    initWithStyle:UITableViewCellStyleDefault
+                  reuseIdentifier:cid] autorelease];
+        if (ip.section == SecStyle && ip.row == 0) {
+            UISegmentedControl *seg = [[[UISegmentedControl alloc] initWithItems:
+                [NSArray arrayWithObjects:SenkoLocalizedText(@"Classic"),
+                                          SenkoLocalizedText(@"Flat"),
+                                          SenkoLocalizedText(@"Glass"), nil]] autorelease];
+            seg.selectedSegmentIndex = [[_draft objectForKey:@"style"] intValue];
+            [seg addTarget:self action:@selector(styleChanged:)
+          forControlEvents:UIControlEventValueChanged];
+            [row setCaptionText:SenkoLocalizedText(@"Look")];
+            [row setValueText:nil];
+            [row setControlView:seg];
+        } else if (ip.section == SecStyle) {
+            UISlider *s = [[[UISlider alloc] initWithFrame:CGRectZero] autorelease];
+            s.minimumValue = 0.0f;
+            s.maximumValue = 32.0f;
+            s.value = (float)[[_draft objectForKey:@"radius"] doubleValue];
+            [s addTarget:self action:@selector(radiusChanged:)
+        forControlEvents:UIControlEventValueChanged];
+            /* saving rebuilds the theme and reloads this table, which would tear
+               the slider out from under the finger; commit on release instead */
+            [s addTarget:self action:@selector(radiusCommitted:)
+        forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside |
+                         UIControlEventTouchCancel];
+            [row setCaptionText:SenkoLocalizedText(@"Corners")];
+            [row setValueText:[self radiusReadoutFor:s.value]];
+            [row setControlView:s];
+        } else {
+            UISegmentedControl *seg = [[[UISegmentedControl alloc] initWithItems:
+                [NSArray arrayWithObjects:SenkoLocalizedText(@"Light"),
+                                          SenkoLocalizedText(@"Dark"), nil]] autorelease];
+            seg.selectedSegmentIndex = _light ? 0 : 1;
+            [seg addTarget:self action:@selector(variantChanged:)
+          forControlEvents:UIControlEventValueChanged];
+            [row setCaptionText:SenkoLocalizedText(@"Editing")];
+            [row setValueText:nil];
+            [row setControlView:seg];
+        }
+        cell = row;
     } else {
         static NSString *cid = @"row";
         cell = [tv dequeueReusableCellWithIdentifier:cid];
@@ -364,48 +508,10 @@ enum { SecName = 0, SecStyle, SecVariant, SecColors, SecActions, SecCount };
             f.textColor = kInk;
             cell.textLabel.text = SenkoLocalizedText(@"Name");
             cell.accessoryView = f;
-        } else if (ip.section == SecStyle && ip.row == 0) {
-            UISegmentedControl *seg = [[[UISegmentedControl alloc] initWithItems:
-                [NSArray arrayWithObjects:SenkoLocalizedText(@"Classic"),
-                                          SenkoLocalizedText(@"Flat"),
-                                          SenkoLocalizedText(@"Glass"), nil]] autorelease];
-            seg.frame = CGRectMake(0, 0, 190, 30);
-            seg.selectedSegmentIndex = [[_draft objectForKey:@"style"] intValue];
-            [seg addTarget:self action:@selector(styleChanged:)
-          forControlEvents:UIControlEventValueChanged];
-            cell.textLabel.text = SenkoLocalizedText(@"Look");
-            cell.accessoryView = seg;
-        } else if (ip.section == SecStyle) {
-            UISlider *s = [[[UISlider alloc]
-                initWithFrame:CGRectMake(0, 0, 150, 30)] autorelease];
-            s.minimumValue = 0.0f;
-            s.maximumValue = 32.0f;
-            s.value = (float)[[_draft objectForKey:@"radius"] doubleValue];
-            [s addTarget:self action:@selector(radiusChanged:)
-        forControlEvents:UIControlEventValueChanged];
-            /* saving rebuilds the theme and reloads this table, which would tear
-               the slider out from under the finger; commit on release instead */
-            [s addTarget:self action:@selector(radiusCommitted:)
-        forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside |
-                         UIControlEventTouchCancel];
-            cell.textLabel.text = [self radiusTitleFor:s.value];
-            cell.accessoryView = s;
         } else if (ip.section == SecVariant) {
-            if (SenkoCustomDraftAllowsDark(_draft)) {
-                UISegmentedControl *seg = [[[UISegmentedControl alloc] initWithItems:
-                    [NSArray arrayWithObjects:SenkoLocalizedText(@"Light"),
-                                              SenkoLocalizedText(@"Dark"), nil]] autorelease];
-                seg.frame = CGRectMake(0, 0, 150, 30);
-                seg.selectedSegmentIndex = _light ? 0 : 1;
-                [seg addTarget:self action:@selector(variantChanged:)
-              forControlEvents:UIControlEventValueChanged];
-                cell.textLabel.text = SenkoLocalizedText(@"Editing");
-                cell.accessoryView = seg;
-            } else {
-                cell.textLabel.text = SenkoLocalizedText(@"Add dark variant");
-                cell.selectionStyle = UITableViewCellSelectionStyleBlue;
-                cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-            }
+            cell.textLabel.text = SenkoLocalizedText(@"Add dark variant");
+            cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         } else {
             cell.selectionStyle = UITableViewCellSelectionStyleBlue;
             cell.textLabel.text = ip.row == 0
@@ -434,22 +540,20 @@ enum { SecName = 0, SecStyle, SecVariant, SecColors, SecActions, SecCount };
     [self persist];
 }
 
-- (NSString *)radiusTitleFor:(float)value {
-    return [NSString stringWithFormat:@"%@  %d",
-            SenkoLocalizedText(@"Corners"), (int)(value + 0.5f)];
+- (NSString *)radiusReadoutFor:(float)value {
+    return [NSString stringWithFormat:@"%d", (int)(value + 0.5f)];
 }
 
 /* walk up to the owning cell so the readout survives cell reuse */
-static UITableViewCell *SenkoCellOf(UIView *view) {
-    while (view && ![view isKindOfClass:[UITableViewCell class]])
+static ThemeControlCell *SenkoCellOf(UIView *view) {
+    while (view && ![view isKindOfClass:[ThemeControlCell class]])
         view = view.superview;
-    return (UITableViewCell *)view;
+    return (ThemeControlCell *)view;
 }
 
 - (void)radiusChanged:(UISlider *)slider {
     [_draft setObject:[NSNumber numberWithDouble:(double)slider.value] forKey:@"radius"];
-    UITableViewCell *cell = SenkoCellOf(slider);
-    cell.textLabel.text = [self radiusTitleFor:slider.value];
+    [SenkoCellOf(slider) setValueText:[self radiusReadoutFor:slider.value]];
 }
 
 - (void)radiusCommitted:(UISlider *)slider {

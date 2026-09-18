@@ -6,6 +6,28 @@
 #import "theme_edit_vc.h"
 #import "theme/theme_custom.h"
 #include <objc/message.h>
+#include <math.h>
+
+/* the segmented control belongs to the cell's geometry. laying it out while
+   cellForRow is still running uses the previous orientation's content bounds
+   and makes the selection slab jump during a theme change */
+@interface SenkoThemeModeCell : UITableViewCell
+@end
+
+@implementation SenkoThemeModeCell
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    UIView *view = [self.contentView viewWithTag:9201];
+    if (![view isKindOfClass:[UISegmentedControl class]]) return;
+    CGFloat pad = 14.0f;
+    CGFloat height = 32.0f;
+    CGFloat width = self.contentView.bounds.size.width - pad * 2.0f;
+    if (width < 1.0f) width = 1.0f;
+    view.frame = CGRectMake(pad,
+        floorf((self.contentView.bounds.size.height - height) * 0.5f),
+        width, height);
+}
+@end
 
 @interface ThemeGroupVC : UIViewController <UITableViewDataSource, UITableViewDelegate,
                                              UIActionSheetDelegate,
@@ -37,6 +59,7 @@
 }
 
 - (void)dealloc {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     _tv.dataSource = nil;
     _tv.delegate = nil;
@@ -49,6 +72,9 @@
 /* ios 5 releases the view of an offscreen controller, so the retained table
    must go with it instead of pointing into a freed hierarchy */
 - (void)viewDidUnload {
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:SenkoThemeDidChangeNotification
+                                                  object:nil];
     _tv.dataSource = nil;
     _tv.delegate = nil;
     [_tv release];
@@ -61,6 +87,8 @@
     self.title = SenkoThemeGroupTitle(_groupId);
     if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
         ((void (*)(id, SEL, NSUInteger))objc_msgSend)(self, @selector(setEdgesForExtendedLayout:), 0);
+    if ([self respondsToSelector:@selector(setAutomaticallyAdjustsScrollViewInsets:)])
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(self, @selector(setAutomaticallyAdjustsScrollViewInsets:), NO);
     if ([self respondsToSelector:@selector(setExtendedLayoutIncludesOpaqueBars:)])
         ((void (*)(id, SEL, BOOL))objc_msgSend)(self, @selector(setExtendedLayoutIncludesOpaqueBars:), NO);
     self.view.backgroundColor = kBG;
@@ -68,6 +96,10 @@
                                        style:UITableViewStyleGrouped];
     _tv.dataSource = self;
     _tv.delegate = self;
+    _tv.alwaysBounceVertical = YES;
+    SenkoScrollViewUseManualInsets(_tv);
+    _tv.contentInset = UIEdgeInsetsMake(8.0f, 0.0f, 16.0f, 0.0f);
+    _tv.scrollIndicatorInsets = _tv.contentInset;
     _tv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     _tv.backgroundColor = kBG;
     _tv.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
@@ -279,6 +311,7 @@
 }
 
 - (void)dealloc {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     _tv.dataSource = nil;
     _tv.delegate = nil;
@@ -290,6 +323,10 @@
 /* ios 5 releases the view of an offscreen controller, so the retained table
    must go with it instead of pointing into a freed hierarchy */
 - (void)viewDidUnload {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:SenkoThemeDidChangeNotification
+                                                  object:nil];
     _tv.dataSource = nil;
     _tv.delegate = nil;
     [_tv release];
@@ -300,9 +337,12 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"Themes";
+    [_groups release];
     _groups = [SenkoThemeGroupIds() retain];
     if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
         ((void (*)(id, SEL, NSUInteger))objc_msgSend)(self, @selector(setEdgesForExtendedLayout:), 0);
+    if ([self respondsToSelector:@selector(setAutomaticallyAdjustsScrollViewInsets:)])
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(self, @selector(setAutomaticallyAdjustsScrollViewInsets:), NO);
     if ([self respondsToSelector:@selector(setExtendedLayoutIncludesOpaqueBars:)])
         ((void (*)(id, SEL, BOOL))objc_msgSend)(self, @selector(setExtendedLayoutIncludesOpaqueBars:), NO);
     self.view.backgroundColor = kBG;
@@ -310,6 +350,10 @@
                                        style:UITableViewStyleGrouped];
     _tv.dataSource = self;
     _tv.delegate = self;
+    _tv.alwaysBounceVertical = YES;
+    SenkoScrollViewUseManualInsets(_tv);
+    _tv.contentInset = UIEdgeInsetsMake(8.0f, 0.0f, 16.0f, 0.0f);
+    _tv.scrollIndicatorInsets = _tv.contentInset;
     _tv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     _tv.backgroundColor = kBG;
     _tv.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
@@ -345,7 +389,23 @@
     SenkoThemeSfxPrepare();
     [_groups release];
     _groups = [SenkoThemeGroupIds() retain];
+    /* SenkoThemeSetLight posts inside the segmented control action. replacing
+       that cell before UIKit finishes the action makes its thumb jump between
+       the old and new frames, so the visual reload waits for that event to end */
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(reloadThemeTable)
+                                               object:nil];
+    [self performSelector:@selector(reloadThemeTable) withObject:nil afterDelay:0.0];
+}
+
+- (void)reloadThemeTable {
+    CGPoint offset = _tv.contentOffset;
+    BOOL animated = [UIView areAnimationsEnabled];
+    if (animated) [UIView setAnimationsEnabled:NO];
     [_tv reloadData];
+    [_tv layoutIfNeeded];
+    _tv.contentOffset = offset;
+    if (animated) [UIView setAnimationsEnabled:YES];
 }
 
 - (void)modeSegChanged:(UISegmentedControl *)seg {
@@ -390,7 +450,8 @@
     if (s == 0) lab.text = @"Style";
     else if (s == 1) lab.text = @"Appearance";
     else lab.text = SenkoThemeIsMiside() ? @"ooouch" : @"meowmeowmeow";
-    SenkoStyleMutedLabel(lab);
+    lab.textAlignment = NSTextAlignmentCenter;
+    SenkoStyleAccentLabel(lab);
     lab.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     [wrap addSubview:lab];
     return wrap;
@@ -409,6 +470,7 @@
         UILabel *lab = [[[UILabel alloc] initWithFrame:CGRectMake(16, 6, w - 32, 44)] autorelease];
         lab.backgroundColor = [UIColor clearColor];
         lab.numberOfLines = 0;
+        lab.textAlignment = NSTextAlignmentCenter;
         lab.font = [UIFont systemFontOfSize:12];
         if (SenkoThemeIsMiside())
             lab.text = @"Senko-Miside is Dark only: pattern wallpaper and candy heart ON.";
@@ -429,6 +491,7 @@
         UILabel *lab = [[[UILabel alloc] initWithFrame:CGRectMake(16, 4, w - 32, 32)] autorelease];
         lab.backgroundColor = [UIColor clearColor];
         lab.numberOfLines = 0;
+        lab.textAlignment = NSTextAlignmentCenter;
         lab.font = [UIFont systemFontOfSize:12];
         lab.text = SenkoThemeIsMiside()
             ? @"Play a short ouch on every button tap."
@@ -489,8 +552,8 @@
         static NSString *cid = @"mode";
         UITableViewCell *cell = [tv dequeueReusableCellWithIdentifier:cid];
         if (!cell)
-            cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
-                                           reuseIdentifier:cid] autorelease];
+            cell = [[[SenkoThemeModeCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                                reuseIdentifier:cid] autorelease];
         cell.textLabel.text = nil;
         cell.detailTextLabel.text = nil;
         cell.backgroundColor = kCellHi;
@@ -512,12 +575,7 @@
           forControlEvents:UIControlEventValueChanged];
             [cell.contentView addSubview:seg];
         }
-        CGFloat pad = 14.0f;
-        CGFloat h = 32.0f;
-        seg.frame = CGRectMake(pad, (52.0f - h) / 2.0f,
-                               cell.contentView.bounds.size.width - pad * 2.0f, h);
-        if (seg.frame.size.width < 1)
-            seg.frame = CGRectMake(pad, 10, tv.bounds.size.width - 40, h);
+        [cell setNeedsLayout];
         if (!SenkoThemeAllowsDark()) {
             seg.selectedSegmentIndex = SenkoThemeIsMiside() ? 0 : 1;
             seg.enabled = NO;

@@ -52,6 +52,17 @@ int main(void) {
     char pf[8192];
     size_t pf_len = 0;
     char ifnames[1][32] = {{ "en0" }};
+    ruleset_t policy;
+    ruleset_init(&policy);
+    ok("add direct cidr",
+       ruleset_add_text(&policy, "direct ip-cidr 198.51.100.0/24", 32, NULL) == RULES_OK);
+    ok("add first block cidr",
+       ruleset_add_text(&policy, "block ip-cidr 192.0.2.0/24", 28, NULL) == RULES_OK);
+    ok("add second block cidr",
+       ruleset_add_text(&policy, "block ip-cidr 203.0.113.128/25", 32, NULL) == RULES_OK);
+    ok("add conflicting direct cidr",
+       ruleset_add_text(&policy, "direct ip-cidr 192.0.2.0/25",
+                        strlen("direct ip-cidr 192.0.2.0/25"), NULL) == RULES_OK);
     for (int mode = 0; mode < ROUTING_PF_MODE_COUNT; ++mode) {
         int rc = routing_pf_conf("203.0.113.10,203.0.113.11", ifnames, 1,
                                  41001, 41002, (routing_pf_mode_t)mode,
@@ -63,6 +74,25 @@ int main(void) {
             ok("pf keeps local traffic out", strstr(pf, "pass out quick on en0 inet from any to <senko_bypass>") != NULL);
         }
     }
+
+    ok("pf compiles cidr tables",
+       routing_pf_conf_rules("203.0.113.10", &policy, ifnames, 1,
+                             41001, 41002, ROUTING_PF_ROUTE_TO_LO0,
+                             pf, sizeof pf, &pf_len) == ROUTING_OK &&
+       strstr(pf, "198.51.100.0/24") != NULL &&
+       strstr(pf, "192.0.2.0/25") == NULL &&
+       strstr(pf, "table <senko_block> persist { 192.0.2.0/24, 203.0.113.128/25 }") != NULL);
+    const char *block_rule = strstr(pf, "block return out quick on en0 inet from any to <senko_block>");
+    const char *translation = strstr(pf, "nat on en0");
+    ok("pf rejects blocked cidrs before redirect", block_rule && translation && block_rule < translation);
+
+    ok("compat pf keeps cidr policy without tables",
+       routing_pf_conf_rules("203.0.113.10", &policy, ifnames, 1,
+                             41001, 41002, ROUTING_PF_COMPAT_RDR,
+                             pf, sizeof pf, &pf_len) == ROUTING_OK &&
+       strstr(pf, "<senko_block>") == NULL &&
+       strstr(pf, "block return out quick on en0 inet from any to { 192.0.2.0/24, 203.0.113.128/25 }") != NULL &&
+       strstr(pf, "198.51.100.0/24") != NULL);
     ok("compat pf avoids tables", routing_pf_conf("203.0.113.10", ifnames, 1,
                                                     41001, 41002,
                                                     ROUTING_PF_COMPAT_RDR,
@@ -78,6 +108,13 @@ int main(void) {
                                                        pf, sizeof pf, &pf_len) == ROUTING_OK &&
        pf_len > 0 && strstr(pf, "set timeout") == NULL &&
        strstr(pf, "rdr pass on en0") != NULL);
+
+    ok("anchor duplicates cidr block policy",
+       routing_pf_anchor_conf_rules("203.0.113.10", &policy, ifnames, 1,
+                                    41001, 41002, ROUTING_PF_LEGACY_RDR,
+                                    pf, sizeof pf, &pf_len) == ROUTING_OK &&
+       strstr(pf, "table <senko_block>") != NULL &&
+       strstr(pf, "block return out quick on en0 inet from any to <senko_block>") != NULL);
 
     int dynamic_tcp = routing_pick_free_port(0, 0);
     ok("dynamic tcp port", dynamic_tcp > 0 && dynamic_tcp <= 65535);

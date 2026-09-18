@@ -22,6 +22,7 @@
 #define kSenkoStagePath  SENKO_CRASH_STAGE
 #define kSenkoScreenPath SENKO_CRASH_SCREEN
 #define kSenkoFailsPath  SENKO_CRASH_FAILS
+#define kSenkoSafePath   SENKO_CRASH_SAFE
 
 /* one bad launch is as likely to be a jetsam or a springboard restart as a
    defect, so safe mode waits for the second one in a row */
@@ -237,7 +238,10 @@ void SenkoCrashInstall(void) {
         gFailedLaunches = 0;
     }
     write_fail_count(gFailedLaunches);
-    gSafeMode = gFailedLaunches >= kSenkoSafeModeThreshold;
+/* a safe mode asked for by hand is not earned by dead launches, so it has its
+   own marker and outlives the count that gets zeroed by a good launch */
+    gSafeMode = gFailedLaunches >= kSenkoSafeModeThreshold ||
+                access(kSenkoSafePath, F_OK) == 0;
 
     mkdir(kSenkoCrashDir, 0755);
     rename(kSenkoCrashPath, kSenkoPrevPath);
@@ -332,6 +336,13 @@ int SenkoCrashFailedLaunches(void) {
 void SenkoCrashClearSafeMode(void) {
     gSafeMode = 0;
     write_fail_count(0);
+    unlink(kSenkoSafePath);
+}
+
+void SenkoCrashEnterSafeMode(void) {
+    mkdir(kSenkoCrashDir, 0755);
+    int fd = open(kSenkoSafePath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) close(fd);
 }
 
 NSString *SenkoCrashLastReport(void) {

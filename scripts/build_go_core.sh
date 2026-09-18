@@ -22,6 +22,21 @@ if [[ ! -f "${SRC}/LICENSE" ]]; then
   exit 1
 fi
 
+# main/distro/all links every xray-core protocol, transport, and app,
+# including vmess, trojan, shadowsocks, wireguard, kcp, and the full
+# commander/observatory/reverse/metrics/stats stack. go_config.c only ever
+# emits a tun inbound and a vless/socks/http/freedom/blackhole outbound set,
+# so main/distro/senko registers only that subset instead
+DISTRO_PATCH="${ROOT}/scripts/patches/go-core-trim-distro.patch"
+if git -C "${SRC}" apply --reverse --check "${DISTRO_PATCH}" 2>/dev/null; then
+  : # already applied to this checkout
+elif git -C "${SRC}" apply --check "${DISTRO_PATCH}" 2>/dev/null; then
+  git -C "${SRC}" apply "${DISTRO_PATCH}"
+else
+  echo "go-core-trim-distro.patch no longer applies to ${SRC}" >&2
+  exit 1
+fi
+
 mkdir -p "$(dirname "${OUT_INPUT}")"
 OUT="$(cd "$(dirname "${OUT_INPUT}")" && pwd)/$(basename "${OUT_INPUT}")"
 CC_CMD="${TC}/clang -target arm64-apple-darwin -B ${TC} -isysroot ${SDK} -miphoneos-version-min=12.0"

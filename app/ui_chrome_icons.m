@@ -100,15 +100,19 @@ UIImage *GaugeIcon(CGFloat side, UIColor *tint) {
     return DrawIcon(@"gauge", side, tint, ^(CGContextRef ctx, CGFloat u) {
         CGPoint c = CGPointMake(12.0f * u, 16.0f * u);
         CGFloat radius = 8.0f * u;
+/* a half circle and a bare needle at the shared default stroke weight read as
+   a smudge next to the solid glyphs beside it (gear, plus, refresh); this one
+   glyph needs its own heavier weight to carry the same visual weight */
+        CGContextSetLineWidth(ctx, MAX(2.1f, 3.1f * u));
         CGContextAddArc(ctx, c.x, c.y, radius, (CGFloat)M_PI, 0, 0);
         CGContextStrokePath(ctx);
-        CGContextSetLineWidth(ctx, MAX(1.1f, 1.7f * u));
+        CGContextSetLineWidth(ctx, MAX(1.8f, 2.6f * u));
         CGFloat needle = (CGFloat)(M_PI * 1.68);
         CGContextMoveToPoint(ctx, c.x, c.y);
         CGContextAddLineToPoint(ctx, c.x + cosf(needle) * radius * 0.78f,
                                      c.y + sinf(needle) * radius * 0.78f);
         CGContextStrokePath(ctx);
-        CGContextAddArc(ctx, c.x, c.y, MAX(1.2f, 1.7f * u), 0, (CGFloat)(M_PI * 2.0), 0);
+        CGContextAddArc(ctx, c.x, c.y, MAX(1.8f, 2.6f * u), 0, (CGFloat)(M_PI * 2.0), 0);
         CGContextFillPath(ctx);
     });
 }

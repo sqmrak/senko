@@ -10,6 +10,7 @@ OUT="${1:-${SENKO_MBED:?set SENKO_MBED to the mbedtls output directory}}"
 SRC="${SENKO_MBED_SRC:?set SENKO_MBED_SRC to the mbedtls source directory}"
 SDK_V7="${SENKO_SDK_V7:?set SENKO_SDK_V7 to the armv7 sdk}"
 SDK_V64="${SENKO_SDK_V64:?set SENKO_SDK_V64 to the arm64 sdk}"
+SDK_VE="${SENKO_SDK_VE:-${SDK_V64}}"
 
 if [ ! -d "${SRC}/.git" ]; then
   mkdir -p "$(dirname "${SRC}")"
@@ -57,6 +58,7 @@ cp -a "${SRC}/include" "${OUT}/include"
 
 build_arch armv7 arm-apple-darwin11 "${SDK_V7}" armv7 5.0
 build_arch arm64 arm64-apple-darwin "${SDK_V64}" arm64 7.0
+build_arch arm64e arm64e-apple-darwin "${SDK_VE}" arm64e 12.0
 
 echo "mbedtls static archives ready: ${OUT}"
 ls -lh "${OUT}/lib/"

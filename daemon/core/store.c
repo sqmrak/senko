@@ -1,4 +1,5 @@
 #include "store.h"
+#include "b64.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -67,6 +68,22 @@ store_status_t store_add_manual(store_t *st, const char *link, size_t *out_index
     return store_add_manual_server(st, &tmp, out_index);
 }
 
+store_status_t store_replace_manual(store_t *st, size_t index, const char *link) {
+    if (!st || !link) return STORE_ERR_ARG;
+    if (index >= st->n || st->group[index] != STORE_GROUP_MANUAL)
+        return STORE_ERR_RANGE;
+
+    vl_server_t replacement;
+    if (cfg_parse_link(link, &replacement) != CFG_OK) return STORE_ERR_PARSE;
+    if (!cfg_validate_server(&replacement, NULL, 0)) return STORE_ERR_UNSUPPORTED;
+    for (size_t i = 0; i < st->n; ++i) {
+        if (i != index && same_server(&st->servers[i], &replacement))
+            return STORE_ERR_EXISTS;
+    }
+    st->servers[index] = replacement;
+    return STORE_OK;
+}
+
 store_status_t store_clear_manual(store_t *st, size_t *out_removed) {
     if (!st) return STORE_ERR_ARG;
     if (out_removed) *out_removed = 0;
@@ -114,6 +131,31 @@ store_status_t store_add_sub(store_t *st, const char *name, const char *url,
         return STORE_OK;
     }
     return STORE_ERR_FULL;
+}
+
+store_status_t store_replace_sub(store_t *st, size_t sub_index, const char *name,
+                                 const char *url, const char *header) {
+    if (!st || !name || !url || !header) return STORE_ERR_ARG;
+    if (sub_index >= STORE_MAX_SUBS || !st->subs[sub_index].used)
+        return STORE_ERR_RANGE;
+    size_t nl = strlen(name);
+    size_t ul = strlen(url);
+    size_t hl = strlen(header);
+    if (nl == 0 || ul == 0 || nl >= sizeof st->subs[sub_index].name ||
+        ul >= sizeof st->subs[sub_index].url ||
+        hl >= sizeof st->subs[sub_index].header)
+        return STORE_ERR_TOO_LONG;
+    for (size_t i = 0; i < STORE_MAX_SUBS; ++i) {
+        if (i != sub_index && st->subs[i].used &&
+            strcmp(st->subs[i].url, url) == 0)
+            return STORE_ERR_EXISTS;
+    }
+
+    store_sub_t *sub = &st->subs[sub_index];
+    memcpy(sub->name, name, nl + 1);
+    memcpy(sub->url, url, ul + 1);
+    memcpy(sub->header, header, hl + 1);
+    return STORE_OK;
 }
 
 void store_normalize(store_t *st) {
@@ -233,6 +275,27 @@ static void drop_group(store_t *st, int grp) {
     st->n = w;
 }
 
+/* drop only byte-for-byte duplicate entries. subscription panels routinely
+   publish several front IPs sharing one profile (same uuid/sni, different
+   host) so users behind ISPs that block a given IP still have a working
+   route; collapsing those onto "the first" left most users with exactly one,
+   arbitrarily-chosen endpoint per profile and no fallback when it was the
+   blocked or unstable one. */
+static size_t unique_servers(vl_server_t *servers, size_t count) {
+    size_t unique = 0;
+    for (size_t i = 0; i < count; ++i) {
+        int duplicate = 0;
+        for (size_t j = 0; j < unique; ++j) {
+            if (same_server(&servers[i], &servers[j])) {
+                duplicate = 1;
+                break;
+            }
+        }
+        if (!duplicate) servers[unique++] = servers[i];
+    }
+    return unique;
+}
+
 store_status_t store_refresh_sub(store_t *st, size_t sub_index,
                                  const char *blob, size_t blob_len,
                                  size_t *out_added) {
@@ -254,6 +317,7 @@ store_status_t store_refresh_sub(store_t *st, size_t sub_index,
     if (!fresh) return STORE_ERR_FULL;
     size_t added = 0;
     cfg_parse_subscription(blob, blob_len, fresh, room, &added);
+    added = unique_servers(fresh, added);
     if (added == 0) {
         free(fresh);
         return STORE_ERR_PARSE;
@@ -377,6 +441,11 @@ void store_set_sub_expire(store_t *st, size_t sub_index, uint64_t expire) {
     st->subs[sub_index].expire = expire;
 }
 
+void store_set_sub_refresh(store_t *st, size_t sub_index, uint64_t when) {
+    if (!st || sub_index >= STORE_MAX_SUBS || !st->subs[sub_index].used) return;
+    st->subs[sub_index].last_refresh = when;
+}
+
 void store_set_sub_meta(store_t *st, size_t sub_index, uint64_t upload,
                         uint64_t download, uint64_t total,
                         const char *description, const char *support_url) {
@@ -392,6 +461,19 @@ void store_set_sub_meta(store_t *st, size_t sub_index, uint64_t upload,
     if (support_url) {
         snprintf(sub->support_url, sizeof sub->support_url, "%s", support_url);
     }
+}
+
+store_status_t store_set_sub_title(store_t *st, size_t sub_index,
+                                   const char *title, const char *url_host) {
+    store_sub_t *sub;
+    if (!st || !title || !title[0] || !url_host) return STORE_ERR_ARG;
+    if (sub_index >= STORE_MAX_SUBS || !st->subs[sub_index].used)
+        return STORE_ERR_RANGE;
+    if (strlen(title) >= sizeof st->subs[sub_index].name) return STORE_ERR_TOO_LONG;
+    sub = &st->subs[sub_index];
+    if (strcmp(sub->name, url_host) != 0) return STORE_OK; /* renamed by hand already */
+    snprintf(sub->name, sizeof sub->name, "%s", title);
+    return STORE_OK;
 }
 
 static int valid_sub_header(const char *header) {
@@ -432,6 +514,23 @@ store_status_t store_select(store_t *st, int index) {
 const vl_server_t *store_selected(const store_t *st) {
     if (!st || st->selected < 0 || (size_t)st->selected >= st->n) return NULL;
     return &st->servers[st->selected];
+}
+
+store_status_t store_add_rule(store_t *st, const char *text, size_t len,
+                              size_t *out_index) {
+    if (!st || !text) return STORE_ERR_ARG;
+    rule_t rule;
+    rules_status_t parsed = cfg_parse_rule(text, len, &rule);
+    if (parsed != RULES_OK) return STORE_ERR_PARSE;
+    rules_status_t added = ruleset_add(&st->rules, &rule, out_index);
+    return added == RULES_ERR_FULL ? STORE_ERR_FULL
+         : added == RULES_OK ? STORE_OK : STORE_ERR_ARG;
+}
+
+store_status_t store_remove_rule(store_t *st, size_t index) {
+    if (!st) return STORE_ERR_ARG;
+    rules_status_t removed = ruleset_remove(&st->rules, index);
+    return removed == RULES_OK ? STORE_OK : STORE_ERR_RANGE;
 }
 
 static const char *security_name(vl_sec_t s) {
@@ -502,6 +601,112 @@ static int build_link(const vl_server_t *s, char *buf, size_t cap) {
         return (int)off;
     }
 
+    if (s->proto == VL_PROTO_TROJAN) {
+        int n = snprintf(buf, cap, "trojan://%s@%s:%u?security=%s&type=%s",
+                         s->pass, s->host, s->port,
+                         security_name(s->security), net_name(s->net));
+        if (n < 0 || (size_t)n >= cap) return -1;
+        size_t off = (size_t)n;
+        if (s->sni[0]) {
+            char enc[512];
+            if (pct_encode(s->sni, enc, sizeof enc) >= 0) {
+                int m = snprintf(buf + off, cap - off, "&sni=%s", enc);
+                if (m > 0 && (size_t)m < cap - off) off += (size_t)m;
+            }
+        }
+        if (s->fp[0]) {
+            char enc[64];
+            if (pct_encode(s->fp, enc, sizeof enc) >= 0) {
+                int m = snprintf(buf + off, cap - off, "&fp=%s", enc);
+                if (m > 0 && (size_t)m < cap - off) off += (size_t)m;
+            }
+        }
+        if (s->net == VL_NET_WS) {
+            if (s->path[0]) {
+                char enc[512];
+                if (pct_encode(s->path, enc, sizeof enc) >= 0) {
+                    int m = snprintf(buf + off, cap - off, "&path=%s", enc);
+                    if (m > 0 && (size_t)m < cap - off) off += (size_t)m;
+                }
+            }
+            if (s->ws_host[0]) {
+                char enc[512];
+                if (pct_encode(s->ws_host, enc, sizeof enc) >= 0) {
+                    int m = snprintf(buf + off, cap - off, "&host=%s", enc);
+                    if (m > 0 && (size_t)m < cap - off) off += (size_t)m;
+                }
+            }
+        }
+        if (s->insecure) {
+            int m = snprintf(buf + off, cap - off, "&allowInsecure=1");
+            if (m > 0 && (size_t)m < cap - off) off += (size_t)m;
+        }
+        if (s->remark[0]) {
+            char enc[768];
+            if (pct_encode(s->remark, enc, sizeof enc) >= 0) {
+                int m = snprintf(buf + off, cap - off, "#%s", enc);
+                if (m > 0 && (size_t)m < cap - off) off += (size_t)m;
+            }
+        }
+        return (int)off;
+    }
+
+    if (s->proto == VL_PROTO_SHADOWSOCKS) {
+        char userinfo[256];
+        snprintf(userinfo, sizeof userinfo, "%s:%s", s->user, s->pass);
+        char b64_userinfo[512];
+        size_t elen = 0;
+        b64_encode((const unsigned char *)userinfo, strlen(userinfo), b64_userinfo, sizeof b64_userinfo, &elen);
+        int n = snprintf(buf, cap, "ss://%s@%s:%u", b64_userinfo, s->host, s->port);
+        if (n < 0 || (size_t)n >= cap) return -1;
+        size_t off = (size_t)n;
+        if (s->remark[0]) {
+            char enc[768];
+            if (pct_encode(s->remark, enc, sizeof enc) >= 0) {
+                int m = snprintf(buf + off, cap - off, "#%s", enc);
+                if (m > 0 && (size_t)m < cap - off) off += (size_t)m;
+            }
+        }
+        return (int)off;
+    }
+
+    if (s->proto == VL_PROTO_HYSTERIA2) {
+        char enc_pass[192];
+        char enc_sni[512];
+        char port_part[136];
+        if (pct_encode(s->pass, enc_pass, sizeof enc_pass) < 0) return -1;
+        if (pct_encode(s->sni, enc_sni, sizeof enc_sni) < 0) return -1;
+        if (s->port_hop[0])
+            snprintf(port_part, sizeof port_part, "%s", s->port_hop);
+        else
+            snprintf(port_part, sizeof port_part, "%u", (unsigned)s->port);
+        int n = snprintf(buf, cap, "hysteria2://%s@%s:%s?sni=%s",
+                         enc_pass, s->host, port_part, enc_sni);
+        if (n < 0 || (size_t)n >= cap) return -1;
+        size_t off = (size_t)n;
+        if (s->pin_sha256[0]) {
+            int m = snprintf(buf + off, cap - off, "&pinSHA256=%s", s->pin_sha256);
+            if (m < 0 || (size_t)m >= cap - off) return -1;
+            off += (size_t)m;
+        }
+        if (s->obfs[0]) {
+            char enc_obfs_pw[256];
+            if (pct_encode(s->obfs_password, enc_obfs_pw, sizeof enc_obfs_pw) < 0) return -1;
+            int m = snprintf(buf + off, cap - off, "&obfs=%s&obfs-password=%s",
+                             s->obfs, enc_obfs_pw);
+            if (m < 0 || (size_t)m >= cap - off) return -1;
+            off += (size_t)m;
+        }
+        if (s->remark[0]) {
+            char enc[768];
+            if (pct_encode(s->remark, enc, sizeof enc) < 0) return -1;
+            int m = snprintf(buf + off, cap - off, "#%s", enc);
+            if (m < 0 || (size_t)m >= cap - off) return -1;
+            off += (size_t)m;
+        }
+        return (int)off;
+    }
+
     int n = snprintf(buf, cap, "vless://%s@%s:%u?security=%s&type=%s",
                      s->uuid, s->host, s->port,
                      security_name(s->security), net_name(s->net));
@@ -523,6 +728,11 @@ static int build_link(const vl_server_t *s, char *buf, size_t cap) {
         char enc[1024];
         if (pct_encode(opt[i].val, enc, sizeof enc) < 0) return -1;
         int m = snprintf(buf + off, cap - off, "&%s=%s", opt[i].key, enc);
+        if (m < 0 || (size_t)m >= cap - off) return -1;
+        off += (size_t)m;
+    }
+    if (s->insecure) {
+        int m = snprintf(buf + off, cap - off, "&allowInsecure=1");
         if (m < 0 || (size_t)m >= cap - off) return -1;
         off += (size_t)m;
     }
@@ -548,6 +758,15 @@ store_status_t store_serialize(const store_t *st, char *buf, size_t cap, size_t 
 
     int n = 0;
 
+    for (size_t i = 0; i < st->rules.count; ++i) {
+        const rule_t *rule = &st->rules.entries[i];
+        n = snprintf(buf + off, cap - off, "SET rule %s %s %s\n",
+                     rule_action_name(rule->action), rule_type_name(rule->type),
+                     rule->value);
+        if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
+        off += (size_t)n;
+    }
+
     for (size_t i = 0; i < STORE_MAX_SUBS; ++i) {
         if (!st->subs[i].used) continue;
         n = snprintf(buf + off, cap - off, "SUB %zu %s %s\n",
@@ -556,6 +775,12 @@ store_status_t store_serialize(const store_t *st, char *buf, size_t cap, size_t 
         off += (size_t)n;
         n = snprintf(buf + off, cap - off, "SUBMETA %zu %llu\n", i,
                      (unsigned long long)st->subs[i].expire);
+        if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
+        off += (size_t)n;
+/* a line of its own rather than a second SUBMETA field, because a build that
+   predates the schedule parses SUBMETA strictly and skips what it cannot name */
+        n = snprintf(buf + off, cap - off, "SUBREFRESH %zu %llu\n", i,
+                     (unsigned long long)st->subs[i].last_refresh);
         if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
         off += (size_t)n;
         char description[768];
@@ -651,7 +876,11 @@ store_status_t store_deserialize(store_t *st, const char *buf, size_t len) {
         const char *le = nl ? nl : end;
         size_t llen = (size_t)(le - p);
 
-        if (llen >= 4 && memcmp(p, "SUB ", 4) == 0) {
+        if (llen >= 9 && memcmp(p, "SET rule ", 9) == 0) {
+            rule_t rule;
+            if (cfg_parse_rule(p + 9, llen - 9, &rule) == RULES_OK)
+                (void)ruleset_add(&st->rules, &rule, NULL);
+        } else if (llen >= 4 && memcmp(p, "SUB ", 4) == 0) {
             const char *rest = p + 4;
             int fixed_idx = -1;
             const char *sp1 = memchr(rest, ' ', (size_t)(le - rest));
@@ -697,6 +926,17 @@ store_status_t store_deserialize(store_t *st, const char *buf, size_t len) {
                     want_expire[idx] = expire;
                     expire_seen[idx] = 1;
                 }
+            }
+        } else if (llen >= 11 && memcmp(p, "SUBREFRESH ", 11) == 0) {
+            const char *rest = p + 11;
+            const char *sp = memchr(rest, ' ', (size_t)(le - rest));
+            if (sp) {
+                int idx = -1;
+                uint64_t when = 0;
+                if (parse_int(rest, sp, &idx) == 0 &&
+                    parse_u64(sp + 1, le, &when) == 0 &&
+                    idx >= 0 && idx < STORE_MAX_SUBS && st->subs[idx].used)
+                    st->subs[idx].last_refresh = when;
             }
         } else if (llen >= 8 && memcmp(p, "SUBINFO ", 8) == 0) {
             const char *starts[6], *ends[6], *q = p + 8;

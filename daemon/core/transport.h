@@ -23,6 +23,7 @@ typedef struct {
     const char *ws_host; /* preserve the websocket host header */
     const char *xhttp_mode; /* preserve the xhttp stream mode */
     const char *peer_host; /* dial target host, last authority fallback */
+    int insecure; /* skip certificate and hostname verification (allowInsecure) */
 } transport_tls_cfg_t;
 
 typedef struct transport_vt {

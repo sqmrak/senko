@@ -1,21 +1,29 @@
 #define _DEFAULT_SOURCE
 
 #include "routing_exec.h"
-#include "legacy_ios.h"
 #include "core/net_safe.h"
+#include "core/dns_cache.h"
+#include "core/dns_msg.h"
+#include "pf_table.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/socket.h>
 #include <ifaddrs.h>
+#include <net/if.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <sys/socket.h>
 #include <sys/wait.h>
 #include <spawn.h>
+#if defined(__APPLE__)
+#include <mach/mach_time.h>
+#else
+#include <time.h>
+#endif
 #include "../common/senko_paths.h"
 
 extern char **environ;
@@ -24,6 +32,12 @@ extern char **environ;
 #define PF_ERR  "/var/tmp/senko-pf.err"
 #define PF_OS   SENKO_JBROOT "/etc/pf.os"
 #define PF_ANCHOR "com.apple/senko"
+#define PF_CONF_CAP (512u * 1024u)
+
+static dns_cache_t g_dns_cache;
+static pf_table_t g_pf_table;
+static uint32_t g_pf_cleanup_added[PF_TABLE_MAX_ADDRS];
+static uint32_t g_pf_cleanup_deleted[PF_TABLE_MAX_ADDRS];
 
 
 static int can_exec(const char *path) {
@@ -48,23 +62,7 @@ static const char *find_path_command(const char *name, char *path, size_t cap) {
     return NULL;
 }
 
-/* an iphone 4S on ios 5.1.1 reboots the moment the tunnel starts: the ipfw fwd
-   ruleset only reaches a loopback listener with net.inet.ip.scopedroute turned
-   off, and that pair panics xnu 11. the application proxy rung needs no kernel
-   firewall, so on ios 5 the tool is reported as absent and c_backend falls
-   through to it instead */
-static int ipfw_usable(void) {
-    static int gate = -1;
-    if (gate >= 0) return gate;
-    gate = senko_is_ios5() ? 0 : 1;
-    if (!gate)
-        fprintf(stderr, "senkod: ios 5 detected, ipfw routing disabled; "
-                        "only the application proxy backend is safe here\n");
-    return gate;
-}
-
 const char *routing_find_ipfw(void) {
-    if (!ipfw_usable()) return NULL;
     static const char *p[] = { SENKO_JBROOT "/sbin/ipfw", SENKO_JBROOT "/usr/sbin/ipfw",
                                SENKO_JBROOT "/bin/ipfw", SENKO_USR_BIN "/ipfw",
                                "/sbin/ipfw", "/usr/sbin/ipfw", "/bin/ipfw",
@@ -100,6 +98,44 @@ int routing_spawn(const char *bin, char *const argv[]) {
     int status = 0;
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+static int fd_write_all(int fd, const void *data, size_t len) {
+    const uint8_t *p = (const uint8_t *)data;
+    while (len > 0) {
+        ssize_t n = write(fd, p, len);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return -1;
+        p += n;
+        len -= (size_t)n;
+    }
+    return 0;
+}
+
+static int fd_read_all(int fd, void *data, size_t len) {
+    uint8_t *p = (uint8_t *)data;
+    while (len > 0) {
+        ssize_t n = read(fd, p, len);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return -1;
+        p += n;
+        len -= (size_t)n;
+    }
+    return 0;
+}
+
+static uint64_t monotonic_seconds(void) {
+#if defined(__APPLE__)
+    static mach_timebase_info_data_t timebase;
+    if (timebase.denom == 0) mach_timebase_info(&timebase);
+    uint64_t ticks = mach_absolute_time();
+    long double nanoseconds = (long double)ticks * timebase.numer / timebase.denom;
+    return (uint64_t)(nanoseconds / 1000000000.0L);
+#else
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return (uint64_t)ts.tv_sec;
+#endif
 }
 
 /* read a sysctl value into buf; the helper prints one line on stdout */
@@ -272,6 +308,63 @@ static int write_file(const char *path, const char *buf, size_t len) {
     return (w == len) ? 0 : -1;
 }
 
+static int pf_table_batch(const routing_exec_t *st, const char *operation,
+                          const uint32_t *addresses, size_t count) {
+    const char *pfctl;
+    char path[] = "/var/tmp/senko-pf-table.XXXXXX";
+    int fd;
+    int rc = -1;
+    if (!st || !operation || !addresses || count == 0 ||
+        st->mode != ROUTING_MODE_PF || !st->pf_table_ready)
+        return count == 0 ? 0 : -1;
+    pfctl = routing_find_pfctl();
+    if (!pfctl) return -1;
+    fd = mkstemp(path);
+    if (fd < 0) return -1;
+    (void)unlink(path);
+    for (size_t i = 0; i < count; ++i) {
+        char address[INET_ADDRSTRLEN + 2];
+        if (pf_table_ipv4_text(addresses[i], address, sizeof address) != 0 ||
+            fd_write_all(fd, address, strlen(address)) != 0 ||
+            fd_write_all(fd, "\n", 1) != 0)
+            goto done;
+    }
+    if (lseek(fd, 0, SEEK_SET) < 0) goto done;
+
+    posix_spawn_file_actions_t actions;
+    if (posix_spawn_file_actions_init(&actions) != 0) goto done;
+    int action_rc = posix_spawn_file_actions_adddup2(&actions, fd, STDIN_FILENO);
+    if (action_rc == 0)
+        action_rc = posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO,
+                                                      "/dev/null", O_WRONLY, 0);
+    if (action_rc == 0)
+        action_rc = posix_spawn_file_actions_addopen(&actions, STDERR_FILENO,
+                                                      "/dev/null", O_WRONLY, 0);
+    if (action_rc != 0) {
+        posix_spawn_file_actions_destroy(&actions);
+        goto done;
+    }
+    pid_t pid = 0;
+#if defined(SENKO_ROOTLESS)
+    char *argv[] = { (char *)pfctl, (char *)"-q", (char *)"-a",
+                     (char *)PF_ANCHOR, (char *)"-t", (char *)"senko_bypass",
+                     (char *)"-T", (char *)operation, (char *)"-f", (char *)"-", NULL };
+#else
+    char *argv[] = { (char *)pfctl, (char *)"-q", (char *)"-t",
+                     (char *)"senko_bypass", (char *)"-T", (char *)operation,
+                     (char *)"-f", (char *)"-", NULL };
+#endif
+    int spawn_rc = posix_spawn(&pid, pfctl, &actions, NULL, argv, environ);
+    posix_spawn_file_actions_destroy(&actions);
+    if (spawn_rc != 0) goto done;
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    rc = WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+done:
+    close(fd);
+    return rc;
+}
+
 
 int routing_pick_free_port(int start, int end) {
     if (start <= 0) {
@@ -391,6 +484,38 @@ static size_t collect_ifaces(char ifnames[][32], size_t cap) {
     return n;
 }
 
+/* wifi first, then cellular: that is the order the kernel installs the default
+   route in, so the first match is the egress the tunnel will actually use */
+int routing_exec_egress_snapshot(char *name, size_t name_cap,
+                                 char *ip, size_t ip_cap) {
+    struct ifaddrs *ifa = NULL;
+    if (name && name_cap) name[0] = '\0';
+    if (ip && ip_cap) ip[0] = '\0';
+    if (!name || name_cap < 2 || !ip || ip_cap < INET_ADDRSTRLEN) return -1;
+    if (getifaddrs(&ifa) != 0) return -1;
+
+    int best = 0; /* 2 is wifi, 1 is cellular */
+    for (struct ifaddrs *p = ifa; p; p = p->ifa_next) {
+        if (!p->ifa_name || !p->ifa_addr) continue;
+        if (p->ifa_addr->sa_family != AF_INET) continue;
+        if (!(p->ifa_flags & IFF_UP) || (p->ifa_flags & IFF_LOOPBACK)) continue;
+        int rank = 0;
+        if (strncmp(p->ifa_name, "en", 2) == 0) rank = 2;
+        else if (strncmp(p->ifa_name, "pdp_ip", 6) == 0) rank = 1;
+        if (rank <= best) continue;
+        struct sockaddr_in *sin = (struct sockaddr_in *)p->ifa_addr;
+        char addr[INET_ADDRSTRLEN];
+        if (!inet_ntop(AF_INET, &sin->sin_addr, addr, sizeof addr)) continue;
+/* a self-assigned address means the interface is up without a usable route */
+        if (strncmp(addr, "169.254.", 8) == 0) continue;
+        snprintf(name, name_cap, "%s", p->ifa_name);
+        snprintf(ip, ip_cap, "%s", addr);
+        best = rank;
+    }
+    freeifaddrs(ifa);
+    return best ? 0 : -1;
+}
+
 static void clear_ipfw(void) {
     const char *ipfw = routing_find_ipfw();
     if (!ipfw) return;
@@ -484,6 +609,7 @@ static void clear_pf(void) {
 }
 
 static int apply_pf_mode(const char *pfctl, const char *server_ips,
+                         const ruleset_t *rules,
                          const char ifnames[][32], size_t if_count,
                          int redir_port, int dns_local_port,
                          routing_pf_mode_t mode,
@@ -497,19 +623,27 @@ static int apply_pf_mode(const char *pfctl, const char *server_ips,
         routing_spawn(sysctl, argv);
     }
 
-    char conf[8192]; size_t clen = 0;
+    char *conf = (char *)malloc(PF_CONF_CAP);
+    size_t clen = 0;
+    if (!conf) return -1;
 #if defined(SENKO_ROOTLESS)
-    routing_status_t conf_rc = routing_pf_anchor_conf(
-        server_ips, ifnames, if_count, redir_port, dns_local_port,
-        mode, conf, sizeof conf, &clen);
+    routing_status_t conf_rc = routing_pf_anchor_conf_rules(
+        server_ips, rules, ifnames, if_count, redir_port, dns_local_port,
+        mode, conf, PF_CONF_CAP, &clen);
 #else
-    routing_status_t conf_rc = routing_pf_conf(
-        server_ips, ifnames, if_count, redir_port, dns_local_port,
-        mode, conf, sizeof conf, &clen);
+    routing_status_t conf_rc = routing_pf_conf_rules(
+        server_ips, rules, ifnames, if_count, redir_port, dns_local_port,
+        mode, conf, PF_CONF_CAP, &clen);
 #endif
-    if (conf_rc != ROUTING_OK)
+    if (conf_rc != ROUTING_OK) {
+        free(conf);
         return -1;
-    if (write_file(PF_CONF, conf, clen) != 0) return -1;
+    }
+    if (write_file(PF_CONF, conf, clen) != 0) {
+        free(conf);
+        return -1;
+    }
+    free(conf);
 
     char *enargv[] = { (char *)pfctl, (char *)"-q", (char *)"-e", NULL };
     int enable_rc = run_spawn_quiet(pfctl, enargv);
@@ -550,10 +684,10 @@ static int socks5_connect_to_dns(int socks_port, const char *dns_upstream) {
     }
 
     uint8_t greet[] = { 0x05, 0x01, 0x00 };
-    if (write(fd, greet, 3) != 3) { close(fd); return -1; }
+    if (fd_write_all(fd, greet, sizeof greet) != 0) { close(fd); return -1; }
 
     uint8_t resp[10];
-    if (read(fd, resp, 2) != 2 || resp[0] != 0x05 || resp[1] != 0x00) {
+    if (fd_read_all(fd, resp, 2) != 0 || resp[0] != 0x05 || resp[1] != 0x00) {
         close(fd);
         return -1;
     }
@@ -570,9 +704,9 @@ static int socks5_connect_to_dns(int socks_port, const char *dns_upstream) {
         0x00, 0x35 /* port 53 */
     };
     memcpy(req + 4, &dns_addr.s_addr, 4);
-    if (write(fd, req, 10) != 10) { close(fd); return -1; }
+    if (fd_write_all(fd, req, sizeof req) != 0) { close(fd); return -1; }
 
-    if (read(fd, resp, 10) != 10 || resp[0] != 0x05 || resp[1] != 0x00) {
+    if (fd_read_all(fd, resp, 10) != 0 || resp[0] != 0x05 || resp[1] != 0x00) {
         close(fd);
         return -1;
     }
@@ -580,115 +714,237 @@ static int socks5_connect_to_dns(int socks_port, const char *dns_upstream) {
     return fd;
 }
 
+static int dns_sendto(int fd, const uint8_t *data, size_t len,
+                      const struct sockaddr_in *address, socklen_t address_len) {
+    ssize_t n;
+    do {
+        n = sendto(fd, data, len, 0, (const struct sockaddr *)address, address_len);
+    } while (n < 0 && errno == EINTR);
+    return n == (ssize_t)len ? 0 : -1;
+}
+
+static int dns_exchange(routing_exec_t *st, int *tcp_fd,
+                        const uint8_t *query, size_t query_len,
+                        uint8_t *response, size_t cap, size_t *response_len) {
+    uint8_t length[2];
+    if (*tcp_fd < 0) {
+        *tcp_fd = socks5_connect_to_dns(st->socks_port, st->dns_upstream);
+        if (*tcp_fd < 0) return -1;
+        struct timeval timeout;
+        timeout.tv_sec = 5;
+        timeout.tv_usec = 0;
+        setsockopt(*tcp_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
+        setsockopt(*tcp_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
+    }
+    length[0] = (uint8_t)(query_len >> 8);
+    length[1] = (uint8_t)query_len;
+    if (fd_write_all(*tcp_fd, length, sizeof length) != 0 ||
+        fd_write_all(*tcp_fd, query, query_len) != 0 ||
+        fd_read_all(*tcp_fd, length, sizeof length) != 0)
+        goto failed;
+    size_t len = (size_t)(((uint16_t)length[0] << 8) | length[1]);
+    if (len == 0 || len > cap || fd_read_all(*tcp_fd, response, len) != 0)
+        goto failed;
+    *response_len = len;
+    return 0;
+failed:
+    close(*tcp_fd);
+    *tcp_fd = -1;
+    return -1;
+}
+
+static void dns_log_rule(routing_exec_t *st, size_t index,
+                         const dns_question_t *question, rule_action_t action) {
+    if (!st || !question || index >= RULESET_MAX_RULES) return;
+    size_t byte = index / 8;
+    uint8_t bit = (uint8_t)(1u << (index % 8));
+    if ((st->rule_logged[byte] & bit) != 0) return;
+    st->rule_logged[byte] |= bit;
+    fprintf(stderr, "senkod: rule %s matched %s\n",
+            rule_action_name(action), question->name);
+}
+
+static void pf_apply_changes(routing_exec_t *st,
+                             const uint32_t *added, size_t added_count,
+                             const uint32_t *deleted, size_t deleted_count) {
+    if (deleted_count && pf_table_batch(st, "delete", deleted, deleted_count) != 0) {
+        pf_table_mark_installed(&g_pf_table, deleted, deleted_count, 1);
+        fprintf(stderr, "senkod: pf bypass batch delete failed\n");
+    }
+    if (added_count && pf_table_batch(st, "add", added, added_count) != 0) {
+        pf_table_mark_installed(&g_pf_table, added, added_count, 0);
+        fprintf(stderr, "senkod: pf bypass batch add failed\n");
+    }
+}
+
+static void dns_update_pf(routing_exec_t *st, const dns_question_t *question,
+                          rule_action_t action, const dns_response_info_t *info,
+                          uint64_t now) {
+    pf_table_changes_t changes;
+    if (!st->pf_table_ready || !info || info->ipv4_count == 0 ||
+        (action != RULE_ACTION_DIRECT && action != RULE_ACTION_PROXY))
+        return;
+    if (pf_table_record(&g_pf_table, question->name, action,
+                        info->ipv4, info->ipv4_count, now, info->min_ttl,
+                        &changes) != PF_TABLE_OK) {
+        fprintf(stderr, "senkod: pf bypass shadow is full\n");
+        return;
+    }
+    pf_apply_changes(st, changes.added, changes.added_count,
+                     changes.deleted, changes.deleted_count);
+}
+
+static void dns_cleanup_pf(routing_exec_t *st, uint64_t now) {
+    size_t added_count = 0;
+    size_t deleted_count = 0;
+    if (!st->pf_table_ready) return;
+    if (pf_table_cleanup(&g_pf_table, now,
+                         g_pf_cleanup_added, PF_TABLE_MAX_ADDRS, &added_count,
+                         g_pf_cleanup_deleted, PF_TABLE_MAX_ADDRS, &deleted_count) != PF_TABLE_OK) {
+        fprintf(stderr, "senkod: pf bypass cleanup overflowed\n");
+        return;
+    }
+    pf_apply_changes(st, g_pf_cleanup_added, added_count,
+                     g_pf_cleanup_deleted, deleted_count);
+}
+
+static int dns_questions_match(const dns_question_t *query,
+                               const dns_question_t *response) {
+    return query->type == response->type &&
+           query->class_code == response->class_code &&
+           strcmp(query->name, response->name) == 0;
+}
+
 static void *dns_forwarder_thread(void *arg) {
     routing_exec_t *st = (routing_exec_t *)arg;
     if (!st || !st->dns_bound) return NULL;
     int udp_fd = st->dns_fd;
-
-    struct timeval tv;
-    tv.tv_sec = 1;
-    tv.tv_usec = 0;
-    setsockopt(udp_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-
-    uint8_t buf[2048];
     int tcp_fd = -1;
+    uint64_t next_cleanup = monotonic_seconds() + 10;
+    struct timeval timeout;
+    timeout.tv_sec = 1;
+    timeout.tv_usec = 0;
+    setsockopt(udp_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
 
+    uint8_t query[DNS_CACHE_RESPONSE_MAX];
+    uint8_t response[DNS_CACHE_RESPONSE_MAX];
     while (!st->dns_stop) {
-        struct sockaddr_in client_addr;
-        socklen_t client_len = sizeof client_addr;
-        ssize_t n = recvfrom(udp_fd, buf, sizeof buf, 0, (struct sockaddr *)&client_addr, &client_len);
-        if (n <= 0) {
-            if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                fprintf(stderr, "senkod: DNS proxy recvfrom error: %s\n", strerror(errno));
-                fflush(stderr);
-            }
+        uint64_t now = monotonic_seconds();
+        if (st->flush_dns_requested) {
+            st->flush_dns_requested = 0;
+            dns_cache_clear(&g_dns_cache);
+            fprintf(stderr, "senkod: dns cache flushed on request\n");
+        }
+        if (st->flush_bypass_requested) {
+            st->flush_bypass_requested = 0;
+/* withdraw the addresses from pf before forgetting them, or the shadow and the
+   live table disagree until every ttl runs out */
+            size_t installed = pf_table_installed_addresses(
+                &g_pf_table, g_pf_cleanup_deleted, PF_TABLE_MAX_ADDRS);
+            if (installed)
+                (void)pf_table_batch(st, "delete", g_pf_cleanup_deleted, installed);
+            pf_table_clear(&g_pf_table);
+            fprintf(stderr, "senkod: bypass table flushed on request (%zu address(es))\n",
+                    installed);
+        }
+        if (now >= next_cleanup) {
+            dns_cleanup_pf(st, now);
+            next_cleanup = now + 10;
+        }
+
+        struct sockaddr_in client_address;
+        socklen_t client_len = sizeof client_address;
+        ssize_t query_len = recvfrom(udp_fd, query, sizeof query, 0,
+                                     (struct sockaddr *)&client_address, &client_len);
+        if (query_len <= 0) {
+            if (query_len < 0 && errno != EAGAIN && errno != EWOULDBLOCK &&
+                errno != EINTR)
+                fprintf(stderr, "senkod: DNS proxy recvfrom error: %s\n",
+                        strerror(errno));
             continue;
         }
 
-        int retries = 2;
+        dns_question_t question;
+        if (dns_msg_parse_question(query, (size_t)query_len, &question) != DNS_MSG_OK) {
+            fprintf(stderr, "senkod: DNS proxy rejected malformed query\n");
+            continue;
+        }
+        size_t matched = SIZE_MAX;
+        rule_action_t action = st->rules
+            ? ruleset_match_domain(st->rules, question.name, &matched)
+            : RULE_ACTION_PROXY;
+        if (matched != SIZE_MAX) dns_log_rule(st, matched, &question, action);
+
+        size_t response_len = 0;
+        if (action == RULE_ACTION_BLOCK) {
+            if (dns_msg_build_block(query, (size_t)query_len, st->block_response,
+                                    response, sizeof response, &response_len) == DNS_MSG_OK)
+                (void)dns_sendto(udp_fd, response, response_len,
+                                 &client_address, client_len);
+            continue;
+        }
+
+        rule_action_t cached_action;
+        int stale = 0;
+        dns_cache_status_t cached = dns_cache_get(
+            &g_dns_cache, question.name, question.type, now, 0,
+            response, sizeof response, &response_len, &cached_action, &stale);
+        if (cached == DNS_CACHE_OK && cached_action == action) {
+            response[0] = query[0];
+            response[1] = query[1];
+            (void)dns_sendto(udp_fd, response, response_len,
+                             &client_address, client_len);
+            continue;
+        }
+
         int success = 0;
-        while (retries > 0 && !st->dns_stop) {
-            if (tcp_fd < 0) {
-                tcp_fd = socks5_connect_to_dns(st->socks_port, st->dns_upstream);
-                if (tcp_fd < 0) {
-                    fprintf(stderr, "senkod: DNS proxy SOCKS5 connect to %s:53 failed\n",
-                            st->dns_upstream);
-                    fflush(stderr);
-                    retries--;
-                    continue;
-                }
-                struct timeval tcp_tv;
-                tcp_tv.tv_sec = 5; /* 5s idle timeout */
-                tcp_tv.tv_usec = 0;
-                setsockopt(tcp_fd, SOL_SOCKET, SO_RCVTIMEO, &tcp_tv, sizeof tcp_tv);
-                setsockopt(tcp_fd, SOL_SOCKET, SO_SNDTIMEO, &tcp_tv, sizeof tcp_tv);
-            }
-
-            uint8_t len_hdr[2];
-            len_hdr[0] = (uint8_t)((n >> 8) & 0xFF);
-            len_hdr[1] = (uint8_t)(n & 0xFF);
-
-            if (write(tcp_fd, len_hdr, 2) != 2 || write(tcp_fd, buf, n) != n) {
-                fprintf(stderr, "senkod: DNS proxy TCP write failed, reconnecting: %s\n", strerror(errno));
-                fflush(stderr);
+        for (int retries = 2; retries > 0 && !st->dns_stop; --retries) {
+            if (dns_exchange(st, &tcp_fd, query, (size_t)query_len,
+                             response, sizeof response, &response_len) != 0)
+                continue;
+            dns_question_t response_question;
+            dns_response_info_t info;
+            if (response_len < 2 || response[0] != query[0] || response[1] != query[1] ||
+                dns_msg_parse_response_question(response, response_len,
+                                                &response_question) != DNS_MSG_OK ||
+                !dns_questions_match(&question, &response_question) ||
+                dns_msg_response_info(response, response_len, &info) != DNS_MSG_OK ||
+                dns_msg_clamp_ttls(response, response_len,
+                                   DNS_CACHE_TTL_MIN, DNS_CACHE_TTL_MAX) != DNS_MSG_OK ||
+                dns_msg_response_info(response, response_len, &info) != DNS_MSG_OK) {
+                fprintf(stderr, "senkod: DNS proxy rejected malformed response\n");
                 close(tcp_fd);
                 tcp_fd = -1;
-                retries--;
                 continue;
             }
-
-            if (read(tcp_fd, len_hdr, 2) != 2) {
-                fprintf(stderr, "senkod: DNS proxy TCP read len failed, reconnecting: %s\n", strerror(errno));
-                fflush(stderr);
-                close(tcp_fd);
-                tcp_fd = -1;
-                retries--;
-                continue;
-            }
-
-            uint16_t resp_len = (uint16_t)((len_hdr[0] << 8) | len_hdr[1]);
-            if (resp_len > sizeof buf) {
-                fprintf(stderr, "senkod: DNS proxy TCP response too large: %d\n", resp_len);
-                fflush(stderr);
-                close(tcp_fd);
-                tcp_fd = -1;
-                break;
-            }
-
-            ssize_t read_bytes = 0;
-            int read_ok = 1;
-            while (read_bytes < resp_len) {
-                ssize_t r = read(tcp_fd, buf + read_bytes, resp_len - read_bytes);
-                if (r <= 0) {
-                    fprintf(stderr, "senkod: DNS proxy TCP read response failed: %s\n", strerror(errno));
-                    fflush(stderr);
-                    read_ok = 0;
-                    break;
-                }
-                read_bytes += r;
-            }
-
-            if (!read_ok) {
-                close(tcp_fd);
-                tcp_fd = -1;
-                retries--;
-                continue;
-            }
-
-            sendto(udp_fd, buf, resp_len, 0, (struct sockaddr *)&client_addr, client_len);
+            now = monotonic_seconds();
+            dns_update_pf(st, &question, action, &info, now);
+            if (info.min_ttl > 0)
+                (void)dns_cache_put(&g_dns_cache, question.name, question.type,
+                                    response, response_len, now, info.min_ttl, action);
+            (void)dns_sendto(udp_fd, response, response_len,
+                             &client_address, client_len);
             success = 1;
             break;
         }
 
         if (!success) {
-            fprintf(stderr, "senkod: DNS proxy failed to forward query\n");
-            fflush(stderr);
+            cached = dns_cache_get(&g_dns_cache, question.name, question.type,
+                                   monotonic_seconds(), 1, response,
+                                   sizeof response, &response_len,
+                                   &cached_action, &stale);
+            if (cached == DNS_CACHE_OK && cached_action == action) {
+                response[0] = query[0];
+                response[1] = query[1];
+                (void)dns_sendto(udp_fd, response, response_len,
+                                 &client_address, client_len);
+            } else {
+                fprintf(stderr, "senkod: DNS proxy failed to forward query\n");
+            }
         }
     }
 
-    if (tcp_fd >= 0) {
-        close(tcp_fd);
-    }
+    if (tcp_fd >= 0) close(tcp_fd);
     return NULL;
 }
 
@@ -712,15 +968,21 @@ static void stop_dns_forwarder(routing_exec_t *st) {
 
 rexec_status_t routing_exec_up(routing_exec_t *st, int socks_port,
                                const char *server_ip, const char *server_ips,
-                               const char *dns_upstream, int dns_local_port) {
+                               const char *dns_upstream, int dns_local_port,
+                               dns_block_response_t block_response,
+                               ruleset_t *rules, int force_pf_mode) {
     if (!st || !server_ip || !server_ips || !dns_upstream || dns_local_port <= 0)
         return REXEC_ERR_ARG;
     if (st->mode != ROUTING_MODE_NONE || st->dns_thread) {
         routing_exec_down(st);
     }
     memset(st, 0, sizeof *st);
+    dns_cache_init(&g_dns_cache);
+    pf_table_init(&g_pf_table);
     st->dns_fd = -1;
     st->socks_port = socks_port;
+    st->rules = rules;
+    st->block_response = block_response;
     int dns_end = dns_local_port + 100;
     if (dns_end > 65535) dns_end = 65535;
     int dns_port = routing_pick_free_udp_port(dns_local_port, dns_end);
@@ -758,16 +1020,37 @@ rexec_status_t routing_exec_up(routing_exec_t *st, int socks_port,
             fprintf(stderr, "\n");
             char pf_detail[192];
             int last_pf_mode = -1;
-            for (int m = 0; m < ROUTING_PF_MODE_COUNT; ++m) {
+/* a pinned variant runs alone: a tester who cannot stop the ladder after the
+   first rejection cannot tell whether the rung they care about works */
+            int first_mode = 0;
+            int mode_count = ROUTING_PF_MODE_COUNT;
+            if (force_pf_mode >= 0 && force_pf_mode < ROUTING_PF_MODE_COUNT) {
+                first_mode = force_pf_mode;
+                mode_count = force_pf_mode + 1;
+                fprintf(stderr, "senkod: pf mode pinned to %s\n",
+                        routing_pf_mode_name((routing_pf_mode_t)force_pf_mode));
+            }
+            for (int m = first_mode; m < mode_count; ++m) {
                 clear_pf();
                 last_pf_mode = m;
-                if (apply_pf_mode(pfctl, server_ips, ifnames, if_count,
-                                  redir, st->dns_local_port,
-                                  (routing_pf_mode_t)m,
-                                  pf_detail, sizeof pf_detail) == 0) {
+                int applied = apply_pf_mode(pfctl, server_ips, rules, ifnames, if_count,
+                                            redir, st->dns_local_port,
+                                            (routing_pf_mode_t)m,
+                                            pf_detail, sizeof pf_detail);
+                if (applied != 0)
+                    snprintf(st->pf_last_error, sizeof st->pf_last_error, "%s: %s",
+                             routing_pf_mode_name((routing_pf_mode_t)m),
+                             pf_detail[0] ? pf_detail : "rejected");
+                if (applied == 0) {
                     st->mode = ROUTING_MODE_PF;
                     st->redir_port = redir;
                     st->pf_table_ready = m != ROUTING_PF_COMPAT_RDR;
+                    st->pf_mode = (routing_pf_mode_t)m;
+                    st->pf_mode_valid = 1;
+                    st->pf_rejected = m - first_mode;
+                    fprintf(stderr, "senkod: pf mode %s accepted after %d rejected\n",
+                            routing_pf_mode_name((routing_pf_mode_t)m),
+                            st->pf_rejected);
                     if (start_dns_forwarder(st) != 0) {
                         routing_exec_down(st);
                         return REXEC_ERR_SPAWN;
@@ -775,7 +1058,8 @@ rexec_status_t routing_exec_up(routing_exec_t *st, int socks_port,
                     return REXEC_OK;
                 }
             }
-            fprintf(stderr, "senkod: all pf rule modes were rejected (last mode %d: %s)\n",
+            fprintf(stderr, "senkod: %s pf rule mode(s) rejected (last mode %d: %s)\n",
+                    mode_count - first_mode == 1 ? "the pinned" : "all",
                     last_pf_mode, pf_detail[0] ? pf_detail : "unknown pfctl error");
             clear_pf();
         }
@@ -819,6 +1103,83 @@ void routing_exec_down(routing_exec_t *st) {
     if (st->mode == ROUTING_MODE_PF)   clear_pf();
     if (st->mode == ROUTING_MODE_PF) unlink(PF_CONF);
     memset(st, 0, sizeof *st);
+}
+
+void routing_exec_dns_stats(uint64_t *hits, uint64_t *misses,
+                            uint64_t *stale_hits, size_t *entries) {
+    if (hits) *hits = g_dns_cache.hits;
+    if (misses) *misses = g_dns_cache.misses;
+    if (stale_hits) *stale_hits = g_dns_cache.stale_hits;
+    if (entries) *entries = dns_cache_entry_count(&g_dns_cache);
+}
+
+void routing_exec_bypass_stats(pf_table_counts_t *counts,
+                               uint64_t *evicted_addresses,
+                               uint64_t *evicted_refs) {
+    if (counts) pf_table_counts(&g_pf_table, counts);
+    if (evicted_addresses) *evicted_addresses = g_pf_table.evicted_addresses;
+    if (evicted_refs) *evicted_refs = g_pf_table.evicted_refs;
+}
+
+void routing_exec_flush_dns(routing_exec_t *st) {
+    if (st && st->dns_thread) {
+        st->flush_dns_requested = 1;
+        return;
+    }
+    dns_cache_clear(&g_dns_cache);
+}
+
+void routing_exec_flush_bypass(routing_exec_t *st) {
+    if (st && st->dns_thread) {
+        st->flush_bypass_requested = 1;
+        return;
+    }
+    pf_table_clear(&g_pf_table);
+}
+
+/* pf gets its ruleset as a file, so the file pfctl loaded is the honest answer.
+   ipfw takes its rules as argument vectors, so those are rebuilt from the same
+   writer the backend used */
+int routing_exec_render(const routing_exec_t *st, char *buf, size_t cap,
+                        size_t *len) {
+    if (len) *len = 0;
+    if (!st || !buf || cap == 0) return -1;
+    buf[0] = '\0';
+
+    if (st->mode == ROUTING_MODE_PF) {
+        int fd = open(PF_CONF, O_RDONLY | O_NOFOLLOW);
+        if (fd < 0) return -1;
+        size_t off = 0;
+        while (off + 1 < cap) {
+            ssize_t got = read(fd, buf + off, cap - 1 - off);
+            if (got < 0 && errno == EINTR) continue;
+            if (got <= 0) break;
+            off += (size_t)got;
+        }
+        close(fd);
+        buf[off] = '\0';
+        if (len) *len = off;
+        return off > 0 ? 0 : -1;
+    }
+
+    if (st->mode == ROUTING_MODE_IPFW) {
+        routing_ipfw_rule_t rules[ROUTING_MAX_RULES];
+        size_t count = 0;
+        if (routing_ipfw_rules(st->server_ip, st->redir_port, st->socks_port,
+                               st->dns_local_port, rules, ROUTING_MAX_RULES,
+                               &count) != ROUTING_OK)
+            return -1;
+        size_t off = 0;
+        for (size_t i = 0; i < count; ++i) {
+            int n = snprintf(buf + off, cap - off, "ipfw %s\n", rules[i].rule_out);
+            if (n < 0 || (size_t)n >= cap - off) break;
+            off += (size_t)n;
+        }
+        if (len) *len = off;
+        return off > 0 ? 0 : -1;
+    }
+
+    return -1;
 }
 
 void routing_exec_bypass_add_ipv4(routing_exec_t *st, const char *ip) {

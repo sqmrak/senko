@@ -20,7 +20,9 @@ static NSString *SenkoMetadataText(NSString *text) {
 
 static NSString *SenkoBytes(unsigned long long value) {
     double n = (double)value;
-    NSArray *units = SenkoLanguageIsRussian()
+    NSArray *units = SenkoLanguageIsChinese()
+        ? [NSArray arrayWithObjects:@"B", @"KB", @"MB", @"GB", @"TB", nil]
+        : SenkoLanguageIsRussian()
         ? [NSArray arrayWithObjects:@"Б", @"КБ", @"МБ", @"ГБ", @"ТБ", nil]
         : [NSArray arrayWithObjects:@"B", @"KB", @"MB", @"GB", @"TB", nil];
     NSUInteger unit = 0;

@@ -1,0 +1,11 @@
+Senko includes a QR-only build of ZBar at commit
+2ea2ca585b10a07e528af08ddf8890756e059b5b.
+
+The covered source is available at:
+https://github.com/mchehab/zbar/tree/2ea2ca585b10a07e528af08ddf8890756e059b5b
+
+Senko's QR-only configuration and iOS camera integration are in the Senko
+source tree under app/third_party/zbar and app/qr_scan.m.
+
+ZBar is distributed under the GNU Lesser General Public License, version 2.1
+or later. Its license text is installed beside this notice as zbar-LICENSE.

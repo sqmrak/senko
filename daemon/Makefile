@@ -9,7 +9,7 @@ TLS_CFLAGS  := $(shell pkg-config --cflags openssl 2>/dev/null)
 TLS_LDFLAGS := $(shell pkg-config --libs openssl 2>/dev/null || echo -lssl -lcrypto)
 LDFLAGS ?=
 
-CORE_SRC = core/vless.c core/b64.c core/config.c core/profiles.c core/happ.c core/happ_crypt5.c core/third_party/cJSON.c core/net_safe.c core/socks5.c core/senko_trace.c core/senko_replay.c core/senko_upload.c core/grpc_core.c core/h2_core.c \
+CORE_SRC = core/vless.c core/b64.c core/config.c core/rules.c core/dns_msg.c core/dns_cache.c core/profiles.c core/happ.c core/happ_crypt5.c core/third_party/cJSON.c core/net_safe.c core/socks5.c core/senko_trace.c core/senko_replay.c core/senko_upload.c core/grpc_core.c core/h2_core.c \
            core/vless_conn.c core/session.c core/store.c core/control.c \
            core/ctl_engine.c core/http.c core/url.c core/subfetch.c \
            core/transport_tcp.c core/transport_tls.c core/transport_ws.c \
@@ -17,9 +17,10 @@ CORE_SRC = core/vless.c core/b64.c core/config.c core/profiles.c core/happ.c cor
            core/reality_crypto.c core/reality_auth.c core/tls_clienthello.c \
            core/tls13_kdf.c core/tls13_keysched.c core/tls13_record.c \
            core/tls13_transcript.c core/tls13_handshake.c core/reality_handshake.c \
-           core/socks5_client.c core/http_client.c core/vision.c core/awg_config.c core/awg_handshake.c
-DAEMON_SRC = dialer.c loop.c pf_natlook.c ctl_server.c daemon_ctl.c storefile.c settings.c vpn_icon.c \
-             routing.c routing_exec.c routing_fwd.c c_backend.c go_config.c go_backend.c \
+           core/socks5_client.c core/http_client.c core/vision.c core/awg_config.c core/awg_handshake.c \
+           core/trojan_client.c core/shadowsocks_client.c core/blake2b256.c
+DAEMON_SRC = dialer.c loop.c pf_natlook.c ctl_server.c daemon_ctl.c storefile.c settings.c status.c \
+             routing.c routing_exec.c routing_fwd.c pf_table.c c_backend.c go_config.c go_backend.c \
              awg_utun.c awg_route.c awg_pfroute.c legacy_ios.c proc_detach.c main.c
 
 .PHONY: all clean
@@ -33,9 +34,9 @@ senkod: $(CORE_SRC) $(DAEMON_SRC)
 senkoctl: senkoctl.c core/b64.c
 	$(CC) $(CFLAGS) senkoctl.c core/b64.c -o $@ $(LDFLAGS)
 
-senkoawgd: senkoawgd.c awg_utun.c awg_route.c awg_pfroute.c core/awg_config.c core/awg_handshake.c core/awg_tunnel.c core/b64.c core/reality_crypto.c vpn_icon.c legacy_ios.c proc_detach.c
+senkoawgd: senkoawgd.c awg_utun.c awg_route.c awg_pfroute.c core/awg_config.c core/awg_handshake.c core/awg_tunnel.c core/b64.c core/reality_crypto.c status.c legacy_ios.c proc_detach.c
 	$(CC) $(CFLAGS) $(TLS_CFLAGS) senkoawgd.c awg_utun.c awg_route.c awg_pfroute.c core/awg_config.c core/awg_handshake.c \
-	      core/awg_tunnel.c core/b64.c core/reality_crypto.c vpn_icon.c legacy_ios.c proc_detach.c -o $@ $(LDFLAGS) $(TLS_LDFLAGS)
+	      core/awg_tunnel.c core/b64.c core/reality_crypto.c status.c legacy_ios.c proc_detach.c -o $@ $(LDFLAGS) $(TLS_LDFLAGS)
 
 clean:
 	rm -f senkod senkoctl senkoawgd

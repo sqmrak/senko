@@ -211,7 +211,7 @@ static void copy_field(char *dst, size_t cap, const char *src) {
 void loop_set_tls(loop_t *lp, const char *sni, const char *fingerprint,
                   const char *reality_pbk, const char *reality_sid,
                   const char *path, const char *ws_host,
-                  const char *xhttp_mode, const char *peer_host) {
+                  const char *xhttp_mode, const char *peer_host, int insecure) {
     if (!lp) return;
     copy_field(lp->sni,          sizeof lp->sni,          sni);
     copy_field(lp->fingerprint,  sizeof lp->fingerprint,  fingerprint);
@@ -221,6 +221,7 @@ void loop_set_tls(loop_t *lp, const char *sni, const char *fingerprint,
     copy_field(lp->ws_host,      sizeof lp->ws_host,      ws_host);
     copy_field(lp->xhttp_mode,   sizeof lp->xhttp_mode,   xhttp_mode);
     copy_field(lp->peer_host,    sizeof lp->peer_host,    peer_host);
+    lp->insecure = insecure;
     lp->tls_cfg.sni = lp->sni;
     lp->tls_cfg.fingerprint = lp->fingerprint;
     lp->tls_cfg.reality_pbk = lp->reality_pbk;
@@ -229,6 +230,7 @@ void loop_set_tls(loop_t *lp, const char *sni, const char *fingerprint,
     lp->tls_cfg.ws_host = lp->ws_host;
     lp->tls_cfg.xhttp_mode = lp->xhttp_mode;
     lp->tls_cfg.peer_host = lp->peer_host;
+    lp->tls_cfg.insecure = lp->insecure;
 }
 
 static loop_conn_t *alloc_conn(loop_t *lp) {
@@ -272,6 +274,7 @@ static int read_local_into_prebuf(loop_conn_t *c) {
         size_t want = room < sizeof buf ? room : sizeof buf;
         ssize_t n = read(c->local_fd, buf, want);
         if (n > 0) {
+            c->owner->bytes_up += (uint64_t)n;
             memcpy(c->prebuf + c->prebuf_len, buf, (size_t)n);
             c->prebuf_len += (size_t)n;
             continue;
@@ -474,12 +477,14 @@ loop_status_t loop_set_server(loop_t *lp, const transport_vt_t *vt,
                               const char *sni, const char *fingerprint,
                               const char *reality_pbk, const char *reality_sid,
                               const char *path, const char *ws_host,
-                              const char *xhttp_mode, const char *peer_host) {
+                              const char *xhttp_mode, const char *peer_host,
+                              int insecure) {
     if (!lp || !vt || !dial) return LOOP_ERR_ARG;
     if (proto == VL_PROTO_VLESS && !uuid) return LOOP_ERR_ARG;
 
     /* drop connections before switching servers */
     drop_all_conns(lp);
+    lp->bytes_up = lp->bytes_down = 0;
 
     lp->vt = vt;
     lp->dial = dial;
@@ -495,7 +500,7 @@ loop_status_t loop_set_server(loop_t *lp, const transport_vt_t *vt,
     copy_field(lp->pass, sizeof lp->pass, (pass && pass[0]) ? pass : NULL);
 
     loop_set_tls(lp, sni, fingerprint, reality_pbk, reality_sid, path, ws_host,
-                 xhttp_mode, peer_host);
+                 xhttp_mode, peer_host, insecure);
 
     lp->active = 1; /* accept clients again */
     return LOOP_OK;
@@ -504,6 +509,7 @@ loop_status_t loop_set_server(loop_t *lp, const transport_vt_t *vt,
 void loop_stop(loop_t *lp) {
     if (!lp) return;
     drop_all_conns(lp);
+    lp->bytes_up = lp->bytes_down = 0;
     lp->active = 0; /* refuse new clients until a server is selected again */
 }
 
@@ -570,6 +576,7 @@ static void fill_open_fields(loop_t *lp, loop_conn_t *c) {
     copy_field(c->open_ws_host, sizeof c->open_ws_host, lp->ws_host);
     copy_field(c->open_xhttp_mode, sizeof c->open_xhttp_mode, lp->xhttp_mode);
     copy_field(c->open_peer_host, sizeof c->open_peer_host, lp->peer_host);
+    c->open_insecure = lp->insecure;
     c->open_tls_cfg.sni = c->open_sni;
     c->open_tls_cfg.fingerprint = c->open_fingerprint;
     c->open_tls_cfg.reality_pbk = c->open_reality_pbk;
@@ -578,6 +585,7 @@ static void fill_open_fields(loop_t *lp, loop_conn_t *c) {
     c->open_tls_cfg.ws_host = c->open_ws_host;
     c->open_tls_cfg.xhttp_mode = c->open_xhttp_mode;
     c->open_tls_cfg.peer_host = c->open_peer_host;
+    c->open_tls_cfg.insecure = c->open_insecure;
 }
 
 static int start_opening(loop_t *lp, loop_conn_t *c, int cfd) {
@@ -704,7 +712,11 @@ static int flush_pend_local(loop_conn_t *c) {
     while (c->pend_off < c->pend_len) {
         ssize_t w = write(c->local_fd, c->pend + c->pend_off,
                           c->pend_len - c->pend_off);
-        if (w > 0) { c->pend_off += (size_t)w; continue; }
+        if (w > 0) {
+            c->owner->bytes_down += (uint64_t)w;
+            c->pend_off += (size_t)w;
+            continue;
+        }
         if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
         if (errno == EINTR) continue;
         return -1;
@@ -717,7 +729,11 @@ static int flush_to_local(loop_conn_t *c) {
     while (c->pend_off < c->pend_len) {
         ssize_t w = write(c->local_fd, c->pend + c->pend_off,
                           c->pend_len - c->pend_off);
-        if (w > 0) { c->pend_off += (size_t)w; continue; }
+        if (w > 0) {
+            c->owner->bytes_down += (uint64_t)w;
+            c->pend_off += (size_t)w;
+            continue;
+        }
         if (errno == EAGAIN || errno == EWOULDBLOCK) return 0; /* try later */
         if (errno == EINTR) continue;
         return -1;
@@ -732,7 +748,11 @@ static int flush_to_local(loop_conn_t *c) {
         while (c->pend_off < c->pend_len) {
             ssize_t w = write(c->local_fd, c->pend + c->pend_off,
                               c->pend_len - c->pend_off);
-            if (w > 0) { c->pend_off += (size_t)w; continue; }
+            if (w > 0) {
+                c->owner->bytes_down += (uint64_t)w;
+                c->pend_off += (size_t)w;
+                continue;
+            }
             if (errno == EAGAIN || errno == EWOULDBLOCK) return 0; /* keep pend */
             if (errno == EINTR) continue;
             return -1;
@@ -752,6 +772,7 @@ static void service_conn(loop_t *lp, loop_conn_t *c,
         uint8_t buf[8192];
         ssize_t n = read(c->local_fd, buf, sizeof buf);
         if (n > 0) {
+            lp->bytes_up += (uint64_t)n;
             size_t off = 0;
             while (off < (size_t)n) {
                 size_t consumed = 0;

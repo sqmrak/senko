@@ -12,6 +12,8 @@
 #include <limits.h>
 #include <objc/message.h>
 #import "control_client.h"
+#import "native_vpn.h"
+#import "native_config.h"
 #import "qr_scan.h"
 #import "ui_theme.h"
 #import "boykisser_field.h"
@@ -31,6 +33,7 @@
                       FileImportDelegate, EditAWGDelegate,
                       EditServerDelegate, SenkoServerSheetDelegate> {
     SenkoControl *_ctl;
+    SenkoNativeVPN *_nativeVPN;
     UIButton     *_connectBtn;
     UIButton     *_pingAllBtn;
     SenkoHomeCard *_statusCard;
@@ -53,6 +56,12 @@
     int           _menuSubIdx;
     BOOL          _busy;
     BOOL          _subscriptionMutationBusy;
+    BOOL          _isRefreshingCatalog;
+    BOOL          _catalogLoaded;
+/* a dim veil with a spinner over the whole screen while a subscription
+   refresh or a ping sweep is in flight, so the wait reads as "working" and
+   not as a frozen list */
+    UIView       *_busyOverlay;
     CAGradientLayer *_bgGrad;
     NSMutableSet *_revealedRows;
     /* tunnel age as the daemon last reported it, plus the monotonic instant it
@@ -63,6 +72,19 @@
        zero age and "no age reported yet" are the same value */
     BOOL          _tunnelUptimeKnown;
     NSTimer      *_uptimeTimer;
+    BOOL          _trafficPending;
+    NSUInteger    _trafficGeneration;
+    uint64_t      _trafficUp;
+    uint64_t      _trafficDown;
+    BOOL          _trafficKnown;
+    /* the daemon owns the tunnel, and nothing else asks it what happened: a
+       tunnel that came up, dropped or was switched outside this screen left the
+       card showing whatever the last user action had put there until the app
+       was launched again. this ticks while the screen is on top */
+    NSTimer      *_statusTimer;
+    /* each poll has two replies. a slow older poll must not repaint state after
+       a newer one has already described the daemon */
+    NSUInteger    _tunnelStateGeneration;
     UIView            *_statusWashHost;
     CALayer           *_statusWash;
     SenkoBoykisserField *_boyField;
@@ -83,7 +105,6 @@
     NSUInteger     _pingPending;
     NSUInteger     _pingCompleted;
     int            _pingSubIndex;
-    NSString      *_pingMode;
     UIActionSheet *_actionSheet;
     NSString      *_pendingUpdatePath;
     NSString      *_pendingInsecureURL;
@@ -102,6 +123,7 @@
     /* uikit runs the rotation inside its own animation block, so every frame
        this layout writes would otherwise be interpolated from the old shape */
     BOOL           _rotating;
+    BOOL           _layingOutChrome;
 }
 
 - (void)dealloc;
@@ -127,6 +149,7 @@
 - (void)viewDidLoad;
 - (void)viewWillAppear:(BOOL)animated;
 - (void)ensureDaemonThenRefresh;
+- (void)refreshNativeCatalog;
 - (void)appDidBecomeActive:(NSNotification *)n;
 - (void)settingsPressed;
 - (void)bringMainChromeToFront;
@@ -155,6 +178,7 @@
 - (void)importAWGText:(NSString *)text;
 - (void)importText:(NSString *)s;
 - (void)importContentData:(NSData *)data;
+- (void)addNativeServers:(NSArray *)servers successText:(NSString *)successText;
 - (void)importFileAtPath:(NSString *)path;
 - (void)addSubscriptionURL:(NSString *)url name:(NSString *)name;
 - (int)trailingIntOf:(NSString *)reply;
@@ -177,15 +201,27 @@
 - (void)applyCatalog:(NSArray *)servers subs:(NSArray *)subs order:(NSArray *)order;
 - (void)rebuildSections;
 - (void)syncEmptyState;
+/* where the empty panel may be drawn without covering what the list has already
+   put on screen. CGRectZero when there is no room for it at all */
+- (CGRect)emptyStateFrame;
 - (void)emptyStatePastePressed;
 - (void)emptyStateScanPressed;
 - (void)emptyStateCopyHWID;
 - (void)requestDeviceHWID;
-- (void)rebuildRowNames;
+- (NSArray *)collapsedRows:(NSArray *)rows names:(NSMutableDictionary *)rowNames;
 - (NSArray *)sortedRows:(NSArray *)rows;
+- (NSNumber *)bestPingForServer:(SenkoServer *)sv;
+- (NSArray *)connectCandidatesForServerIndex:(int)index;
 - (void)setListHeaderProgress:(CGFloat)progress;
 - (SenkoServer *)serverAtIndexPath:(NSIndexPath *)ip;
 - (void)refresh;
+/* the status half of -refresh on its own: the catalog is expensive to list and
+   does not change on its own, the tunnel state does */
+- (void)refreshTunnelState;
+- (void)refreshTunnelStateRedrawing:(BOOL)always;
+- (void)nativeStatusWithReply:(void (^)(NSString *state, long uptime))done;
+- (void)startStatusHeartbeat;
+- (void)stopStatusHeartbeat;
 - (void)setToggleBusy:(BOOL)busy;
 - (void)syncSelectionFromDaemon;
 - (void)reconcileSelectionAfterListKeeping:(SenkoServer *)anchor;
@@ -231,14 +267,14 @@ forRowAtIndexPath:(NSIndexPath *)ip;
 - (void)awgPingTapped:(UIButton *)btn;
 - (void)refreshSubscriptionIndex:(int)pos;
 - (void)refreshPressed;
+- (void)showBusyOverlay:(NSString *)text;
+- (void)hideBusyOverlay;
 - (void)pingPressed;
 - (void)serverPingTapped:(UIButton *)button;
 - (void)startPingSweep;
 - (void)updateSubscriptionPingButtons:(NSSet *)subIndexes;
 - (void)reloadServerRowForIndex:(int)serverIndex;
-- (void)checkStatusOfServerAtIndex:(NSUInteger)idx generation:(NSInteger)gen;
 - (void)pingServersInSub:(int)subIdx;
-- (void)pingIndexList:(NSArray *)idxs at:(NSUInteger)i generation:(NSInteger)gen;
 - (void)beginBoundedPing:(NSArray *)idxs subIndex:(int)subIdx generation:(NSInteger)gen;
 - (void)launchBoundedPingsForGeneration:(NSInteger)gen;
 - (void)finishBoundedPing;
@@ -248,6 +284,8 @@ forRowAtIndexPath:(NSIndexPath *)ip;
 - (void)togglePressed;
 - (void)toggleAfterAWGCheck;
 - (void)switchActiveServerIndex:(int)idx;
+- (void)connectTryingCandidates:(NSArray *)candidates offset:(NSUInteger)offset
+                           reply:(void (^)(NSString *reply))replyBlock;
 - (void)editAWGProfile;
 - (void)editAWGVC:(EditAWGVC *)vc saveConfig:(NSString *)config;
 - (void)startSavedAWGProfile;

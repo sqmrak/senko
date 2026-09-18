@@ -45,7 +45,7 @@
     CGFloat h = self.bounds.size.height;
     if (w < 1.0f || h < 1.0f || !plate) return;
 
-    CGFloat side = compact ? 8.0f : 10.0f;
+    CGFloat side = SENKO_LIST_PLATE_INSET;
     CGFloat plateW = w - side * 2.0f;
     if (plateW < 40.0f) plateW = 40.0f;
     CGFloat plateH = h - 6.0f;
@@ -211,43 +211,85 @@ static NSString *SenkoSubscriptionExpiry(unsigned long long expire) {
     if (!expire) return nil;
     NSDate *date = [NSDate dateWithTimeIntervalSince1970:(NSTimeInterval)expire];
     if ([date timeIntervalSinceNow] <= 0.0)
-        return SenkoLanguageIsRussian() ? @"истекла" : @"expired";
+        return SenkoLanguageIsChinese() ? @"已过期"
+             : SenkoLanguageIsRussian() ? @"истекла" : @"expired";
     NSDateFormatter *fmt = [[[NSDateFormatter alloc] init] autorelease];
     fmt.locale = [[[NSLocale alloc] initWithLocaleIdentifier:
-        SenkoLanguageIsRussian() ? @"ru_RU" : @"en_US"] autorelease];
-    fmt.dateFormat = SenkoLanguageIsRussian() ? @"'до' dd.MM.yy" : @"'until' MM/dd/yy";
+        SenkoLanguageIsChinese() ? @"zh_CN"
+        : SenkoLanguageIsRussian() ? @"ru_RU" : @"en_US"] autorelease];
+    fmt.dateFormat = SenkoLanguageIsChinese() ? @"至 yyyy-MM-dd"
+        : SenkoLanguageIsRussian() ? @"'до' dd.MM.yy" : @"'until' MM/dd/yy";
     return [fmt stringFromDate:date];
 }
 
-static NSString *SenkoSubscriptionBytes(unsigned long long value) {
-    double amount = (double)value;
-    NSArray *units = SenkoLanguageIsRussian()
-        ? [NSArray arrayWithObjects:@"Б", @"КБ", @"МБ", @"ГБ", @"ТБ", nil]
-        : [NSArray arrayWithObjects:@"B", @"KB", @"MB", @"GB", @"TB", nil];
-    NSUInteger unit = 0;
-    while (amount >= 1024.0 && unit + 1 < [units count]) {
-        amount /= 1024.0;
-        unit++;
+static NSString * const kSenkoSubscriptionRefreshKey = @"senkoSubscriptionRefresh";
+static NSString * const kSenkoPingButtonKey = @"senkoPingButton";
+
+/* core animation keeps the icon moving without asking uikit to redraw a whole
+   header for every frame. the operation remains serial, so one icon per active
+   group tells the truth about what the daemon is doing. */
+static void SenkoSetButtonSpinning(UIButton *button, NSString *key, BOOL spinning) {
+    CALayer *layer;
+    CABasicAnimation *turn;
+    if (!button || ![key length]) return;
+    layer = button.imageView ? button.imageView.layer : button.layer;
+    if (!spinning) {
+        [layer removeAnimationForKey:key];
+        return;
     }
-    NSString *number = [NSString stringWithFormat:(amount >= 10.0 || unit == 0)
-        ? @"%.0f" : @"%.1f", amount];
-    if (SenkoLanguageIsRussian())
-        number = [number stringByReplacingOccurrencesOfString:@"." withString:@","];
-    return [NSString stringWithFormat:@"%@ %@", number, [units objectAtIndex:unit]];
+    if ([layer animationForKey:key]) return;
+    turn = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"];
+    turn.fromValue = [NSNumber numberWithFloat:0.0f];
+    turn.toValue = [NSNumber numberWithFloat:(float)(M_PI * 2.0)];
+    turn.duration = 0.78;
+    turn.repeatCount = HUGE_VALF;
+    turn.timingFunction = [CAMediaTimingFunction
+        functionWithName:kCAMediaTimingFunctionLinear];
+    [layer addAnimation:turn forKey:key];
 }
+
+/* boykisser/miside skins recolor a few accent glyphs; every other theme uses
+   the app's one accent blue. more than one header icon needs this tint, so
+   it is not decided differently in each place */
+static UIColor *SenkoAccentIconTint(void) {
+    return (SenkoThemeIsBoykisser() || SenkoThemeIsMiside())
+        ? [UIColor colorWithRed:1.00 green:0.42 blue:0.72 alpha:1.0]
+        : kAccentBlue;
+}
+
+/* the gauge glyph is a half-circle dial with a needle pivoting off its own
+   center, drawn to sit still, not to turn: spinning it in place made it wobble
+   around a point that is not its own middle instead of spinning cleanly. the
+   refresh glyph is drawn for exactly this job, so it stands in as the icon
+   while a ping is in flight. a button with no image at all (the classic
+   check button, which shows text instead) has nothing to swap */
+static void SenkoSetGaugeSpinning(UIButton *button, BOOL spinning, UIColor *tint) {
+    UIImage *current = [button imageForState:UIControlStateNormal];
+    if (button && current) {
+        CGFloat side = current.size.width > 0 ? current.size.width : 20.0f;
+        [button setImage:(spinning ? SenkoIconRefresh(side, tint) : GaugeIcon(side, tint))
+                forState:UIControlStateNormal];
+    }
+    SenkoSetButtonSpinning(button, kSenkoPingButtonKey, spinning);
+}
+
 
 static NSString *SenkoSubscriptionUsage(SenkoSub *sub) {
     if (!sub || (!sub->total && !sub->upload && !sub->download)) return nil;
     unsigned long long used = sub->upload + sub->download;
     if (sub->total) {
         unsigned long long left = sub->total > used ? sub->total - used : 0;
-        return SenkoLanguageIsRussian()
-            ? [NSString stringWithFormat:@"осталось %@", SenkoSubscriptionBytes(left)]
-            : [NSString stringWithFormat:@"%@ left", SenkoSubscriptionBytes(left)];
+        return SenkoLanguageIsChinese()
+            ? [NSString stringWithFormat:@"剩余 %@", SenkoFormatBytes(left)]
+            : SenkoLanguageIsRussian()
+            ? [NSString stringWithFormat:@"осталось %@", SenkoFormatBytes(left)]
+            : [NSString stringWithFormat:@"%@ left", SenkoFormatBytes(left)];
     }
-    return SenkoLanguageIsRussian()
-        ? [NSString stringWithFormat:@"исп. %@", SenkoSubscriptionBytes(used)]
-        : [NSString stringWithFormat:@"%@ used", SenkoSubscriptionBytes(used)];
+    return SenkoLanguageIsChinese()
+        ? [NSString stringWithFormat:@"已用 %@", SenkoFormatBytes(used)]
+        : SenkoLanguageIsRussian()
+        ? [NSString stringWithFormat:@"исп. %@", SenkoFormatBytes(used)]
+        : [NSString stringWithFormat:@"%@ used", SenkoFormatBytes(used)];
 }
 
 static UIImage *SenkoSectionSnapshot(UIView *view) {
@@ -319,52 +361,110 @@ static NSString *SenkoSharedNameHead(NSArray *names) {
     return [first substringToIndex:cut];
 }
 
-- (void)rebuildRowNames {
-    NSMutableDictionary *names = [NSMutableDictionary dictionary];
-    for (NSDictionary *sec in _sections) {
-        NSArray *rows = [sec objectForKey:@"rows"];
-        NSMutableArray *raw = [NSMutableArray array];
-        for (SenkoServer *sv in rows) {
-            NSString *name = SenkoServerDisplayName(sv->remark);
-            [raw addObject:name ? name : @""];
-        }
-        NSString *head = SenkoSharedNameHead(raw);
-        NSMutableArray *shown = [NSMutableArray array];
-        for (NSString *name in raw) {
-            NSString *out = name;
-            if ([head length] && [name length] > [head length]) {
-                out = [[name substringFromIndex:[head length]]
-                       stringByTrimmingCharactersInSet:
-                           [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-                if (![out length]) out = name;
-            }
-            [shown addObject:out];
-        }
-
-        NSMutableDictionary *counts = [NSMutableDictionary dictionary];
-        for (NSString *name in shown) {
-            if (![name length]) continue;
-            NSNumber *seen = [counts objectForKey:name];
-            [counts setObject:[NSNumber numberWithInt:[seen intValue] + 1] forKey:name];
-        }
-        NSMutableDictionary *used = [NSMutableDictionary dictionary];
-        NSUInteger i = 0;
-        for (SenkoServer *sv in rows) {
-            NSString *name = [shown objectAtIndex:i++];
-            if (![name length]) continue;
-            if ([[counts objectForKey:name] intValue] > 1) {
-                int ordinal = [[used objectForKey:name] intValue] + 1;
-                [used setObject:[NSNumber numberWithInt:ordinal] forKey:name];
-                name = [NSString stringWithFormat:@"%@ (%d)", name, ordinal];
-            }
-            [names setObject:name forKey:[NSNumber numberWithInt:sv->index]];
-        }
+/* the display name each row would show after stripping the head every row in
+   the section shares (see SenkoSharedNameHead), one entry per row in order */
+static NSArray *SenkoShownNames(NSArray *rows) {
+    NSMutableArray *raw = [NSMutableArray array];
+    for (SenkoServer *sv in rows) {
+        NSString *name = SenkoServerDisplayName(sv->remark);
+        [raw addObject:name ? name : @""];
     }
-    [_rowName release];
-    _rowName = [names retain];
+    NSString *head = SenkoSharedNameHead(raw);
+    if (![head length]) return raw;
+    NSMutableArray *shown = [NSMutableArray array];
+    for (NSString *name in raw) {
+        NSString *out = name;
+        if ([name length] > [head length]) {
+            out = [[name substringFromIndex:[head length]]
+                   stringByTrimmingCharactersInSet:
+                       [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (![out length]) out = name;
+        }
+        [shown addObject:out];
+    }
+    return shown;
+}
+
+/* display names are user text, so case and repeated whitespace must not split
+   one country into several rows after the visible spelling has become equal */
+static NSString *SenkoCollapseNameKey(NSString *name) {
+    if (![name length]) return @"";
+    NSArray *words = [name componentsSeparatedByCharactersInSet:
+                      [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSMutableArray *kept = [NSMutableArray array];
+    for (NSString *word in words)
+        if ([word length]) [kept addObject:word];
+    return [[kept componentsJoinedByString:@" "] lowercaseString];
+}
+
+/* rows that reduce to the same name (same country, different transport or
+   host) collapse into one: the first one keeps the row and remembers the
+   rest in dupIndexes, so connecting to it can try them in turn instead of the
+   list showing several identical-looking entries for what the user reads as
+   one server. */
+- (NSArray *)collapsedRows:(NSArray *)rows names:(NSMutableDictionary *)rowNames {
+    NSArray *shown = SenkoShownNames(rows);
+    NSMutableArray *out = [NSMutableArray array];
+    NSMutableDictionary *repByName = [NSMutableDictionary dictionary];
+    NSUInteger i = 0;
+    for (SenkoServer *sv in rows) {
+        [sv->dupIndexes release];
+        sv->dupIndexes = nil; /* drop whatever an earlier rebuild left here */
+        NSString *name = [shown objectAtIndex:i++];
+        NSNumber *indexKey = [NSNumber numberWithInt:sv->index];
+        if ([name length]) [rowNames setObject:name forKey:indexKey];
+        if (![name length]) { [out addObject:sv]; continue; }
+        NSString *key = SenkoCollapseNameKey(name);
+        SenkoServer *rep = [repByName objectForKey:key];
+        if (!rep) {
+            [repByName setObject:sv forKey:key];
+            [out addObject:sv];
+            continue;
+        }
+        BOOL svCurrent = (_selectedBackend == SenkoBackendServer &&
+                          sv->index == _selectedSrvIdx) || sv->selected;
+        BOOL repCurrent = (_selectedBackend == SenkoBackendServer &&
+                           rep->index == _selectedSrvIdx) || rep->selected;
+        if (svCurrent && !repCurrent) {
+/* the ui selection can be newer than the last catalog answer. whichever side
+   owns that selection has to keep the row, the ping label and the connect
+   button together */
+            NSMutableArray *members = rep->dupIndexes
+                ? [rep->dupIndexes mutableCopy]
+                : [[NSMutableArray alloc] initWithObjects:
+                   [NSNumber numberWithInt:rep->index], nil];
+            NSNumber *selectedIndex = [NSNumber numberWithInt:sv->index];
+            if (![members containsObject:selectedIndex])
+                [members addObject:selectedIndex];
+            NSArray *old = sv->dupIndexes;
+            sv->dupIndexes = [members copy];
+            [old release];
+            [members release];
+            NSUInteger repPos = [out indexOfObjectIdenticalTo:rep];
+            if (repPos != NSNotFound) [out replaceObjectAtIndex:repPos withObject:sv];
+            [rowNames removeObjectForKey:[NSNumber numberWithInt:rep->index]];
+            [repByName setObject:sv forKey:key];
+            continue;
+        }
+        NSMutableArray *members = rep->dupIndexes
+            ? [rep->dupIndexes mutableCopy]
+            : [[NSMutableArray alloc] initWithObjects:
+               [NSNumber numberWithInt:rep->index], nil];
+        [members addObject:[NSNumber numberWithInt:sv->index]];
+        NSArray *old = rep->dupIndexes;
+        rep->dupIndexes = [members copy];
+        [old release];
+        [members release];
+    }
+    return out;
 }
 
 - (void)applyCatalog:(NSArray *)servers subs:(NSArray *)subs order:(NSArray *)order {
+#if SENKO_STOCK_NATIVE
+    SenkoNativeAttachCachedLinks(servers);
+#endif
+    _catalogLoaded = YES;
+    [self hideBusyOverlay];
 /* keep chrome geometry after reload */
     SenkoServer *oldSelected = nil;
     if (_selectedBackend == SenkoBackendServer && _selectedSrvIdx >= 0) {
@@ -377,6 +477,9 @@ static NSString *SenkoSharedNameHead(NSArray *names) {
     }
     [_servers release];
     _servers = [servers mutableCopy];
+#if SENKO_STOCK_NATIVE
+    SenkoNativeSaveServers(_servers);
+#endif
     [_subs release];
     _subs = [subs mutableCopy];
     [_sectionOrder release];
@@ -394,9 +497,14 @@ static NSString *SenkoSharedNameHead(NSArray *names) {
     [self rebuildSections];
     [self reconcileSelectionAfterListKeeping:oldSelected];
     [oldSelected release];
-    [_table reloadData];
-    [self styleListWell];
     [self layoutMainChrome];
+    [_table reloadData];
+    [_table layoutIfNeeded];
+    /* reloadData discards the old rows only after the catalog has been
+       replaced. placing the empty panel before that used the old contentSize,
+       concluded that the screen was full, and kept it hidden until relaunch. */
+    [self syncEmptyState];
+    [self styleListWell];
 }
 
 /* servers without a reading sort last: an unmeasured row is not fast, it is
@@ -407,20 +515,40 @@ static int SenkoSortRank(NSNumber *ms) {
     return v >= 0 ? 0 : 2;
 }
 
+/* a collapsed row's own measurement may be missing or worse than a hidden
+   sibling's, so both the ping label and the sort order read the best of the
+   whole group rather than just the representative's own entry */
+- (NSNumber *)bestPingForServer:(SenkoServer *)sv {
+    NSArray *idxs = [sv->dupIndexes count]
+        ? sv->dupIndexes
+        : [NSArray arrayWithObject:[NSNumber numberWithInt:sv->index]];
+    NSNumber *best = nil;
+    BOOL anyChecked = NO;
+    for (NSNumber *idxNum in idxs) {
+        NSNumber *ms = [_serverStatus objectForKey:idxNum];
+        if (!ms) continue;
+        anyChecked = YES;
+        if ([ms intValue] == -3) return ms; /* a member is mid-check: show that */
+        if ([ms intValue] >= 0 && (!best || [ms intValue] < [best intValue]))
+            best = ms;
+    }
+    if (best) return best;
+    return anyChecked ? [NSNumber numberWithInt:-1] : nil;
+}
+
 - (NSArray *)sortedRows:(NSArray *)rows {
     SenkoServerSort mode = (SenkoServerSort)
         [[NSUserDefaults standardUserDefaults] integerForKey:SENKO_SERVER_SORT_KEY];
     if (mode != SenkoSortName && mode != SenkoSortPing) return rows;
     NSMutableArray *out = [NSMutableArray arrayWithArray:rows];
-    NSDictionary *status = _serverStatus;
     [out sortUsingComparator:^NSComparisonResult(SenkoServer *a, SenkoServer *b) {
         NSString *na = SenkoServerDisplayName(a->remark);
         NSString *nb = SenkoServerDisplayName(b->remark);
         if (![na length]) na = a->host ? a->host : @"";
         if (![nb length]) nb = b->host ? b->host : @"";
         if (mode == SenkoSortPing) {
-            NSNumber *pa = [status objectForKey:[NSNumber numberWithInt:a->index]];
-            NSNumber *pb = [status objectForKey:[NSNumber numberWithInt:b->index]];
+            NSNumber *pa = [self bestPingForServer:a];
+            NSNumber *pb = [self bestPingForServer:b];
             int ra = SenkoSortRank(pa), rb = SenkoSortRank(pb);
             if (ra != rb) return ra < rb ? NSOrderedAscending : NSOrderedDescending;
             if (ra == 0 && [pa intValue] != [pb intValue])
@@ -438,6 +566,7 @@ static int SenkoSortRank(NSNumber *ms) {
     NSMutableArray *manual = [NSMutableArray array];
     NSMutableDictionary *bySub = [NSMutableDictionary dictionary];
     NSMutableDictionary *flagBySub = [NSMutableDictionary dictionary];
+    NSMutableDictionary *rowNames = [NSMutableDictionary dictionary];
 
     for (SenkoServer *sv in _servers) {
         if (sv->group >= 0) {
@@ -473,7 +602,7 @@ static int SenkoSortRank(NSNumber *ms) {
             [secs addObject:[NSDictionary dictionaryWithObjectsAndKeys:
                              @"Manual", @"title",
                              key, @"subIdx",
-                             [self sortedRows:manual], @"rows", nil]];
+                             [self sortedRows:[self collapsedRows:manual names:rowNames]], @"rows", nil]];
             [seen addObject:key];
             continue;
         }
@@ -495,7 +624,7 @@ static int SenkoSortRank(NSNumber *ms) {
         [secs addObject:[NSDictionary dictionaryWithObjectsAndKeys:
                          title, @"title", flag ? flag : @"", @"flag",
                          meta, @"meta", key, @"subIdx",
-                         [self sortedRows:rows], @"rows", nil]];
+                         [self sortedRows:[self collapsedRows:rows names:rowNames]], @"rows", nil]];
         [seen addObject:key];
     }
 
@@ -504,7 +633,7 @@ static int SenkoSortRank(NSNumber *ms) {
         if (![seen containsObject:manualKey])
             [secs insertObject:[NSDictionary dictionaryWithObjectsAndKeys:
                                @"Manual", @"title", manualKey, @"subIdx",
-                               [self sortedRows:manual], @"rows", nil] atIndex:0];
+                               [self sortedRows:[self collapsedRows:manual names:rowNames]], @"rows", nil] atIndex:0];
     }
     for (SenkoSub *sub in _subs) {
         NSNumber *key = [NSNumber numberWithInt:sub->index];
@@ -524,13 +653,14 @@ static int SenkoSortRank(NSNumber *ms) {
         NSString *meta = [parts componentsJoinedByString:@"  •  "];
         [secs addObject:[NSDictionary dictionaryWithObjectsAndKeys:
                          title, @"title", flag ? flag : @"", @"flag", meta, @"meta",
-                         key, @"subIdx", [self sortedRows:rows], @"rows", nil]];
+                         key, @"subIdx", [self sortedRows:[self collapsedRows:rows names:rowNames]], @"rows", nil]];
         [_sectionOrder addObject:key];
     }
 
     [_sections release];
     _sections = [secs retain];
-    [self rebuildRowNames];
+    [_rowName release];
+    _rowName = [rowNames copy];
 
     NSMutableSet *valid = [NSMutableSet set];
     for (NSDictionary *sec in _sections) {
@@ -538,51 +668,83 @@ static int SenkoSortRank(NSNumber *ms) {
         if (subIdx >= 0) [valid addObject:[NSNumber numberWithInt:subIdx]];
     }
     [_collapsedSubs intersectSet:valid];
-    [self syncEmptyState];
 }
 
 /* the list is empty when nothing at all is configured: not a single manual
    server, no subscription server, and no saved amneziawg profile */
+/* the panel starts below whatever the list has actually drawn: the spacer header
+   that holds the open status card off the first row, plus any section header a
+   subscription with no servers still draws. the list refresh and the layout pass
+   both place it, and the layout pass used to win by resetting it to the plain
+   table frame, which is what put the card over the first line */
+- (CGRect)emptyStateFrame {
+    CGRect area = _table.frame;
+    /* the open status card covers the table header spacer. empty content must
+       start below it too, otherwise its title sits under the card. short
+       landscape screens keep a small visible panel instead of losing it. */
+    if ([_servers count] == 0 && ![self hasAWGProfile]) {
+        UIView *spacer = _table.tableHeaderView;
+        CGFloat spacerH = spacer ? spacer.bounds.size.height : 0.0f;
+        CGFloat used = spacerH;
+        /* an empty subscription still draws its header. start below it instead
+           of covering the controls that explain why its server list is empty */
+        if ([_subs count] > 0) {
+            CGFloat content = _table.contentSize.height - _table.contentOffset.y;
+            if (content > used) used = content;
+        }
+        if (used < 0.0f) used = 0.0f;
+        if (used > area.size.height - 72.0f)
+            used = MAX(0.0f, area.size.height - 72.0f);
+        area.origin.y += used;
+        area.size.height -= used;
+        return area;
+    }
+    CGFloat used = _table.contentSize.height - _table.contentOffset.y;
+    UIView *spacer = _table.tableHeaderView;
+/* contentSize is not written until the table lays itself out, and the spacer is
+   set synchronously by the layout pass, so the header is the reliable floor */
+    CGFloat spacerH = spacer ? spacer.bounds.size.height : 0.0f;
+    if (used < spacerH) used = spacerH;
+    if (used < 0.0f) used = 0.0f;
+    if (used > 0.0f) {
+        CGFloat room = area.size.height - used;
+        /* under a list that already fills the screen there is nowhere to put
+           the panel that would not cover it */
+        if (room < 180.0f) return CGRectZero;
+        area.origin.y += used;
+        area.size.height = room;
+    }
+    return area;
+}
+
 - (void)syncEmptyState {
     if (!_emptyState) return;
     BOOL empty = ([_servers count] == 0) && ![self hasAWGProfile];
     _emptyState.hidden = !empty;
     if (!empty) return;
 
-/* a subscription with no servers in it still draws its section header, and the
-   panel used to be laid over the whole table: on a screen tall enough to show
-   both, its text landed on top of those headers. it starts below whatever the
-   list has actually drawn instead */
-    CGRect area = _table.frame;
-    CGFloat used = _table.contentSize.height - _table.contentOffset.y;
-    if (used < 0.0f) used = 0.0f;
-    if (used > 0.0f) {
-        CGFloat room = area.size.height - used;
-        /* under a list that already fills the screen there is nowhere to put
-           the panel that would not cover it */
-        if (room < 180.0f) {
-            _emptyState.hidden = YES;
-            return;
+    /* layout can run with no room while the table header is settling. load the
+       id before that early return, or the panel can stay empty until relaunch */
+    [_emptyState setHWID:_deviceHWID];
+    if (![_deviceHWID length]) {
+        NSString *shared = SenkoSharedDeviceHWID();
+        if ([shared length]) {
+            [_deviceHWID release];
+            _deviceHWID = [shared copy];
+            [_emptyState setHWID:_deviceHWID];
+        } else {
+            [self requestDeviceHWID];
         }
-        area.origin.y += used;
-        area.size.height = room;
+    }
+
+    CGRect area = [self emptyStateFrame];
+    if (CGRectIsEmpty(area)) {
+        _emptyState.hidden = YES;
+        return;
     }
     _emptyState.frame = area;
     [self.view bringSubviewToFront:_emptyState];
     [self bringMainChromeToFront];
-    [_emptyState setHWID:_deviceHWID];
-    if ([_deviceHWID length]) return;
-/* the daemon owns the id it actually sends, so the ui never mints a second
-   one. it does not have to ask over the socket to see it though: both
-   processes share a file, and reading that cannot time out */
-    NSString *shared = SenkoSharedDeviceHWID();
-    if ([shared length]) {
-        [_deviceHWID release];
-        _deviceHWID = [shared copy];
-        [_emptyState setHWID:_deviceHWID];
-        return;
-    }
-    [self requestDeviceHWID];
 }
 
 /* the shared file is written the first time the daemon is asked for the id, so
@@ -591,6 +753,20 @@ static int SenkoSortRank(NSNumber *ms) {
    reading "not available yet" for the rest of the session */
 - (void)requestDeviceHWID {
     if ([_deviceHWID length]) return;
+#if SENKO_STOCK_NATIVE
+    NSString *local = [[NSUserDefaults standardUserDefaults]
+                       objectForKey:@"SenkoNativeHWID"];
+    if (![local length]) {
+        local = [[[NSUUID UUID] UUIDString] lowercaseString];
+        [[NSUserDefaults standardUserDefaults] setObject:local
+                                                  forKey:@"SenkoNativeHWID"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+    }
+    [_deviceHWID release];
+    _deviceHWID = [local copy];
+    [_emptyState setHWID:_deviceHWID];
+    return;
+#else
 /* the file is the cheap path and it needs no daemon at all */
     NSString *shared = SenkoSharedDeviceHWID();
     if ([shared length]) {
@@ -620,6 +796,7 @@ static int SenkoSortRank(NSNumber *ms) {
         _deviceHWID = [value copy];
         [_emptyState setHWID:_deviceHWID];
     }];
+#endif
 }
 
 - (void)emptyStatePastePressed {
@@ -640,7 +817,11 @@ static int SenkoSortRank(NSNumber *ms) {
     if (progress < 0.0f) progress = 0.0f;
     if (progress > 1.0f) progress = 1.0f;
 /* a whole layout pass for a sub pixel change is not worth running */
-    if (fabsf((float)(_listHeaderProgress - progress)) < 0.004f) return;
+    /* on armv7 the card pass is the costliest part of scrolling. a 1.8 percent
+       step remains smooth at 30 fps and avoids relaying out chrome for noise */
+    BOOL endpoint = progress == 0.0f || progress == 1.0f;
+    if (!endpoint && fabsf((float)(_listHeaderProgress - progress)) < 0.018f)
+        return;
     _listHeaderProgress = progress;
     [self layoutMainChromeGeometry];
 }
@@ -656,6 +837,10 @@ static int SenkoSortRank(NSNumber *ms) {
 }
 
 - (void)refresh {
+#if SENKO_STOCK_NATIVE
+    [self refreshNativeCatalog];
+    return;
+#else
     [NSObject cancelPreviousPerformRequestsWithTarget:self
                                              selector:@selector(refresh)
                                                object:nil];
@@ -667,6 +852,8 @@ static int SenkoSortRank(NSNumber *ms) {
             [_ctl ensureDaemon:^(BOOL up, NSString *detail) {
                 if (generation != _catalogGeneration) return;
                 if (!up) {
+                    _catalogLoaded = YES;
+                    [self hideBusyOverlay];
                     if ([self isTunnelActive]) {
 /* keep the current strip while connected */
                         return;
@@ -680,6 +867,8 @@ static int SenkoSortRank(NSNumber *ms) {
                 [_ctl listCatalog:^(NSArray *servers2, NSArray *subs2, NSArray *order2) {
                     if (generation != _catalogGeneration) return;
                     if (!servers2) {
+                        _catalogLoaded = YES;
+                        [self hideBusyOverlay];
                         if (![self isTunnelActive]) {
                             [self setLastErr:@"daemon offline"];
                             [self applyState];
@@ -695,11 +884,63 @@ static int SenkoSortRank(NSNumber *ms) {
         [self applyCatalog:servers subs:subs order:order];
         [self startStatusChecks];
     }];
+    [self refreshTunnelState];
+#endif
+}
+
+#if SENKO_STOCK_NATIVE
+- (void)refreshNativeCatalog {
+    NSArray *servers = SenkoNativeLoadServers();
+    _catalogLoaded = YES;
+    [self hideBusyOverlay];
+    if (![servers count]) {
+        [self setLastErr:@"add a server link to use native VPN"];
+        [_servers removeAllObjects];
+        [_subs removeAllObjects];
+        [self rebuildSections];
+        [_table reloadData];
+        [self applyState];
+        [self refreshTunnelState];
+        return;
+    }
+    [_servers release];
+    _servers = [servers mutableCopy];
+    [_subs removeAllObjects];
+    [_sectionOrder release];
+    _sectionOrder = [[NSMutableArray alloc] initWithObjects:
+                     [NSNumber numberWithInt:-1], nil];
+    [self rebuildSections];
+    [self syncSelectionFromDaemon];
+    [_table reloadData];
+    [self syncEmptyState];
+    [self startStatusChecks];
+    [self refreshTunnelState];
+}
+#endif
+
+- (void)refreshTunnelState {
+    [self refreshTunnelStateRedrawing:YES];
+}
+
+/* the heartbeat runs whether or not anything moved, and -applyState repaints the
+   whole background stack. redrawing that every five seconds for a state nobody
+   changed is work a 4s does not have to spare, so a quiet poll only repaints
+   when the daemon reports something other than what is already on screen */
+- (void)refreshTunnelStateRedrawing:(BOOL)always {
+    NSInteger generation = _catalogGeneration;
+    NSUInteger stateGeneration = ++_tunnelStateGeneration;
     __block NSString *vlessState = nil;
     __block NSString *awgState = nil;
+#if SENKO_STOCK_NATIVE
+    __block NSInteger pending = 1;
+#else
     __block NSInteger pending = 2;
+#endif
     void (^applyBackendState)(void) = ^{
-        if (generation != _catalogGeneration) {
+        NSString *stateBefore;
+        SenkoBackendKind backendBefore;
+        if (generation != _catalogGeneration ||
+            stateGeneration != _tunnelStateGeneration) {
             [vlessState release];
             [awgState release];
             vlessState = nil;
@@ -708,6 +949,9 @@ static int SenkoSortRank(NSNumber *ms) {
         }
         pending--;
         if (pending != 0) return;
+
+        stateBefore = [[_state copy] autorelease];
+        backendBefore = _activeBackend;
 
         NSString *awg = [awgState stringByTrimmingCharactersInSet:
                          [NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -780,7 +1024,9 @@ static int SenkoSortRank(NSNumber *ms) {
             else if (!awgErr)
                 [self setLastErr:nil];
         }
-        [self applyState];
+        if (always || backendBefore != _activeBackend ||
+            ![stateBefore isEqualToString:_state])
+            [self applyState];
         if (awgUp && [awg isEqualToString:@"connecting"]) {
             [NSObject cancelPreviousPerformRequestsWithTarget:self
                                                      selector:@selector(refresh)
@@ -792,8 +1038,9 @@ static int SenkoSortRank(NSNumber *ms) {
         vlessState = nil;
         awgState = nil;
     };
-    [_ctl statusStateWithUptime:^(NSString *state, long uptime) {
-        if (generation != _catalogGeneration) return;
+    void (^statusReply)(NSString *, long) = ^(NSString *state, long uptime) {
+        if (generation != _catalogGeneration ||
+            stateGeneration != _tunnelStateGeneration) return;
         /* the daemon owns the clock, so the elapsed time survives the app being
            closed and reopened over a live tunnel. a dropped reply carries no
            clock at all and must not reset the one already on screen */
@@ -808,12 +1055,50 @@ static int SenkoSortRank(NSNumber *ms) {
         }
         vlessState = [state copy];
         applyBackendState();
-    }];
+    };
+    if ([SenkoNativeVPN available])
+        [self nativeStatusWithReply:statusReply];
+    else
+        [_ctl statusStateWithUptime:statusReply];
+#if SENKO_STOCK_NATIVE
+    awgState = [@"idle" copy];
+    applyBackendState();
+#else
     [_ctl awgStatus:^(NSString *status) {
-        if (generation != _catalogGeneration) return;
+        if (generation != _catalogGeneration ||
+            stateGeneration != _tunnelStateGeneration) return;
         awgState = [status copy];
         applyBackendState();
     }];
+#endif
+}
+
+/* the daemon is the only thing that knows whether a tunnel is up, and it is
+   never asked again once a screenful of state has been drawn. a tunnel that
+   came up, dropped, or was replaced outside this screen therefore stayed
+   invisible until the app was launched again, which is exactly what a tester
+   sees as "senko says disconnected while the vpn badge is lit". five seconds is
+   one control round trip on a 4s and keeps the card honest without polling the
+   catalog, which is the expensive half of -refresh */
+- (void)statusHeartbeat {
+/* a connect or disconnect already owns the state machine, and a poll landing in
+   the middle of one would report the state it is leaving */
+    if (_busy) return;
+    [self refreshTunnelStateRedrawing:NO];
+}
+
+- (void)startStatusHeartbeat {
+    if (_statusTimer) return;
+    _statusTimer = [NSTimer scheduledTimerWithTimeInterval:5.0
+                                                    target:self
+                                                  selector:@selector(statusHeartbeat)
+                                                  userInfo:nil
+                                                   repeats:YES];
+}
+
+- (void)stopStatusHeartbeat {
+    [_statusTimer invalidate];
+    _statusTimer = nil;
 }
 
 - (void)setToggleBusy:(BOOL)busy {
@@ -906,8 +1191,11 @@ static int SenkoSortRank(NSNumber *ms) {
     CGFloat offset = scrollView.contentOffset.y;
     CGFloat progress = offset <= 0.0f ? 0.0f : offset / travel;
     if (progress > 1.0f) progress = 1.0f;
+    if (_listHeaderProgress >= 1.0f && progress >= 1.0f) return;
+    if (_listHeaderProgress <= 0.0f && progress <= 0.0f) return;
     [self setListHeaderProgress:progress];
 }
+
 
 
 
@@ -917,22 +1205,61 @@ static int SenkoSortRank(NSNumber *ms) {
     int subIdx = (int)button.tag - 4000;
     if (subIdx < 0) return;
     NSNumber *key = [NSNumber numberWithInt:subIdx];
-    if ([_collapsedSubs containsObject:key])
-        [_collapsedSubs removeObject:key];
-    else
+    BOOL collapse = ![_collapsedSubs containsObject:key];
+    if (collapse)
         [_collapsedSubs addObject:key];
+    else
+        [_collapsedSubs removeObject:key];
+    button.enabled = NO;
 
-/* a section reload runs the row and header change inside an update block, and
-   the header the table keeps from the outgoing pass stayed on screen at its old
-   frame next to the new one. the collapse only changes a row count, so the
-   whole table is rebuilt in place instead.
-   it cannot be rebuilt from here though: this is the collapse button's own
-   action, the button is a subview of the header the reload throws away, and
-   uikit goes on using the button after the action returns. tearing it down
-   inside its own event dispatch frees it under uikit's feet, so the rebuild
-   waits for the next turn of the main queue */
+/* finish the button action before mutating its table section. ios 5 continues
+   to touch the sender after this method returns, and removing its header from
+   inside the event dispatch used to leave a stale plate on screen. */
     dispatch_async(dispatch_get_main_queue(), ^{
-        [_table reloadData];
+        NSInteger section = NSNotFound;
+        for (NSInteger i = 0; i < (NSInteger)[_sections count]; ++i) {
+            if ([[[_sections objectAtIndex:i] objectForKey:@"subIdx"] intValue] == subIdx) {
+                section = i;
+                break;
+            }
+        }
+        if (section == NSNotFound) return;
+        NSArray *rows = [[_sections objectAtIndex:section] objectForKey:@"rows"];
+        NSMutableArray *paths = [NSMutableArray arrayWithCapacity:[rows count]];
+        for (NSInteger row = 0; row < (NSInteger)[rows count]; ++row)
+            [paths addObject:[NSIndexPath indexPathForRow:row inSection:section]];
+
+        SenkoSectionHeader *header = (SenkoSectionHeader *)
+            [[button superview] superview];
+        NSString *title = [[_sections objectAtIndex:section] objectForKey:@"title"];
+        if (header && header->title) {
+            header->title.text = [NSString stringWithFormat:@"%@  %@",
+                                  collapse ? @">" : @"v", title];
+            header->title.alpha = 0.32f;
+            header->title.transform = CGAffineTransformMakeTranslation(0.0f,
+                collapse ? -3.0f : 3.0f);
+            [UIView animateWithDuration:0.18
+                                  delay:0.0
+                                options:UIViewAnimationOptionBeginFromCurrentState |
+                                        UIViewAnimationOptionCurveEaseOut
+                             animations:^{
+                header->title.alpha = 1.0f;
+                header->title.transform = CGAffineTransformIdentity;
+            } completion:NULL];
+        }
+        if (![paths count]) {
+            button.enabled = YES;
+            return;
+        }
+        [_table beginUpdates];
+        if (collapse)
+            [_table deleteRowsAtIndexPaths:paths
+                           withRowAnimation:UITableViewRowAnimationFade];
+        else
+            [_table insertRowsAtIndexPaths:paths
+                           withRowAnimation:UITableViewRowAnimationFade];
+        [_table endUpdates];
+        button.enabled = YES;
     });
 }
 
@@ -1210,9 +1537,7 @@ static int SenkoSortRank(NSNumber *ms) {
         [_pingingSubs containsObject:[NSNumber numberWithInt:subIdx]];
 
     if (showMore) {
-        UIColor *iconTint = (SenkoThemeIsBoykisser() || SenkoThemeIsMiside())
-            ? [UIColor colorWithRed:1.00 green:0.42 blue:0.72 alpha:1.0]
-            : kAccentBlue;
+        UIColor *iconTint = SenkoAccentIconTint();
         if (showActions) {
             UIButton *ref = [UIButton buttonWithType:UIButtonTypeCustom];
             ref.contentMode = UIViewContentModeCenter;
@@ -1248,6 +1573,7 @@ static int SenkoSortRank(NSNumber *ms) {
             }
             [plate addSubview:ping];
             wrap->ping = ping;
+            SenkoSetGaugeSpinning(ping, subPingBusy, iconTint);
         }
 
         UIButton *more = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -1314,12 +1640,10 @@ static int SenkoSortRank(NSNumber *ms) {
     SenkoServer *sv = [self serverAtIndexPath:ip];
     BOOL picked = (_selectedBackend == SenkoBackendServer && sv &&
                    _selectedSrvIdx >= 0 && sv->index == _selectedSrvIdx);
-    NSNumber *msVal = sv
-        ? [_serverStatus objectForKey:[NSNumber numberWithInt:sv->index]] : nil;
-    BOOL hideLinks = [[NSUserDefaults standardUserDefaults] boolForKey:SENKO_HIDE_LINKS_KEY];
+    NSNumber *msVal = sv ? [self bestPingForServer:sv] : nil;
     NSString *shown = sv ? [_rowName objectForKey:
         [NSNumber numberWithInt:sv->index]] : nil;
-    [cell configureWithServer:sv picked:picked hideLinks:hideLinks pingVal:msVal
+    [cell configureWithServer:sv picked:picked pingVal:msVal
                   displayName:shown];
     [cell setPingTarget:self action:@selector(serverPingTapped:)
             serverIndex:sv ? sv->index : -1];
@@ -1335,6 +1659,10 @@ forRowAtIndexPath:(NSIndexPath *)ip {
                      (long)ip.section, (long)ip.row];
     if ([_revealedRows containsObject:key]) return;
     [_revealedRows addObject:key];
+    if (tv.isDragging || tv.isDecelerating) {
+        cell.alpha = 1.0f;
+        return;
+    }
     if ([cell isKindOfClass:[ServerCell class]])
         [(ServerCell *)cell revealAtIndex:(NSUInteger)ip.row];
     else
@@ -1381,6 +1709,11 @@ forRowAtIndexPath:(NSIndexPath *)ip {
     [[NSUserDefaults standardUserDefaults] setInteger:_selectedBackend forKey:SENKO_SELECTED_BACKEND_KEY];
     [[NSUserDefaults standardUserDefaults] synchronize];
     _selectedSrvIdx = index;
+#if SENKO_STOCK_NATIVE
+    for (SenkoServer *server in _servers)
+        server->selected = server->index == index;
+    SenkoNativeSaveServers(_servers);
+#endif
     NSArray *vis = [_table indexPathsForVisibleRows];
     if ([vis count])
         [_table reloadRowsAtIndexPaths:vis withRowAnimation:UITableViewRowAnimationNone];
@@ -1395,6 +1728,24 @@ forRowAtIndexPath:(NSIndexPath *)ip {
     for (SenkoServer *s in _servers)
         if (s->index == index) return s;
     return nil;
+}
+
+/* the order a collapsed row's members get tried in when the representative
+   itself cannot open a tunnel: best measured ping first, unmeasured after,
+   ties keep catalog order. just the index itself when it stands for no one. */
+- (NSArray *)connectCandidatesForServerIndex:(int)index {
+    SenkoServer *sv = [self serverByIndex:index];
+    NSArray *idxs = (sv && [sv->dupIndexes count]) ? sv->dupIndexes
+        : [NSArray arrayWithObject:[NSNumber numberWithInt:index]];
+    return [idxs sortedArrayUsingComparator:^NSComparisonResult(NSNumber *a, NSNumber *b) {
+        NSNumber *pa = [_serverStatus objectForKey:a];
+        NSNumber *pb = [_serverStatus objectForKey:b];
+        int ra = SenkoSortRank(pa), rb = SenkoSortRank(pb);
+        if (ra != rb) return ra < rb ? NSOrderedAscending : NSOrderedDescending;
+        if (ra == 0 && [pa intValue] != [pb intValue])
+            return [pa intValue] < [pb intValue] ? NSOrderedAscending : NSOrderedDescending;
+        return NSOrderedSame;
+    }];
 }
 
 - (void)openSheetForServer:(SenkoServer *)server {
@@ -1416,7 +1767,7 @@ forRowAtIndexPath:(NSIndexPath *)ip {
                   _selectedSrvIdx == server->index;
     _sheet = [[SenkoServerSheet alloc]
               initWithServer:server
-                        ping:[_serverStatus objectForKey:[NSNumber numberWithInt:server->index]]
+                        ping:[self bestPingForServer:server]
                       source:source
                       active:active
                    canMutate:![self isListMutationLocked] && server->group < 0
@@ -1427,10 +1778,14 @@ forRowAtIndexPath:(NSIndexPath *)ip {
 /* the reply outlives a sheet the user closed and reopened on another server,
    and the pending link would then be written into the wrong card */
     SenkoServerSheet *asking = _sheet;
+#if SENKO_STOCK_NATIVE
+    [_sheet setLink:server->link];
+#else
     [_ctl serverLinkIndex:idx reply:^(NSString *link) {
         if (_sheet != asking) return;
         [_sheet setLink:link];
     }];
+#endif
 }
 
 - (void)serverSheet:(SenkoServerSheet *)sheet
@@ -1458,17 +1813,46 @@ forRowAtIndexPath:(NSIndexPath *)ip {
         return;
     }
     if ([action isEqualToString:SenkoServerSheetActionPing]) {
+        NSInteger generation = ++_checkGeneration;
         NSNumber *key = [NSNumber numberWithInt:index];
+        NSString *mode = @"tcp";
         [_serverStatus setObject:[NSNumber numberWithInt:-3] forKey:key];
         [self reloadServerRowForIndex:index];
-        [_ctl pingIndex:index reply:^(int ms) {
+#if SENKO_STOCK_NATIVE
+        SenkoServer *server = [self serverByIndex:index];
+        SenkoNativeProbeLink(server->link, ^(int ms, NSString *error) {
+            (void)error;
+            if (generation != _checkGeneration) return;
             [_serverStatus setObject:[NSNumber numberWithInt:ms] forKey:key];
-            [_sheet setPingResult:[NSNumber numberWithInt:ms]];
+            if (_sheet == sheet)
+                [_sheet setPingResult:[NSNumber numberWithInt:ms]];
+            [self reloadServerRowForIndex:index];
+        });
+#else
+        [_ctl checkIndex:index mode:mode reply:^(int ms, NSString *error) {
+            (void)error;
+            if (generation != _checkGeneration) return;
+            [_serverStatus setObject:[NSNumber numberWithInt:ms] forKey:key];
+            if (_sheet == sheet)
+                [_sheet setPingResult:[NSNumber numberWithInt:ms]];
             [self reloadServerRowForIndex:index];
         }];
+#endif
         return;
     }
     if ([action isEqualToString:SenkoServerSheetActionEdit]) {
+#if SENKO_STOCK_NATIVE
+        NSString *link = server->link;
+        if (![link length]) return;
+        EditServerVC *editor = [[[EditServerVC alloc] initWithLink:link
+                                                              index:index
+                                                           delegate:self] autorelease];
+        UINavigationController *nav = [[[UINavigationController alloc]
+                                        initWithRootViewController:editor] autorelease];
+        StyleNavBarClassic(nav);
+        nav.modalPresentationStyle = UIModalPresentationFullScreen;
+        [self presentViewController:nav animated:YES completion:nil];
+#else
         [_ctl serverLinkIndex:index reply:^(NSString *link) {
             if (![link length]) return;
             EditServerVC *editor = [[[EditServerVC alloc] initWithLink:link
@@ -1480,29 +1864,58 @@ forRowAtIndexPath:(NSIndexPath *)ip {
             nav.modalPresentationStyle = UIModalPresentationFullScreen;
             [self presentViewController:nav animated:YES completion:nil];
         }];
+#endif
         return;
     }
     if ([action isEqualToString:SenkoServerSheetActionDelete]) {
         if ([self isListMutationLocked]) return;
+#if SENKO_STOCK_NATIVE
+        [_servers removeObject:server];
         if (index == _selectedSrvIdx) _selectedSrvIdx = -1;
+        SenkoNativeSaveServers(_servers);
+        [self refreshNativeCatalog];
+#else
         [_ctl deleteServerIndex:index reply:^(NSString *reply) {
-            (void)reply;
+            if (!reply || [reply hasPrefix:@"ERR"]) {
+                SetStatusDefault(_statusLabel, SenkoHumanReadableError(
+                    reply ? reply : @"daemon offline: cannot remove server"));
+                return;
+            }
+            if (index == _selectedSrvIdx) _selectedSrvIdx = -1;
             [self refresh];
         }];
+#endif
     }
 }
 
-/* the editor replaces a profile by identity, so the old entry has to go before
-   the new link is added or the list keeps both */
 - (void)editServerVC:(EditServerVC *)vc saveLink:(NSString *)link index:(int)idx {
-    [_ctl deleteServerIndex:idx reply:^(NSString *reply) {
-        if (!reply || [reply hasPrefix:@"ERR"]) return;
-        [_ctl addServerLink:link reply:^(NSString *added) {
-            if (!added || ![added hasPrefix:@"OK"]) return;
-            [vc dismissViewControllerAnimated:YES completion:nil];
-            [self refresh];
-        }];
+#if SENKO_STOCK_NATIVE
+    NSString *error = nil;
+    SenkoServer *replacement = SenkoNativeServerFromLink(link, idx, &error);
+    SenkoServer *old = [self serverByIndex:idx];
+    if (!replacement || !old) {
+        SetStatusDefault(_statusLabel, error ? error : @"invalid server link");
+        return;
+    }
+    replacement->selected = old->selected;
+    replacement->group = old->group;
+    [_servers replaceObjectAtIndex:[_servers indexOfObject:old] withObject:replacement];
+    SenkoNativeSaveServers(_servers);
+    [vc dismissViewControllerAnimated:YES completion:nil];
+    SetStatusRefresh(_statusLabel, @"server updated");
+    [self refreshNativeCatalog];
+#else
+    [_ctl replaceServerIndex:idx link:link reply:^(NSString *reply) {
+        if (!reply || [reply hasPrefix:@"ERR"]) {
+            SetStatusDefault(_statusLabel, SenkoHumanReadableError(
+                reply ? reply : @"daemon offline: cannot update server"));
+            return;
+        }
+        [vc dismissViewControllerAnimated:YES completion:nil];
+        SetStatusRefresh(_statusLabel, @"server updated");
+        [self refresh];
     }];
+#endif
 }
 
 - (BOOL)tableView:(UITableView *)tv canEditRowAtIndexPath:(NSIndexPath *)ip {
@@ -1524,9 +1937,13 @@ forRowAtIndexPath:(NSIndexPath *)ip {
     SenkoServer *sv = [self serverAtIndexPath:ip];
     if (!sv) return;
     int targetIdx = sv->index;
-    if (targetIdx == _selectedSrvIdx) _selectedSrvIdx = -1;
     [_ctl deleteServerIndex:targetIdx reply:^(NSString *reply) {
-        (void)reply;
+        if (!reply || [reply hasPrefix:@"ERR"]) {
+            SetStatusDefault(_statusLabel, SenkoHumanReadableError(
+                reply ? reply : @"daemon offline: cannot remove server"));
+            return;
+        }
+        if (targetIdx == _selectedSrvIdx) _selectedSrvIdx = -1;
         [self refresh];
     }];
 }
@@ -1583,13 +2000,20 @@ forRowAtIndexPath:(NSIndexPath *)ip {
 
 - (void)subRefreshTapped:(UIButton *)btn {
     int subIdx = (int)btn.tag - 1000;
-    if (subIdx < 0 || [self isListMutationLocked] ||
+    if (subIdx < 0 || _subscriptionMutationBusy ||
         ![self subscriptionByIndex:subIdx]) return;
+    btn.enabled = NO;
+    btn.alpha = 0.55f;
+    SenkoSetButtonSpinning(btn, kSenkoSubscriptionRefreshKey, YES);
     SetStatusRefresh(_statusLabel, @"refreshing subscription...");
     [_ctl refreshSubIndex:subIdx reply:^(NSString *reply) {
-        if (reply && [reply hasPrefix:@"ERR"]) {
-            [self setLastErr:[reply stringByTrimmingCharactersInSet:
-                  [NSCharacterSet whitespaceAndNewlineCharacterSet]]];
+        SenkoSetButtonSpinning(btn, kSenkoSubscriptionRefreshKey, NO);
+        btn.enabled = YES;
+        btn.alpha = 1.0f;
+        if (!reply || [reply hasPrefix:@"ERR"]) {
+            [self setLastErr:reply ? [reply stringByTrimmingCharactersInSet:
+                  [NSCharacterSet whitespaceAndNewlineCharacterSet]]
+                                     : @"daemon offline: cannot refresh subscription"];
             [self applyState];
         } else {
             SetStatusRefresh(_statusLabel, @"subscription updated");
@@ -1600,16 +2024,14 @@ forRowAtIndexPath:(NSIndexPath *)ip {
 
 - (void)subPingTapped:(UIButton *)btn {
     int subIdx = (int)btn.tag - 3000;
-    if (subIdx < 0 || [self isListMutationLocked] ||
+    if (subIdx < 0 || _subscriptionMutationBusy ||
         ![self subscriptionByIndex:subIdx]) return;
-    [_pingMode release];
-    _pingMode = [@"handshake" copy];
     [self pingServersInSub:subIdx];
 }
 
 - (void)subMenuTapped:(UIButton *)btn {
     int subIdx = (int)btn.tag - 2000;
-    if (subIdx < 0 || [self isListMutationLocked] ||
+    if (subIdx < 0 || _subscriptionMutationBusy ||
         ![self subscriptionByIndex:subIdx]) return;
     [self dismissCurrentActionSheetAnimated:NO];
     _menuSubIdx = subIdx;
@@ -1654,7 +2076,7 @@ forRowAtIndexPath:(NSIndexPath *)ip {
     (void)btn;
     SetStatusRefresh(_statusLabel, @"checking amneziawg...");
     [_ctl probeAWGAtPath:[self awgProfilePath] reply:^(NSString *reply) {
-        if (!reply) {
+        if (!reply || [reply hasPrefix:@"ERR"]) {
             SetStatusRefresh(_statusLabel, @"amneziawg timeout");
             return;
         }
@@ -1664,6 +2086,10 @@ forRowAtIndexPath:(NSIndexPath *)ip {
             return;
         }
         NSInteger ms = [[reply substringFromIndex:mark.location + mark.length] integerValue];
+        if (ms < 0) {
+            SetStatusRefresh(_statusLabel, @"amneziawg timeout");
+            return;
+        }
         [_serverStatus setObject:[NSNumber numberWithInteger:ms]
                           forKey:[NSNumber numberWithInt:-1]];
         SetStatusRefresh(_statusLabel, [NSString stringWithFormat:@"%ld ms", (long)ms]);
@@ -1673,28 +2099,97 @@ forRowAtIndexPath:(NSIndexPath *)ip {
     }];
 }
 
+/* a subscription refresh or a full ping sweep can take several seconds one
+   request at a time; without this the list just sits there and the only sign
+   of life is the status line text changing underneath it */
+- (void)showBusyOverlay:(NSString *)text {
+    UIActivityIndicatorView *spinner;
+    UILabel *label;
+    CGRect b = self.view.bounds;
+    if (!_busyOverlay) {
+        _busyOverlay = [[UIView alloc] initWithFrame:b];
+        _busyOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+                                        UIViewAutoresizingFlexibleHeight;
+        _busyOverlay.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.32f];
+        _busyOverlay.userInteractionEnabled = YES; /* eat taps while busy */
+        _busyOverlay.alpha = 0.0f;
+
+        spinner = [[[UIActivityIndicatorView alloc]
+            initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhiteLarge] autorelease];
+        spinner.tag = 88601;
+        spinner.hidesWhenStopped = YES;
+        [_busyOverlay addSubview:spinner];
+
+        label = [[[UILabel alloc] initWithFrame:CGRectZero] autorelease];
+        label.tag = 88602;
+        label.textColor = [UIColor whiteColor];
+        label.font = [UIFont boldSystemFontOfSize:14.0f];
+        label.textAlignment = NSTextAlignmentCenter;
+        label.numberOfLines = 2;
+        label.backgroundColor = [UIColor clearColor];
+        [_busyOverlay addSubview:label];
+    }
+    spinner = (UIActivityIndicatorView *)[_busyOverlay viewWithTag:88601];
+    label = (UILabel *)[_busyOverlay viewWithTag:88602];
+
+    _busyOverlay.frame = b;
+    CGFloat cx = b.size.width * 0.5f;
+    CGFloat cy = b.size.height * 0.5f;
+    spinner.center = CGPointMake(cx, cy - 14.0f);
+    label.text = text;
+    CGFloat labelW = MIN(b.size.width - 48.0f, 260.0f);
+    CGSize fit = [label sizeThatFits:CGSizeMake(labelW, CGFLOAT_MAX)];
+    label.frame = CGRectMake(cx - labelW * 0.5f, cy + 20.0f, labelW, fit.height);
+
+    if (![_busyOverlay superview]) [self.view addSubview:_busyOverlay];
+    [self.view bringSubviewToFront:_busyOverlay];
+    [spinner startAnimating];
+    SenkoAnimate(0.18, ^{ _busyOverlay.alpha = 1.0f; }, NULL);
+}
+
+- (void)hideBusyOverlay {
+    if (!_busyOverlay || _busyOverlay.alpha == 0.0f) return;
+    UIView *overlay = _busyOverlay;
+    SenkoAnimate(0.18, ^{ overlay.alpha = 0.0f; }, ^(BOOL done) {
+        if (done) [(UIActivityIndicatorView *)[overlay viewWithTag:88601] stopAnimating];
+    });
+}
+
 - (void)refreshSubscriptionIndex:(int)pos {
     NSMutableArray *idxs = [NSMutableArray array];
     for (SenkoSub *s in _subs)
         [idxs addObject:[NSNumber numberWithInt:s->index]];
     if (pos >= (int)[idxs count]) {
+        _isRefreshingCatalog = NO;
+        [self hideBusyOverlay];
         [self refresh];
         SetStatusRefresh(_statusLabel, @"subscriptions refreshed");
         return;
     }
     int subIdx = [[idxs objectAtIndex:pos] intValue];
+    [self showBusyOverlay:[NSString stringWithFormat:@"%@ %d/%d",
+        SenkoLocalizedText(@"Refreshing subscriptions"), pos + 1, (int)[idxs count]]];
     [_ctl refreshSubIndex:subIdx reply:^(NSString *reply) {
-        (void)reply;
+        if (!reply || [reply hasPrefix:@"ERR"]) {
+            _isRefreshingCatalog = NO;
+            [self hideBusyOverlay];
+            SetStatusDefault(_statusLabel, SenkoHumanReadableError(
+                reply ? reply : @"daemon offline: cannot refresh subscription"));
+            [self refresh];
+            return;
+        }
         [self refreshSubscriptionIndex:(pos + 1)];
     }];
 }
 
 - (void)refreshPressed {
+    if (_isRefreshingCatalog) return;
     if ([_subs count] == 0) {
         [self refresh];
         SetStatusRefresh(_statusLabel, @"list reloaded");
         return;
     }
+    _isRefreshingCatalog = YES;
     SetStatusRefresh(_statusLabel, @"refreshing subscriptions...");
     [self refreshSubscriptionIndex:0];
 }
@@ -1704,8 +2199,8 @@ forRowAtIndexPath:(NSIndexPath *)ip {
         SetStatusDefault(_statusLabel, @"no servers to ping");
         return;
     }
-    if ([self isTunnelActive]) {
-        SetStatusDefault(_statusLabel, @"disconnect to check profiles");
+    if (_activeBackend == SenkoBackendAmneziaWG && [self isTunnelActive]) {
+        [self awgPingTapped:nil];
         return;
     }
     [self startPingSweep];
@@ -1713,39 +2208,69 @@ forRowAtIndexPath:(NSIndexPath *)ip {
 
 - (void)serverPingTapped:(UIButton *)button {
     int serverIndex = (int)button.tag;
-    if (serverIndex < 0 || [self isTunnelActive]) {
-        SetStatusDefault(_statusLabel, @"disconnect to check profiles");
-        return;
-    }
+    if (serverIndex < 0) return;
     NSInteger generation = ++_checkGeneration;
     NSNumber *key = [NSNumber numberWithInt:serverIndex];
     [_serverStatus setObject:[NSNumber numberWithInt:-3] forKey:key];
     [self reloadServerRowForIndex:serverIndex];
-    SetStatusDefault(_statusLabel, @"checking server...");
-    [_ctl checkIndex:serverIndex mode:@"handshake" reply:^(int ms, NSString *error) {
+    NSString *mode = @"tcp";
+    SetStatusDefault(_statusLabel, SenkoLocalizedText(@"Checking server"));
+#if SENKO_STOCK_NATIVE
+    SenkoServer *server = [self serverByIndex:serverIndex];
+    SenkoNativeProbeLink(server->link, ^(int ms, NSString *error) {
         if (generation != _checkGeneration) return;
         [_serverStatus setObject:[NSNumber numberWithInt:ms] forKey:key];
         [self reloadServerRowForIndex:serverIndex];
+        (void)error;
         SetStatusDefault(_statusLabel, ms >= 0
-            ? [NSString stringWithFormat:@"%@: %d ms",
-               SenkoLocalizedText(@"profile works"), ms]
-            : SenkoHumanReadableError(error ?: @"profile check failed"));
+            ? [NSString stringWithFormat:@"TCP: %d ms", ms]
+            : SenkoLocalizedText(@"Timeout"));
+    });
+#else
+    [_ctl checkIndex:serverIndex mode:mode reply:^(int ms, NSString *error) {
+        if (generation != _checkGeneration) return;
+        [_serverStatus setObject:[NSNumber numberWithInt:ms] forKey:key];
+        [self reloadServerRowForIndex:serverIndex];
+        (void)error;
+        SetStatusDefault(_statusLabel, ms >= 0
+            ? [NSString stringWithFormat:@"TCP: %d ms", ms]
+            : SenkoLocalizedText(@"Timeout"));
     }];
+#endif
 }
 
 - (void)startPingSweep {
     _checkGeneration++;
-    [_pingMode release];
-    _pingMode = [@"handshake" copy];
     NSSet *busySubs = [_pingingSubs copy];
     [_pingingSubs removeAllObjects];
     [_serverStatus removeAllObjects];
     [self updateSubscriptionPingButtons:busySubs];
     [busySubs release];
-    SetStatusDefault(_statusLabel, @"checking profiles...");
+    SetStatusDefault(_statusLabel, SenkoLocalizedText(@"Checking server"));
     NSMutableArray *indexes = [NSMutableArray array];
-    for (SenkoServer *server in _servers)
-        [indexes addObject:[NSNumber numberWithInt:server->index]];
+    NSMutableSet *seen = [NSMutableSet set];
+/* the queue follows the rows the person sees. walking the backing catalog made
+   a latency-sorted screen check locations in a seemingly random old order */
+    for (NSDictionary *section in _sections) {
+        for (SenkoServer *server in [section objectForKey:@"rows"]) {
+            NSArray *members = [server->dupIndexes count]
+                ? server->dupIndexes
+                : [NSArray arrayWithObject:[NSNumber numberWithInt:server->index]];
+            for (NSNumber *number in members) {
+                if ([seen containsObject:number]) continue;
+                [seen addObject:number];
+                [indexes addObject:number];
+            }
+        }
+    }
+    if (![indexes count]) {
+        for (SenkoServer *server in _servers)
+            [indexes addObject:[NSNumber numberWithInt:server->index]];
+    }
+    if ([indexes count]) {
+        SenkoSetGaugeSpinning(_pingAllBtn, YES, [UIColor whiteColor]);
+        [self showBusyOverlay:SenkoLocalizedText(@"Checking server")];
+    }
     [self beginBoundedPing:indexes subIndex:-1 generation:_checkGeneration];
 }
 
@@ -1769,6 +2294,7 @@ forRowAtIndexPath:(NSIndexPath *)ip {
             ping.hidden = NO;
             ping.enabled = !busy;
             ping.alpha = busy ? 0.45f : 1.0f;
+            SenkoSetGaugeSpinning(ping, busy, SenkoAccentIconTint());
         }
     }
 }
@@ -1789,7 +2315,9 @@ forRowAtIndexPath:(NSIndexPath *)ip {
         NSInteger offset = [self awgRowOffsetInSection:section];
         for (NSInteger i = 0; i < (NSInteger)[rows count]; ++i) {
             SenkoServer *server = [rows objectAtIndex:i];
-            if (server->index != serverIndex) continue;
+            if (server->index != serverIndex &&
+                ![server->dupIndexes containsObject:[NSNumber numberWithInt:serverIndex]])
+                continue;
             NSInteger row = i + offset;
             if (row >= [_table numberOfRowsInSection:section]) return;
             NSIndexPath *path = [NSIndexPath indexPathForRow:row inSection:section];
@@ -1800,22 +2328,6 @@ forRowAtIndexPath:(NSIndexPath *)ip {
             return;
         }
     }
-}
-
-- (void)checkStatusOfServerAtIndex:(NSUInteger)idx generation:(NSInteger)gen {
-    if (gen != _checkGeneration) return;
-    if (idx >= [_servers count]) {
-        SetStatusDefault(_statusLabel, @"profile check complete");
-        return;
-    }
-    SenkoServer *sv = [_servers objectAtIndex:idx];
-    NSNumber *key = [NSNumber numberWithInt:sv->index];
-    [_ctl pingIndex:sv->index reply:^(int ms) {
-        if (gen != _checkGeneration) return;
-        [_serverStatus setObject:[NSNumber numberWithInt:ms] forKey:key];
-        [self reloadServerRowForIndex:sv->index];
-        [self checkStatusOfServerAtIndex:(idx + 1) generation:gen];
-    }];
 }
 
 - (void)pingServersInSub:(int)subIdx {
@@ -1835,7 +2347,7 @@ forRowAtIndexPath:(NSIndexPath *)ip {
                                          [NSNumber numberWithInt:subIdx]]];
     _checkGeneration++;
     NSInteger gen = _checkGeneration;
-    SetStatusDefault(_statusLabel, @"checking group profiles...");
+    SetStatusDefault(_statusLabel, SenkoLocalizedText(@"Checking server"));
     [self beginBoundedPing:idxs subIndex:subIdx generation:gen];
 }
 
@@ -1846,17 +2358,33 @@ forRowAtIndexPath:(NSIndexPath *)ip {
     _pingPending = 0;
     _pingCompleted = 0;
     _pingSubIndex = subIdx;
-    if (!_pingMode) _pingMode = [@"tcp" copy];
     [self launchBoundedPingsForGeneration:gen];
 }
 
 - (void)launchBoundedPingsForGeneration:(NSInteger)gen {
     if (gen != _checkGeneration) return;
-    NSUInteger parallelLimit = [_pingMode isEqualToString:@"handshake"] ? 1 : 3;
+    /* four daemon client slots leave one for state and catalog commands */
+    NSUInteger parallelLimit = 3;
+    NSString *mode = @"tcp";
     while (_pingPending < parallelLimit && _pingNext < [_pingQueue count]) {
         int serverIndex = [[_pingQueue objectAtIndex:_pingNext++] intValue];
         _pingPending++;
-        [_ctl checkIndex:serverIndex mode:_pingMode reply:^(int ms, NSString *error) {
+        NSString *progress = [NSString stringWithFormat:@"%@ %lu/%lu",
+            SenkoLocalizedText(@"Checking server"), (unsigned long)_pingNext,
+            (unsigned long)[_pingQueue count]];
+        SetStatusDefault(_statusLabel, progress);
+        if (_pingSubIndex < 0) [self showBusyOverlay:progress];
+/* the sweep cleared every result, so without this the rows sit blank for the
+   whole run and nothing shows which server is being checked right now */
+        [_serverStatus setObject:[NSNumber numberWithInt:-3]
+                          forKey:[NSNumber numberWithInt:serverIndex]];
+        [self reloadServerRowForIndex:serverIndex];
+#if SENKO_STOCK_NATIVE
+        SenkoServer *server = [self serverByIndex:serverIndex];
+        SenkoNativeProbeLink(server->link, ^(int ms, NSString *error) {
+#else
+        [_ctl checkIndex:serverIndex mode:mode reply:^(int ms, NSString *error) {
+#endif
             (void)error;
             if (gen != _checkGeneration) return;
             _pingPending--;
@@ -1868,62 +2396,29 @@ forRowAtIndexPath:(NSIndexPath *)ip {
                 [self finishBoundedPing];
             else
                 [self launchBoundedPingsForGeneration:gen];
+#if SENKO_STOCK_NATIVE
+        });
+#else
         }];
+#endif
     }
 }
 
 - (void)finishBoundedPing {
-    [_servers sortUsingComparator:^NSComparisonResult(SenkoServer *a, SenkoServer *b) {
-        int av = [[_serverStatus objectForKey:[NSNumber numberWithInt:a->index]] intValue];
-        int bv = [[_serverStatus objectForKey:[NSNumber numberWithInt:b->index]] intValue];
-        if (av < 0) av = INT_MAX;
-        if (bv < 0) bv = INT_MAX;
-        if (av < bv) return NSOrderedAscending;
-        if (av > bv) return NSOrderedDescending;
-        return NSOrderedSame;
-    }];
     [self rebuildSections];
     [_table reloadData];
     if (_pingSubIndex >= 0) {
         NSNumber *key = [NSNumber numberWithInt:_pingSubIndex];
         [_pingingSubs removeObject:key];
         [self updateSubscriptionPingButtons:[NSSet setWithObject:key]];
-        SetStatusDefault(_statusLabel, @"group profile check complete");
+        SetStatusDefault(_statusLabel, SenkoLocalizedText(@"Ping complete"));
     } else {
-        SetStatusDefault(_statusLabel, @"profile check complete");
+        SenkoSetGaugeSpinning(_pingAllBtn, NO, [UIColor whiteColor]);
+        [self hideBusyOverlay];
+        SetStatusDefault(_statusLabel, SenkoLocalizedText(@"Ping complete"));
     }
     [_pingQueue release];
     _pingQueue = nil;
-}
-
-- (void)pingIndexList:(NSArray *)idxs at:(NSUInteger)i generation:(NSInteger)gen {
-    if (gen != _checkGeneration) return;
-    if (i >= [idxs count]) {
-        int subIdx = -1;
-        if ([idxs count]) {
-            int firstServerIdx = [[idxs objectAtIndex:0] intValue];
-            for (SenkoServer *sv in _servers) {
-                if (sv->index == firstServerIdx) {
-                    subIdx = sv->group;
-                    [_pingingSubs removeObject:[NSNumber numberWithInt:sv->group]];
-                    break;
-                }
-            }
-        }
-        if (subIdx >= 0)
-            [self updateSubscriptionPingButtons:[NSSet setWithObject:
-                                                 [NSNumber numberWithInt:subIdx]]];
-        SetStatusDefault(_statusLabel, @"group profile check complete");
-        return;
-    }
-    int srv = [[idxs objectAtIndex:i] intValue];
-    [_ctl pingIndex:srv reply:^(int ms) {
-        if (gen != _checkGeneration) return;
-        [_serverStatus setObject:[NSNumber numberWithInt:ms]
-                          forKey:[NSNumber numberWithInt:srv]];
-        [self reloadServerRowForIndex:srv];
-        [self pingIndexList:idxs at:(i + 1) generation:gen];
-    }];
 }
 
 - (void)startStatusChecks {
@@ -1931,6 +2426,7 @@ forRowAtIndexPath:(NSIndexPath *)ip {
     [_pingingSubs removeAllObjects];
     [self updateSubscriptionPingButtons:busySubs];
     [busySubs release];
+    SenkoSetGaugeSpinning(_pingAllBtn, NO, [UIColor whiteColor]);
     _checkGeneration++;
 }
 

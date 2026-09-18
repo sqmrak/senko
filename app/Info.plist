@@ -17,9 +17,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>09102026-patch6-nightly</string>
+    <string>2.1.0-stable</string>
 	<key>CFBundleVersion</key>
-	<string>39</string>
+	<string>42</string>
     <key>CFBundleIconFile</key>
     <string>Icon.png</string>
     <!-- one file per slot: springboard scales anything else into place and
@@ -63,8 +63,28 @@
     </dict>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.senko.app</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>senko</string>
+            </array>
+        </dict>
+    </array>
     <key>NSCameraUsageDescription</key>
     <string>Scan QR codes to import vless links and subscriptions.</string>
+    <!-- subscription hosts are user-supplied and often self-hosted panels or
+         plain http; the app already warns before fetching an insecure url
+         (confirmInsecureSubscriptionURL in main_vc_import.m), so ATS must not
+         block the fetch that warning just approved -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
     <key>MinimumOSVersion</key>
     <string>5.0</string>
     <key>UIDeviceFamily</key>

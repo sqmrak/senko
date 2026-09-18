@@ -39,6 +39,11 @@ url_status_t url_build_get_cookie(const url_t *u, const char *cookie,
    out needs at least 33 bytes */
 void url_device_hwid(char *out, size_t cap);
 
+/* issue a new id. panels that bind a subscription to a device see the next
+   refresh as a different device, which is the only way to test that binding
+   without a second phone */
+void url_device_hwid_reset(char *out, size_t cap);
+
 url_status_t url_build_get_cookie_header(const url_t *u, const char *cookie,
                                          const char *request_header,
                                          char *buf, size_t cap, size_t *out_len);

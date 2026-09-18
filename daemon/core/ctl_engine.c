@@ -37,6 +37,8 @@ ctl_status_t ctl_engine_handle(ctl_engine_t *e, const ctl_cmd_t *cmd,
     action->kind = CTL_ACT_NONE;
     action->server_index = -1;
     action->server = (vl_server_t){0};
+    action->key[0] = '\0';
+    action->value[0] = '\0';
 
     switch (cmd->kind) {
         case CTL_CMD_CONNECT: {
@@ -109,6 +111,31 @@ ctl_status_t ctl_engine_handle(ctl_engine_t *e, const ctl_cmd_t *cmd,
             return ctl_build_ok(msg, out, cap, out_len);
         }
 
+        case CTL_CMD_REPLACE_SERVER: {
+            if (cmd->server_index < 0 || (size_t)cmd->server_index >= e->store.n ||
+                e->store.group[cmd->server_index] != STORE_GROUP_MANUAL)
+                return ctl_build_err("no such manual server", out, cap, out_len);
+            if (cmd->server_index == e->store.selected &&
+                (e->state == CTL_STATE_CONNECTED || e->state == CTL_STATE_CONNECTING))
+                return ctl_build_err("disconnect before editing active server", out, cap, out_len);
+            store_status_t r = store_replace_manual(&e->store,
+                                                     (size_t)cmd->server_index,
+                                                     cmd->text);
+            if (r == STORE_ERR_PARSE)
+                return ctl_build_err("bad vless link", out, cap, out_len);
+            if (r == STORE_ERR_UNSUPPORTED) {
+                char reason[128];
+                if (!cfg_validate_link(cmd->text, reason, sizeof reason))
+                    return ctl_build_err(reason, out, cap, out_len);
+                return ctl_build_err("unsupported server", out, cap, out_len);
+            }
+            if (r == STORE_ERR_EXISTS)
+                return ctl_build_err("server already exists", out, cap, out_len);
+            if (r != STORE_OK)
+                return ctl_build_err("could not replace server", out, cap, out_len);
+            return ctl_build_ok("server updated", out, cap, out_len);
+        }
+
         case CTL_CMD_DEL_SERVER: {
 /* stop the live tunnel before deleting its server */
             if (cmd->server_index < 0 || (size_t)cmd->server_index >= e->store.n)
@@ -148,6 +175,33 @@ ctl_status_t ctl_engine_handle(ctl_engine_t *e, const ctl_cmd_t *cmd,
             char msg[64];
             snprintf(msg, sizeof msg, "added subscription %zu", sub);
             return ctl_build_ok(msg, out, cap, out_len);
+        }
+
+        case CTL_CMD_REPLACE_SUB: {
+            int si = cmd->server_index;
+            if (si < 0 || si >= STORE_MAX_SUBS || !e->store.subs[si].used)
+                return ctl_build_err("no such subscription", out, cap, out_len);
+            if (e->store.selected >= 0 && (size_t)e->store.selected < e->store.n &&
+                e->store.group[e->store.selected] == si &&
+                (e->state == CTL_STATE_CONNECTED || e->state == CTL_STATE_CONNECTING))
+                return ctl_build_err("disconnect before editing active subscription",
+                                     out, cap, out_len);
+            char header[sizeof e->store.subs[si].header];
+            if (strcmp(cmd->value, "-") == 0) {
+                header[0] = '\0';
+            } else if (url_percent_decode(cmd->value, strlen(cmd->value),
+                                          header, sizeof header) < 0) {
+                return ctl_build_err("invalid request header", out, cap, out_len);
+            }
+            store_status_t r = store_replace_sub(&e->store, (size_t)si,
+                                                 cmd->name, cmd->text, header);
+            if (r == STORE_ERR_TOO_LONG)
+                return ctl_build_err("subscription details too long", out, cap, out_len);
+            if (r == STORE_ERR_EXISTS)
+                return ctl_build_err("subscription already exists", out, cap, out_len);
+            if (r != STORE_OK)
+                return ctl_build_err("could not update subscription", out, cap, out_len);
+            return ctl_build_ok("subscription updated", out, cap, out_len);
         }
 
         case CTL_CMD_SET_SUB_HEADER: {
@@ -206,6 +260,18 @@ ctl_status_t ctl_engine_handle(ctl_engine_t *e, const ctl_cmd_t *cmd,
             action->kind = CTL_ACT_REFRESH;
             action->server_index = si;
             *out_len = 0; /* no immediate reply because daemon fetches async */
+            return CTL_OK;
+        }
+
+        case CTL_CMD_SET: {
+            if (strlen(cmd->name) >= sizeof action->key ||
+                strlen(cmd->text) >= sizeof action->value)
+                return ctl_build_err("setting name or value too long",
+                                     out, cap, out_len);
+            action->kind = CTL_ACT_SET;
+            snprintf(action->key, sizeof action->key, "%s", cmd->name);
+            snprintf(action->value, sizeof action->value, "%s", cmd->text);
+            *out_len = 0; /* the daemon answers, because it holds the values */
             return CTL_OK;
         }
 

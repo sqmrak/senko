@@ -10,6 +10,8 @@
 #include <signal.h>
 #include <sys/socket.h>
 #include <sys/file.h>
+#include <sys/mount.h>
+#include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/un.h>
@@ -24,6 +26,11 @@ extern char **environ;
 #define BIN    SENKO_USR_BIN "/senkod"
 #define CFG    "/var/root/Library/Preferences/senko.cfg"
 #define KLOG   "/var/log/senko-kick.log"
+/* /var/log is root:wheel 755: unwritable by the mobile process this binary
+   still is whenever the very thing it needs to report is that it never
+   became root. this path sits in the same directory the app crash report
+   already uses, so it is writable in exactly that failure case. */
+#define KLOG_FALLBACK SENKO_CRASH_DIR "/kick.log"
 #define LABEL  "com.senko.senkod"
 #define AWG_BIN SENKO_USR_BIN "/senkoawgd"
 #define CTL_BIN SENKO_USR_BIN "/senkoctl"
@@ -33,19 +40,55 @@ extern char **environ;
 #define AWG_STATUS "/var/run/senkoawgd.status"
 #define AWG_ACTIVE_CONFIG "/var/run/senkoawgd.config"
 #define AWG_CONFIG_DIR "/var/mobile/Library/Preferences/Senko/"
-#define VPN_ICON_STATE "/var/mobile/Library/Preferences/com.senko.vpnicon.state"
+#define STATUS_STATE "/var/mobile/Library/Preferences/com.senko.status.state"
 /* /tmp is readable by the mobile ui */
 #define UPDATE_LOG "/tmp/senko-update.log"
 #define UPDATE_MAX_BYTES (64 * 1024 * 1024)
 #define UPDATE_AWG_MARKER "/var/run/senkoawgd.upgrade"
 #define KICK_LOCK "/var/tmp/senko-kick.lock"
-#define KICK_LOCK_WAIT_MS 5000
+#define KICK_LOCK_WAIT_MS 30000
 /* one ensure_senkod pass can hold the lock through two launchd and two direct
-   attempts. each probe costs its own connect and read timeout, so this bounds
-   the wait at roughly a minute and a half rather than exactly 30 seconds */
-#define KICK_CONCURRENT_WAIT_TENTHS 300
+   attempts. a concurrent caller waits long enough to observe that result
+   instead of surfacing a false lock failure on ios 13 */
+#define KICK_CONCURRENT_WAIT_TENTHS 600
 #define COMMAND_TIMEOUT_MS 30000
 #define DPKG_TIMEOUT_MS 180000
+
+/* rootful ios 13 installs keep a compatibility copy under /var/jb while
+   launchd and setuid resolve the canonical /usr paths. choose the executable
+   and plist that actually belong to the running jailbreak before spawning. */
+static const char *senko_daemon_path(void) {
+    static const char *path;
+    static const char *candidates[] = {
+        SENKO_USR_BIN "/senkod", "/usr/bin/senkod",
+        "/var/jb/usr/bin/senkod", NULL
+    };
+    if (path) return path;
+    for (int i = 0; candidates[i]; ++i) {
+        if (access(candidates[i], X_OK) == 0) {
+            path = candidates[i];
+            break;
+        }
+    }
+    return path ? path : BIN;
+}
+
+static const char *senko_daemon_plist(void) {
+    static const char *path;
+    static const char *candidates[] = {
+        SENKO_LAUNCH_DAEMONS "/com.senko.senkod.plist",
+        "/Library/LaunchDaemons/com.senko.senkod.plist",
+        "/var/jb/Library/LaunchDaemons/com.senko.senkod.plist", NULL
+    };
+    if (path) return path;
+    for (int i = 0; candidates[i]; ++i) {
+        if (access(candidates[i], R_OK) == 0) {
+            path = candidates[i];
+            break;
+        }
+    }
+    return path ? path : PLIST;
+}
 
 static int acquire_kick_lock(void) {
     int fd = open(KICK_LOCK, O_WRONLY | O_CREAT, 0600);
@@ -61,10 +104,16 @@ static int acquire_kick_lock(void) {
 
 static void klog(const char *msg) {
     int fd = open(KLOG, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd < 0) return;
-    dprintf(fd, "senko-kick: %s\n", msg);
-    close(fd);
-    /* keep a copy on stderr when launched from a console */
+    if (fd < 0) {
+        mkdir(SENKO_CRASH_DIR, 0755); /* idempotent; the app usually made this first */
+        fd = open(KLOG_FALLBACK, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    }
+    if (fd >= 0) {
+        dprintf(fd, "senko-kick: %s\n", msg);
+        close(fd);
+    }
+    /* keep a copy on stderr when launched from a console, regardless of
+       whether either log file could be opened */
     fprintf(stderr, "senko-kick: %s\n", msg);
 }
 
@@ -343,8 +392,9 @@ static int wait_sock_down(int tenths) {
 
 /* start senkod without launchd */
 static int spawn_senkod_direct(void) {
+    const char *bin = senko_daemon_path();
     char *argv[] = {
-        (char *)BIN,
+        (char *)bin,
         (char *)"--managed",
         (char *)"--ctl", (char *)SOCK,
         (char *)"--config", (char *)CFG,
@@ -377,7 +427,7 @@ static int spawn_senkod_direct(void) {
     }
 
     pid_t pid = 0;
-    int rc = posix_spawn(&pid, BIN, &fa, NULL, argv, environ);
+    int rc = posix_spawn(&pid, bin, &fa, NULL, argv, environ);
     posix_spawn_file_actions_destroy(&fa);
     if (rc != 0) {
         char msg[128];
@@ -421,7 +471,8 @@ static int launch_job_loaded(const char *launchctl) {
 }
 
 static int launch_job_stop(const char *launchctl) {
-    char *unload[] = { (char *)launchctl, (char *)"unload", (char *)PLIST, NULL };
+    char *unload[] = { (char *)launchctl, (char *)"unload",
+                       (char *)senko_daemon_plist(), NULL };
     char *remove[] = { (char *)launchctl, (char *)"remove", (char *)LABEL, NULL };
     (void)run_argv(unload);
     (void)run_argv(remove);
@@ -493,7 +544,7 @@ static int awg_read_status(char *out, size_t cap) {
 }
 
 static void awg_write_icon(int enabled) {
-    int fd = open(VPN_ICON_STATE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = open(STATUS_STATE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) return;
     (void)write(fd, enabled ? "1\n" : "0\n", 2);
     close(fd);
@@ -656,7 +707,8 @@ static void stop_senkod_for_update(void) {
         "/usr/sbin/launchctl", NULL
     };
     if (find_bin(launchctl_paths, launchctl, sizeof launchctl) == 0) {
-        char *unload[] = { launchctl, (char *)"unload", (char *)PLIST, NULL };
+        char *unload[] = { launchctl, (char *)"unload",
+                           (char *)senko_daemon_plist(), NULL };
         (void)run_argv(unload);
         char *remove[] = { launchctl, (char *)"remove", (char *)LABEL, NULL };
         (void)run_argv(remove);
@@ -836,18 +888,20 @@ static int ensure_senkod(void) {
         return 0;
     }
 
-    if (access(BIN, X_OK) != 0) {
-        klog(BIN " missing");
+    const char *bin = senko_daemon_path();
+    if (access(bin, X_OK) != 0) {
+        klog("senkod missing");
         return 2;
     }
 
     for (int attempt = 0; attempt < 2; ++attempt) {
-        if (have_lc && access(PLIST, R_OK) == 0) {
+        const char *plist = senko_daemon_plist();
+        if (have_lc && access(plist, R_OK) == 0) {
             if (!launch_job_loaded(lc)) {
-                char *load[] = { lc, (char *)"load", (char *)PLIST, NULL };
+                char *load[] = { lc, (char *)"load", (char *)plist, NULL };
                 if (run_argv(load) != 0) {
                     char *loadw[] = { lc, (char *)"load", (char *)"-w",
-                                      (char *)PLIST, NULL };
+                                      (char *)plist, NULL };
                     (void)run_argv(loadw);
                 }
             }
@@ -884,11 +938,62 @@ static int ensure_senkod(void) {
     return 5;
 }
 
+/* dpkg/Zebra not preserving the setuid bit and a nosuid mount are the two
+   ways this binary can end up running as mobile with no way to become root;
+   they need different fixes, so the report says which one it is instead of
+   telling the user to reinstall either way */
+static const char *senko_kick_self_path(void) {
+    static const char *path;
+    static const char *candidates[] = {
+        SENKO_USR_BIN "/senko-kick", "/var/jb/usr/bin/senko-kick",
+        "/usr/bin/senko-kick", "/bin/senko-kick", NULL
+    };
+    if (path) return path;
+    for (int i = 0; candidates[i]; ++i) {
+        if (access(candidates[i], F_OK) == 0) {
+            path = candidates[i];
+            break;
+        }
+    }
+    return path;
+}
+
+static void klog_setuid_failure(void) {
+    char msg[256];
+    const char *self = senko_kick_self_path();
+    struct stat st;
+    int have_stat = self && stat(self, &st) == 0;
+    struct statfs sf;
+    int nosuid = 0, have_statfs = 0;
+    if (self && statfs(self, &sf) == 0) {
+        have_statfs = 1;
+        nosuid = (sf.f_flags & MNT_NOSUID) != 0;
+    }
+    if (nosuid) {
+        snprintf(msg, sizeof msg,
+                 "need root: %s is mounted nosuid, the setuid bit cannot take "
+                 "effect there regardless of file mode",
+                 have_statfs ? sf.f_mntfromname : "the filesystem");
+    } else if (have_stat) {
+        snprintf(msg, sizeof msg,
+                 "need root: setuid bit missing on %s (mode %04o, uid %d) - "
+                 "reinstalling did not restore it, check the package manager's "
+                 "own postinst output",
+                 self, (unsigned)(st.st_mode & 07777), (int)st.st_uid);
+    } else {
+        snprintf(msg, sizeof msg,
+                 "need root: uid=%d euid=%d, and %s could not be found to "
+                 "check its permissions",
+                 (int)getuid(), (int)geteuid(), self ? self : "senko-kick");
+    }
+    klog(msg);
+}
+
 int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);
     if (geteuid() != 0) {
         if (setuid(0) != 0) {
-            klog("need root (setuid bit / reinstall deb as root)");
+            klog_setuid_failure();
             return 1;
         }
     }

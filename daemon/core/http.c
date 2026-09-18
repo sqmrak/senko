@@ -139,8 +139,18 @@ static http_status_t consume_line(http_parser_t *p) {
         memcpy(p->subscription_userinfo, v, n);
         p->subscription_userinfo[n] = '\0';
         p->have_subscription_userinfo = 1;
-    } else if (hdr_is(p->line, "profile-title:") ||
-               hdr_is(p->line, "subscription-description:")) {
+    } else if (hdr_is(p->line, "profile-title:")) {
+        const char *v = strchr(p->line, ':');
+        size_t n;
+        if (!v) return HTTP_ERR_PARSE;
+        v = skip_ws(v + 1);
+        n = strlen(v);
+        if (n >= sizeof p->subscription_title)
+            n = sizeof p->subscription_title - 1;
+        memcpy(p->subscription_title, v, n);
+        p->subscription_title[n] = '\0';
+        p->have_subscription_title = 1;
+    } else if (hdr_is(p->line, "subscription-description:")) {
         const char *v = strchr(p->line, ':');
         size_t n;
         if (!v) return HTTP_ERR_PARSE;

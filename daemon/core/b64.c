@@ -25,13 +25,32 @@ int b64_decode(const char *in, size_t in_len,
     if (!in || !out || !out_len) return -1;
 
     size_t o = 0;
+    size_t i = 0;
     uint_fast32_t acc = 0; /* bit accumulator */
     int nbits = 0; /* bits currently in acc */
+    int padded = 0; /* '=' seen: only padding and whitespace may follow */
 
-    for (size_t i = 0; i < in_len; ++i) {
-        unsigned char v = val((unsigned char)in[i]);
-        if (v == B64_SKIP) continue;
+    *out_len = 0;
+
+    /* a feed served as a text file is routinely handed over with a utf-8 byte
+       order mark in front of it. those three bytes are not base64, and failing
+       the whole body over them threw away a subscription that was otherwise
+       perfectly readable */
+    if (in_len >= 3 && (unsigned char)in[0] == 0xEF &&
+        (unsigned char)in[1] == 0xBB && (unsigned char)in[2] == 0xBF)
+        i = 3;
+
+    for (; i < in_len; ++i) {
+        unsigned char c = (unsigned char)in[i];
+        unsigned char v = val(c);
+        if (v == B64_SKIP) {
+            if (c == '=') padded = 1;
+            continue;
+        }
         if (v == B64_BAD)  return -1; /* real garbage, bail */
+        /* data after the padding is a second message glued onto the first, not
+           a longer one: decoding it silently concatenated two payloads */
+        if (padded) return -1;
 
         acc = (acc << 6) | v;
         nbits += 6;
@@ -41,6 +60,11 @@ int b64_decode(const char *in, size_t in_len,
             out[o++] = (unsigned char)((acc >> nbits) & 0xff);
         }
     }
+
+    /* 6 left over is one lone character: it carries no whole byte and means the
+       input was cut mid group. 2 and 4 are the normal remainders of an
+       unpadded encoding */
+    if (nbits == 6) return -1;
 
     *out_len = o;
     return 0;

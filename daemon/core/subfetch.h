@@ -41,6 +41,9 @@ typedef struct {
     uint64_t upload;
     uint64_t download;
     uint64_t total;
+/* the panel's suggested name for the subscription, from profile-title; kept
+   apart from description, which is prose about it, not a name for it */
+    char title[256];
     char description[256];
     char support_url[512];
 /* set when the panel answered with a device gated placeholder profile instead

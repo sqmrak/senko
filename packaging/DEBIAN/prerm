@@ -14,7 +14,11 @@ SENKOCTL=/var/jb/usr/bin/senkoctl
 KILLALL=${JBROOT}/usr/bin/killall
 [ -x "$KILLALL" ] || KILLALL=/usr/bin/killall
 [ -x "$KILLALL" ] || KILLALL=/bin/killall
-VPNICON_STATE=/var/mobile/Library/Preferences/com.senko.vpnicon.state
+LAUNCHCTL=${JBROOT}/bin/launchctl
+[ -x "$LAUNCHCTL" ] || LAUNCHCTL=${JBROOT}/usr/bin/launchctl
+[ -x "$LAUNCHCTL" ] || LAUNCHCTL=/bin/launchctl
+[ -x "$LAUNCHCTL" ] || LAUNCHCTL=/usr/bin/launchctl
+STATUS_STATE=/var/mobile/Library/Preferences/com.senko.status.state
 AWG_ACTIVE_CONFIG=/var/run/senkoawgd.config
 UPDATE_AWG_MARKER=/var/run/senkoawgd.upgrade
 PF_CONF=/var/run/senko-pf.conf
@@ -56,8 +60,12 @@ stop_tunnel() {
 }
 
 stop_daemon() {
-  launchctl unload "$PLIST" >/dev/null 2>&1 || true
-  launchctl remove com.senko.senkod >/dev/null 2>&1 || true
+  if [ -x "$LAUNCHCTL" ]; then
+    "$LAUNCHCTL" bootout "system/com.senko.senkod" >/dev/null 2>&1 || \
+      "$LAUNCHCTL" bootout system "$PLIST" >/dev/null 2>&1 || \
+      "$LAUNCHCTL" unload "$PLIST" >/dev/null 2>&1 || true
+    "$LAUNCHCTL" remove com.senko.senkod >/dev/null 2>&1 || true
+  fi
   # SIGTERM lets senkod drop routes and rules before it exits
   "$KILLALL" -TERM senkod >/dev/null 2>&1 || true
   sleep 1
@@ -87,7 +95,7 @@ if [ "${SENKO_UPDATE:-0}" != "1" ]; then
   flush_pf_anchor
 fi
 
-printf '0\n' > "$VPNICON_STATE" 2>/dev/null || true
+printf '0\n' > "$STATUS_STATE" 2>/dev/null || true
 
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
   # plain removal preserves user servers for a later reinstall

@@ -171,7 +171,7 @@ void SenkoInstallFrostLite(UIView *host) {
 /* UIVisualEffectView owns its subview list and refuses additions to itself.
    contentView is where anything drawn over the blur has to live; the selector
    is looked up rather than called directly because the armv7 sdk predates it */
-static UIView *SenkoEffectContentView(UIView *effectView) {
+UIView *SenkoEffectContentView(UIView *effectView) {
     if (!effectView) return nil;
     SEL sel = NSSelectorFromString(@"contentView");
     if (![effectView respondsToSelector:sel]) return effectView;
@@ -503,8 +503,12 @@ void SenkoStyleSectionPlate(UIView *plate) {
    offscreen on every blur update, which pins the gpu and starves the rest of
    the system; the glass caches itself, so the plate must not rasterize */
         plate.layer.shouldRasterize = NO;
-/* per-row blur overwhelms old gpus, so frost stays outside scrolling lists */
-        SenkoInstallFrost(plate);
+/* this plate is a section header inside a scrolling table, one per group on
+   screen: a live UIVisualEffectView per header recomputes its blur on every
+   scroll frame for however many are visible at once, which is what made the
+   ios26 list stutter. the solid tinted wash keeps the glass read without
+   asking an old gpu to blur several live rectangles a frame */
+        SenkoInstallFrostLite(plate);
     } else if (SenkoThemeIsIos16()) {
         SenkoRemoveFrost(plate);
         plate.backgroundColor = [UIColor clearColor];
@@ -670,27 +674,16 @@ enum { kSenkoScreenBgTag = 9111 };
 CGRect SenkoViewBounds(UIView *view) {
     if (!view) return CGRectZero;
     CGRect b = view.bounds;
-    if (b.size.width < 1.0f || b.size.height < 1.0f) {
-        b = [[UIScreen mainScreen] applicationFrame];
-        b.origin = CGPointZero;
-    }
-    UIInterfaceOrientation o = [UIApplication sharedApplication].statusBarOrientation;
-    BOOL wantLand = UIInterfaceOrientationIsLandscape(o);
-    BOOL isLand = b.size.width > b.size.height + 0.5f;
-    if (wantLand != isLand) {
-/* pre-ios 8 reports portrait bounds during rotation, so landscape swaps axes */
-        CGFloat t = b.size.width;
-        b.size.width = b.size.height;
-        b.size.height = t;
-    }
-/* the superview reflects the new size before child bounds finish rotating */
+    if (b.size.width >= 1.0f && b.size.height >= 1.0f) return b;
     if (view.superview) {
-        CGRect sb = view.superview.bounds;
-        if (sb.size.width > b.size.width + 1.0f)
-            b.size.width = sb.size.width;
-        if (sb.size.height > b.size.height + 1.0f)
-            b.size.height = sb.size.height;
+        b = view.superview.bounds;
+        if (b.size.width >= 1.0f && b.size.height >= 1.0f) return b;
     }
+    /* applicationFrame changes its axes with the status bar before UIKit has
+       sized a new controller on ios 5. screen bounds is stable until UIKit
+       supplies the view's real bounds on the first layout pass */
+    b = [[UIScreen mainScreen] bounds];
+    b.origin = CGPointZero;
     return b;
 }
 
@@ -949,7 +942,10 @@ void SenkoPressPop(UIView *view, BOOL pressed) {
     } else {
         SenkoAnimateSpring(0.30, 0, ^{ view.transform = target; }, ^(BOOL done) {
             (void)done;
-            RestoreRasterization(view);
+            /* an older release animation can finish after a second press. do
+               not freeze that pressed frame into the raster cache */
+            if (CGAffineTransformIsIdentity(view.transform))
+                RestoreRasterization(view);
         });
     }
 }
@@ -977,7 +973,8 @@ void SenkoRevealView(UIView *view, NSUInteger index) {
                      }
                      completion:^(BOOL done) {
                          (void)done;
-                         RestoreRasterization(view);
+                         if (CGAffineTransformEqualToTransform(view.transform, rest))
+                             RestoreRasterization(view);
                      }];
 }
 

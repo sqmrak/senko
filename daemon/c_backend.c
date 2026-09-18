@@ -1,7 +1,6 @@
 #include "c_backend.h"
 
 #include "core/net_safe.h"
-#include "legacy_ios.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -41,16 +40,24 @@ static int rung_ok(c_backend_t *cb, loop_t *loop, int port, int sockname_dest,
 int c_backend_start(c_backend_t *cb, loop_t *loop, int socks_port,
                     const char *server_ip, const char *server_ips,
                     const char *dns_upstream, int dns_local_port,
+                    dns_block_response_t block_response,
+                    ruleset_t *rules,
+                    const senko_force_t *force,
                     c_backend_verify_fn verify, void *verify_ctx,
                     char *reason, size_t reason_cap) {
     if (!cb || !loop || !server_ip || !server_ips) return -1;
     memset(cb, 0, sizeof *cb);
     if (reason && reason_cap) reason[0] = '\0';
 
+    int pinned_app_proxy = force && force->backend == SENKO_BACKEND_APP_PROXY;
+    int force_pf_mode = force ? force->pf_mode : SENKO_PF_MODE_AUTO;
+
     /* pf, or numbered ipfw rules; this rung is the only one with a dns
        forwarder, so it is worth trying before the plain fwd ruleset */
-    if (routing_exec_up(&cb->rules, socks_port, server_ip, server_ips,
-                        dns_upstream, dns_local_port) == REXEC_OK) {
+    if (!pinned_app_proxy &&
+        routing_exec_up(&cb->rules, socks_port, server_ip, server_ips,
+                        dns_upstream, dns_local_port, block_response,
+                        rules, force_pf_mode) == REXEC_OK) {
         if (rung_ok(cb, loop, cb->rules.redir_port,
                     cb->rules.mode == ROUTING_MODE_IPFW,
                     verify, verify_ctx) == 0) {
@@ -60,7 +67,8 @@ int c_backend_start(c_backend_t *cb, loop_t *loop, int socks_port,
         routing_exec_down(&cb->rules);
     }
 
-    if (routing_fwd_up(&cb->fwd, socks_port, server_ip, server_ips) == 0) {
+    if (!pinned_app_proxy &&
+        routing_fwd_up(&cb->fwd, socks_port, server_ip, server_ips) == 0) {
         if (rung_ok(cb, loop, cb->fwd.redir_port, 1, verify, verify_ctx) == 0) {
             cb->active = 1;
             return 0;
@@ -81,10 +89,9 @@ int c_backend_start(c_backend_t *cb, loop_t *loop, int socks_port,
    leaves the substrate proxy as the only route and makes the hook, not the
    firewall, the thing the user has to install */
     set_reason(reason, reason_cap,
-               senko_is_ios5()
-                   ? "ios 5 routes through the senkotlsfix application proxy; "
-                     "install mobilesubstrate and reinstall senko"
-                   : "no usable firewall backend (need pfctl, ipfw, or senkotlsfix)");
+               pinned_app_proxy
+                   ? "the connect hook was pinned but senkotlsfix is not loaded"
+               : "no usable firewall backend (need pfctl, ipfw, or senkotlsfix)");
     memset(cb, 0, sizeof *cb);
     return -1;
 }

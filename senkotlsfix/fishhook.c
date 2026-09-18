@@ -9,6 +9,11 @@
 #include <sys/types.h>
 #include <stdio.h>
 
+#if defined(__arm64e__) && __has_feature(ptrauth_calls)
+#include <ptrauth.h>
+#define SENKO_FISHHOOK_PAC 1
+#endif
+
 #ifdef __LP64__
 typedef struct mach_header_64 mach_header_t;
 typedef struct segment_command_64 segment_command_t;
@@ -66,8 +71,15 @@ static void perform_rebinding_with_section(struct rebindings_entry *rebindings,
             for (uint j = 0; j < cur->rebindings_nel; j++) {
                 if (strcmp(symbol_name, cur->rebindings[j].name) == 0) {
                     if (cur->rebindings[j].replaced && !*cur->rebindings[j].replaced)
+#ifdef SENKO_FISHHOOK_PAC
+                        *cur->rebindings[j].replaced = ptrauth_strip(indirect_symbol_bindings[i], ptrauth_key_function_pointer);
+                    indirect_symbol_bindings[i] = ptrauth_sign_unauthenticated(
+                        cur->rebindings[j].replacement, ptrauth_key_function_pointer,
+                        ptrauth_blend_discriminator(&indirect_symbol_bindings[i], 0));
+#else
                         *cur->rebindings[j].replaced = indirect_symbol_bindings[i];
                     indirect_symbol_bindings[i] = cur->rebindings[j].replacement;
+#endif
                     goto symbol_done;
                 }
             }

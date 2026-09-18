@@ -63,6 +63,12 @@ typedef struct {
 
     char    subscription_userinfo[512];
     int     have_subscription_userinfo;
+/* profile-title is the panel's suggested name for the subscription itself,
+   not prose about it; subscription-description is the rare, separate header
+   that actually is prose. conflating the two left the suggested name stranded
+   on a details screen instead of ever becoming the subscription's name */
+    char    subscription_title[256];
+    int     have_subscription_title;
     char    subscription_description[256];
     int     have_subscription_description;
     char    subscription_support_url[512];

@@ -1,6 +1,8 @@
 #define _DEFAULT_SOURCE
 
 #include "ctl_server.h"
+#include "daemon_ctl.h"
+#include "settings.h"
 #include "core/b64.h"
 #include "core/control.h"
 #include "core/store.h"
@@ -16,6 +18,15 @@
 
 static int g_fail = 0;
 static int g_verify_fail = 0;
+static int g_stats_calls = 0;
+static int g_stats_fail = 0;
+static int sample_stats(void *ctx, uint64_t *up, uint64_t *down) {
+    (void)ctx;
+    ++g_stats_calls;
+    *up = UINT64_C(4294967300);
+    *down = UINT64_C(8589934600);
+    return g_stats_fail ? -1 : 0;
+}
 static const char *g_verify_reason = "mock verify failed";
 static void ok(const char *what, int cond) {
     if (cond) return;
@@ -31,12 +42,23 @@ typedef struct {
     int               fail_next;    /* fail this many starts */
 } apply_rec_t;
 
+/* the daemon owns the settings copy, so the mock applies a SET the same way */
+static daemon_settings_t *g_settings;
+
 static int mock_apply(void *ctx, const ctl_action_t *a) {
     apply_rec_t *r = (apply_rec_t *)ctx;
     r->calls++;
     r->last_kind = a->kind;
     r->last_index = a->server_index;
     snprintf(r->last_host, sizeof r->last_host, "%s", a->server.host);
+    if (a->kind == CTL_ACT_SET) {
+        if (!g_settings) return -1;
+        settings_status_t sr = daemon_settings_set(g_settings, a->key, strlen(a->key),
+                                                   a->value, strlen(a->value));
+        if (sr == SETTINGS_ERR_KEY) return DCTL_ERR_SETTING_KEY;
+        if (sr != SETTINGS_OK) return DCTL_ERR_SETTING_VALUE;
+        return 0;
+    }
     if (r->fail_next > 0) { r->fail_next--; return -1; }
     return 0;
 }
@@ -120,6 +142,64 @@ static int mock_verify_ok(void *ctx, char *reason, size_t reason_cap) {
     }
     if (reason && reason_cap) reason[0] = '\0';
     return 0;
+}
+
+/* the daemon side of the diagnostics: the server adds its own facts first and
+   appends whatever the hook wrote */
+static int g_diag_calls;
+
+static int mock_diag(void *ctx, char *buf, size_t cap, size_t *len) {
+    (void)ctx;
+    g_diag_calls++;
+    return ctl_build_diag("mock.key", "mock value", buf, cap, len) == CTL_OK ? 0 : -1;
+}
+
+/* the firewall ruleset the kernel is running, and the named state drops */
+static int g_fwconf_calls;
+
+static int mock_fwconf(void *ctx, char *buf, size_t cap, size_t *len) {
+    (void)ctx;
+    g_fwconf_calls++;
+    int n = snprintf(buf, cap, "rdr on en0 proto tcp to any -> 127.0.0.1 port 1\n"
+                               "pass out quick proto tcp\n");
+    if (n < 0 || (size_t)n >= cap) return -1;
+    if (len) *len = (size_t)n;
+    return 0;
+}
+
+static char g_flush_what[32];
+
+static int mock_flush(void *ctx, const char *what, char *reason, size_t cap) {
+    (void)ctx;
+    snprintf(g_flush_what, sizeof g_flush_what, "%s", what ? what : "");
+    if (what && strcmp(what, "bypass") == 0) {
+        if (reason && cap) snprintf(reason, cap, "no pf bypass table on this backend");
+        return -1;
+    }
+    return 0;
+}
+
+/* the stage trace the developer screen asks for with the optional keyword */
+static int g_check_stage_requests;
+
+static int mock_check_staged(void *ctx, const char *mode,
+                             const vl_server_t *server,
+                             ctl_check_trace_t *trace,
+                             char *reason, size_t reason_cap) {
+    (void)ctx; (void)mode; (void)server;
+    if (reason && reason_cap) reason[0] = '\0';
+    if (!trace) return 7;
+    g_check_stage_requests++;
+    memset(trace, 0, sizeof *trace);
+    snprintf(trace->stages[0].name, sizeof trace->stages[0].name, "resolve");
+    trace->stages[0].ms = 3;
+    trace->stages[0].ok = 1;
+    snprintf(trace->stages[1].name, sizeof trace->stages[1].name, "tcp connect");
+    trace->stages[1].ms = 21;
+    trace->stages[1].ok = 0;
+    trace->count = 2;
+    if (reason && reason_cap) snprintf(reason, reason_cap, "check failed");
+    return -1;
 }
 
 typedef struct {
@@ -271,6 +351,54 @@ int main(void) {
        strcmp(parsed.name, "handshake") == 0);
     ok("reject unknown check",
        ctl_parse_cmd("CHECK magic 1\n", 14, &parsed) == CTL_ERR_PARSE);
+    ok("a check without the keyword asks for no stages",
+       ctl_parse_cmd("CHECK tcp 0\n", 12, &parsed) == CTL_OK &&
+       parsed.server_index == 0 && parsed.want_stages == 0);
+    ok("the stages keyword is read off the end",
+       ctl_parse_cmd("CHECK tcp 0 stages\n", 19, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_CHECK && parsed.server_index == 0 &&
+       strcmp(parsed.name, "tcp") == 0 && parsed.want_stages == 1);
+    ok("parse native vpn configuration",
+       ctl_parse_cmd("NATIVE_CONFIG 4\n", 16, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_NATIVE_CONFIG && parsed.server_index == 4);
+    ok("reject native vpn configuration without index",
+       ctl_parse_cmd("NATIVE_CONFIG\n", 14, &parsed) == CTL_ERR_PARSE);
+    ok("the keyword is not mistaken for an index",
+       ctl_parse_cmd("CHECK tcp stages\n", 17, &parsed) == CTL_ERR_PARSE);
+    ok("parse the firewall dump",
+       ctl_parse_cmd("FWCONF\n", 7, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_FWCONF);
+    ok("parse a named flush",
+       ctl_parse_cmd("FLUSH dns\n", 10, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_FLUSH && strcmp(parsed.name, "dns") == 0);
+    ok("reject a flush with no target",
+       ctl_parse_cmd("FLUSH\n", 6, &parsed) == CTL_ERR_PARSE);
+    ok("reject a flush target this build does not own",
+       ctl_parse_cmd("FLUSH everything\n", 17, &parsed) == CTL_ERR_PARSE);
+    ok("parse a device id reset",
+       ctl_parse_cmd("HWIDRESET\n", 10, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_HWID_RESET);
+    ok("parse an atomic manual replacement",
+       ctl_parse_cmd("REPLACESRV 3 vless://example\n", 29, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_REPLACE_SERVER && parsed.server_index == 3 &&
+       strcmp(parsed.text, "vless://example") == 0);
+    ok("parse an atomic subscription replacement",
+       ctl_parse_cmd("REPLACESUB 2 https://sub.example - Updated\n", 43, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_REPLACE_SUB && parsed.server_index == 2 &&
+       strcmp(parsed.text, "https://sub.example") == 0 &&
+       strcmp(parsed.value, "-") == 0 && strcmp(parsed.name, "Updated") == 0);
+    {
+        char line[128];
+        size_t ln = 0;
+        ok("a stage line carries the verdict, the time and the name",
+           ctl_build_stage("tcp connect", 21, 0, line, sizeof line, &ln) == CTL_OK &&
+           strcmp(line, "STAGE 0 21 tcp connect\n") == 0);
+        ok("a stage name with a newline in it is refused",
+           ctl_build_stage("bad\nname", 1, 1, line, sizeof line, &ln) == CTL_ERR_ARG);
+        ok("a firewall line is sent verbatim",
+           ctl_build_fwline("pass out quick", line, sizeof line, &ln) == CTL_OK &&
+           strcmp(line, "FWLINE pass out quick\n") == 0);
+    }
     ctl_server_set_verify(&s, mock_verify_ok);
 
     size_t idx;
@@ -406,6 +534,18 @@ int main(void) {
     ok("refresh with header", strncmp(buf, "OK ", 3) == 0 &&
        strcmp(g_fetch.last_header, "Authorization: Bearer abc+test") == 0);
 
+    size_t sub_nodes_before_replace = s.engine.store.n;
+    {
+        const char *cmd =
+            "REPLACESUB 0 https://sub.example.com/feed Authorization%3A%20Bearer%20abc%2Btest Home%20updated\n";
+        write(cli, cmd, strlen(cmd));
+    }
+    exchange(&s, cli, buf, sizeof buf);
+    ok("replace subscription reply", strcmp(buf, "OK subscription updated\n") == 0);
+    ok("replace subscription keeps nodes", s.engine.store.n == sub_nodes_before_replace &&
+       strcmp(s.engine.store.subs[0].name, "Home%20updated") == 0 &&
+       strcmp(s.engine.store.subs[0].header, "Authorization: Bearer abc+test") == 0);
+
     size_t n_now = s.engine.store.n;
     g_fetch.fail_next = 1;
     write(cli, "REFRESH 0\n", 10);
@@ -465,6 +605,16 @@ int main(void) {
     ok("move manual reply", strcmp(buf, "OK server moved\n") == 0);
     ok("move manual changed order", strcmp(s.engine.store.servers[0].host, "5.5.5.5") == 0);
 
+    {
+        const char *cmd =
+            "REPLACESRV 0 vless://ffff5555-6324-4d53-ad4f-8cda48b30811@6.6.6.6:443?security=none&type=tcp#Edited\n";
+        write(cli, cmd, strlen(cmd));
+    }
+    exchange(&s, cli, buf, sizeof buf);
+    ok("replace manual reply", strcmp(buf, "OK server updated\n") == 0);
+    ok("replace manual keeps its position",
+       s.engine.store.n > 0 && strcmp(s.engine.store.servers[0].host, "6.6.6.6") == 0);
+
     write(cli, "LIST\n", 5);
     exchange(&s, cli, buf, sizeof buf);
     ok("list has subscription metadata", strstr(buf, "SUBMETA 0 1893456000\n") != NULL);
@@ -509,7 +659,7 @@ int main(void) {
     exchange(&s, cli, buf, sizeof buf);
     ok("pong reply", strcmp(buf, "PONG 0 42\n") == 0);
     ok("probe called", g_probe.calls == 1);
-    ok("probe got host", strcmp(g_probe.last_host, "5.5.5.5") == 0);
+    ok("probe got host", strcmp(g_probe.last_host, "6.6.6.6") == 0);
     ok("probe got port", g_probe.last_port == 443);
 
     g_probe.ret_ms = -1;
@@ -530,14 +680,14 @@ int main(void) {
     int tcalls = g_tunnel_probe.calls;
     write(cli, "PING 0\n", 7);
     exchange(&s, cli, buf, sizeof buf);
-    ok("ping connected uses tunnel", strcmp(buf, "PONG 0 77\n") == 0);
-    ok("ping connected no probe", g_probe.calls == pcalls);
+    ok("ping connected probes selected server", strcmp(buf, "PONG 0 42\n") == 0);
+    ok("ping connected uses server probe", g_probe.calls == pcalls + 1);
 
     write(cli, "PING 1\n", 7);
     exchange(&s, cli, buf, sizeof buf);
-    ok("ping active uses tunnel", strcmp(buf, "PONG 1 77\n") == 0);
-    ok("ping active uses tunnel probe", g_tunnel_probe.calls == tcalls + 2);
-    ok("ping active no probe", g_probe.calls == pcalls);
+    ok("ping active probes selected server", strcmp(buf, "PONG 1 42\n") == 0);
+    ok("ping active does not use tunnel probe", g_tunnel_probe.calls == tcalls);
+    ok("ping active uses server probe", g_probe.calls == pcalls + 2);
 
     memset(&g_persist, 0, sizeof g_persist);
     ctl_server_set_persist(&s, mock_persist);
@@ -548,6 +698,230 @@ int main(void) {
     ok("delsrv active ok", strstr(buf, "OK removed server\n") != NULL);
     ok("delsrv active stop", rec.last_kind == CTL_ACT_STOP);
     ok("delsrv active persisted", g_persist.calls == 1 && g_persist.last_n == s.engine.store.n);
+
+    int unauth = connect_unix(path);
+    ok("stats unauth connect", unauth >= 0);
+    set_nonblock(unauth);
+    ctl_server_step(&s, 0);
+    ctl_server_set_stats(&s, sample_stats);
+    ctl_server_step(&s, 0);
+    ssize_t stat_n = read(cli, buf, sizeof buf - 1);
+    if (stat_n >= 0) buf[stat_n] = '\0';
+    ok("stats broadcast", stat_n > 0 && strcmp(buf, "STAT 4294967300 8589934600\n") == 0);
+    ok("stats auth gate", read(unauth, buf, sizeof buf) < 0 && errno == EAGAIN);
+    int samples = g_stats_calls;
+    ctl_server_step(&s, 0);
+    ok("stats once per second", g_stats_calls == samples);
+    s.stat_at_ms -= 1000;
+    ctl_server_step(&s, 0);
+    ok("stats idle poll", g_stats_calls == samples + 1);
+    ok("stats idle delivery", read(cli, buf, sizeof buf) > 0);
+    write(cli, "STATUS\n", 7);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("stats before status", strncmp(buf, "STAT 4294967300 8589934600\nSTATE ", 31) == 0);
+    g_stats_fail = 1;
+    write(cli, "STATUS\n", 7);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("stats failure preserves state", strncmp(buf, "STATE ", 6) == 0 && s.stat_failed);
+    g_stats_fail = 0;
+    write(cli, "STATUS\n", 7);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("stats recovery", strstr(buf, "STAT ") != NULL && !s.stat_failed);
+    ctl_server_set_stats(&s, NULL);
+    close(unauth);
+
+/* the settings verbs: the daemon owns the values, so SET goes out as an action
+   the apply hook performs and SETTINGS answers from the same copy */
+    ok("parse set",
+       ctl_parse_cmd("SET auto_connect 1\n", 19, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_SET && strcmp(parsed.name, "auto_connect") == 0 &&
+       strcmp(parsed.text, "1") == 0);
+/* a key this build has no field for still parses: the daemon is what names it
+   unknown, and the parser must not turn it into a different verb */
+    ok("parse set unknown key",
+       ctl_parse_cmd("SET quantum_tunnel 1\n", 21, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_SET && strcmp(parsed.name, "quantum_tunnel") == 0);
+    ok("parse set needs a value",
+       ctl_parse_cmd("SET auto_connect\n", 17, &parsed) == CTL_ERR_PARSE);
+    ok("parse settings", ctl_parse_cmd("SETTINGS\n", 9, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_SETTINGS);
+/* SETSUBHDR must not be read as a SET of a key called SUBHDR */
+    ok("set does not swallow setsubhdr",
+       ctl_parse_cmd("SETSUBHDR 0 x\n", 14, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_SET_SUB_HEADER);
+    ok("parse rules",
+       ctl_parse_cmd("RULES\n", 6, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_RULES);
+    ok("parse delrule",
+       ctl_parse_cmd("DELRULE 3\n", 10, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_DEL_RULE && parsed.server_index == 3);
+
+    write(cli, "SETTINGS\n", 9);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("settings without a daemon copy", strncmp(buf, "ERR ", 4) == 0);
+
+    daemon_settings_t live;
+    daemon_settings_defaults(&live);
+    g_settings = &live;
+    ctl_server_set_settings(&s, &live);
+
+    write(cli, "SETTINGS\n", 9);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("settings dump ends", strstr(buf, "SETEND\n") != NULL);
+    ok("settings dump carries defaults",
+       strstr(buf, "SET auto_reconnect 1\n") != NULL &&
+       strstr(buf, "SET sub_refresh_hours 0\n") != NULL);
+
+    memset(&g_persist, 0, sizeof g_persist);
+    write(cli, "SET auto_connect 1\n", 19);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("set applied", strcmp(buf, "OK auto_connect 1\n") == 0);
+    ok("set reached the daemon copy", live.auto_connect == 1);
+    ok("set persisted", g_persist.calls == 1);
+
+    write(cli, "SET quantum_tunnel 1\n", 21);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("unknown setting reported", strcmp(buf, "ERR unknown setting\n") == 0);
+
+    write(cli, "SET sub_refresh_hours 999\n", 26);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("out of range setting reported", strcmp(buf, "ERR value out of range\n") == 0);
+    ok("out of range setting changed nothing", live.sub_refresh_hours == 0);
+
+    write(cli, "SETTINGS\n", 9);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("settings dump follows the change",
+       strstr(buf, "SET auto_connect 1\n") != NULL);
+
+    memset(&g_persist, 0, sizeof g_persist);
+    {
+        const char *cmd = "SET rule direct domain-suffix example.org\n";
+        write(cli, cmd, strlen(cmd));
+    }
+    exchange(&s, cli, buf, sizeof buf);
+    ok("rule saved through control", strncmp(buf, "OK rule saved ", 14) == 0 &&
+       s.engine.store.rules.count == 1 && g_persist.calls == 1);
+    write(cli, "RULES\n", 6);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("rule list streams hits",
+       strstr(buf, "RULE 0 direct domain-suffix 0 example.org\n") != NULL &&
+       strstr(buf, "RULEEND 1\n") != NULL);
+    s.engine.state = CTL_STATE_CONNECTED;
+    {
+        const char *cmd = "SET rule block domain-keyword ads\n";
+        write(cli, cmd, strlen(cmd));
+    }
+    exchange(&s, cli, buf, sizeof buf);
+    ok("live rule change requires reconnect",
+       strcmp(buf, "ERR disconnect before changing rules\n") == 0 &&
+       s.engine.store.rules.count == 1);
+    s.engine.state = CTL_STATE_IDLE;
+    write(cli, "DELRULE 0\n", 10);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("rule removed through control", strcmp(buf, "OK rule removed\n") == 0 &&
+       s.engine.store.rules.count == 0);
+
+/* a redial the daemon scheduled on its own must not fight the user: a command
+   that decides what the tunnel does now cancels it */
+    s.retry_at_ms = 1;
+    s.retry_attempts = 3;
+    write(cli, "DISCONNECT\n", 11);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("disconnect cancels a pending redial",
+       s.retry_at_ms == 0 && s.retry_attempts == 0);
+
+    ctl_server_set_settings(&s, NULL);
+    g_settings = NULL;
+
+/* the diagnostics report: the parser takes a bare verb, the server always
+   answers something, and a key or value that would read back as two facts is
+   refused by the builder rather than written */
+    ok("parse diag", ctl_parse_cmd("DIAG\n", 5, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_DIAG);
+    char diagline[64]; size_t dn = 0;
+    ok("diag builder refuses a key with a space",
+       ctl_build_diag("two words", "x", diagline, sizeof diagline, &dn) == CTL_ERR_ARG);
+    ok("diag builder refuses a value with a newline",
+       ctl_build_diag("key", "two\nlines", diagline, sizeof diagline, &dn) == CTL_ERR_ARG);
+    ok("diag builder keeps an empty value readable",
+       ctl_build_diag("key", "", diagline, sizeof diagline, &dn) == CTL_OK &&
+       strcmp(diagline, "DIAG key -\n") == 0);
+
+    write(cli, "DIAG\n", 5);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("diag answers without a daemon hook",
+       strstr(buf, "DIAG state ") != NULL && strstr(buf, "DIAGEND\n") != NULL);
+    ok("diag reports the catalog", strstr(buf, "DIAG catalog ") != NULL);
+    ok("diag names the selected server", strstr(buf, "DIAG server ") != NULL);
+/* the report is five taps away and ends up in screenshots */
+    ok("diag carries no uuid", strstr(buf, "-6324-4d53-") == NULL);
+
+    g_diag_calls = 0;
+    ctl_server_set_diag(&s, mock_diag);
+    write(cli, "DIAG\n", 5);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("diag asked the daemon", g_diag_calls == 1);
+    ok("diag appended the daemon facts",
+       strstr(buf, "DIAG mock.key mock value\n") != NULL);
+    ctl_server_set_diag(&s, NULL);
+
+    write(cli, "FWCONF\n", 7);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("no firewall backend says so instead of showing an empty ruleset",
+       strstr(buf, "ERR ") != NULL);
+    ctl_server_set_fwconf(&s, mock_fwconf);
+    g_fwconf_calls = 0;
+    write(cli, "FWCONF\n", 7);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("the firewall ruleset goes out line by line",
+       g_fwconf_calls == 1 &&
+       strstr(buf, "FWLINE rdr on en0 proto tcp to any -> 127.0.0.1 port 1\n") != NULL &&
+       strstr(buf, "FWLINE pass out quick proto tcp\n") != NULL &&
+       strstr(buf, "FWEND\n") != NULL);
+
+    ctl_server_set_flush(&s, mock_flush);
+    g_flush_what[0] = '\0';
+    write(cli, "FLUSH dns\n", 10);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("a dns flush reaches the daemon",
+       strcmp(g_flush_what, "dns") == 0 && strstr(buf, "OK flushed") != NULL);
+    write(cli, "FLUSH bypass\n", 13);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("a refused flush answers with the daemon's own words",
+       strstr(buf, "ERR no pf bypass table on this backend") != NULL);
+
+    g_flush_what[0] = '\0';
+    {
+        const char rule[] = "direct domain-suffix example.com";
+        size_t rule_index = 0;
+        ok("a rule exists to remove",
+           ruleset_add_text(&s.engine.store.rules, rule, sizeof rule - 1,
+                            &rule_index) == RULES_OK &&
+           s.engine.store.rules.count > 0);
+    }
+    write(cli, "FLUSH rules\n", 12);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("the ruleset is cleared by the server, not the daemon",
+       g_flush_what[0] == '\0' && s.engine.store.rules.count == 0 &&
+       strstr(buf, "rule(s) removed") != NULL);
+    ctl_server_set_flush(&s, NULL);
+    ctl_server_set_fwconf(&s, NULL);
+
+    ctl_server_set_check(&s, mock_check_staged);
+    g_check_stage_requests = 0;
+    write(cli, "CHECK tcp 0\n", 12);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("a check that did not ask for stages gets none",
+       g_check_stage_requests == 0 && strstr(buf, "STAGE ") == NULL &&
+       strstr(buf, "PONG ") != NULL);
+    write(cli, "CHECK tcp 0 stages\n", 19);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("a staged check reports every stage before the verdict",
+       g_check_stage_requests == 1 &&
+       strstr(buf, "STAGE 1 3 resolve\n") != NULL &&
+       strstr(buf, "STAGE 0 21 tcp connect\n") != NULL &&
+       strstr(buf, "ERR check failed") != NULL);
+    ctl_server_set_check(&s, NULL);
 
     close(cli);
     for (int i = 0; i < 10; ++i) ctl_server_step(&s, 2);

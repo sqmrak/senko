@@ -190,6 +190,25 @@ static sess_status_t send_vision_first(session_t *s,
 
 /* wrap client bytes atomically so backpressure cannot split a vision block */
 static size_t push_app(session_t *s, const uint8_t *buf, size_t len) {
+    if (s->proto == VL_PROTO_SHADOWSOCKS) {
+        if (len == 0) return 0;
+        size_t free_rm = sizeof s->to_remote - s->to_remote_len;
+        if (free_rm <= 34) return 0;
+        size_t maxc = free_rm - 34;
+        if (maxc > 8192) maxc = 8192;
+        size_t content = len < maxc ? len : maxc;
+        uint8_t enc[8192 + 34];
+        size_t enc_len = 0;
+        if (ss_client_encrypt_chunk(&s->u.sc, buf, content, enc, sizeof enc, &enc_len) != SS_OK)
+            return 0;
+        size_t p = push_remote(s, enc, enc_len);
+        if (p == 0) return 0;
+#ifndef SENKO_RELEASE
+        s->trace_app_tx += (uint64_t)content;
+#endif
+        return content;
+    }
+
     if (!s->vision_on) {
         size_t n = push_remote(s, buf, len);
 #ifndef SENKO_RELEASE
@@ -326,6 +345,10 @@ sess_status_t session_init(session_t *s,
         s5c_init(&s->u.s5c, user, pass, &(vless_dest_t){0});
     } else if (proto == VL_PROTO_HTTP || proto == VL_PROTO_HTTPS) {
         hc_init(&s->u.hc, user, pass, &(vless_dest_t){0});
+    } else if (proto == VL_PROTO_TROJAN) {
+        trojan_client_init(&s->u.tc, pass, &(vless_dest_t){0});
+    } else if (proto == VL_PROTO_SHADOWSOCKS) {
+        ss_client_init(&s->u.sc, user, pass, &(vless_dest_t){0});
     }
     return SESS_OK;
 }
@@ -505,6 +528,42 @@ static sess_status_t do_request(session_t *s) {
         s->client_stage_len -= used;
 
         s->state = SESS_VLESS_RESP;
+    } else if (s->proto == VL_PROTO_TROJAN) {
+        session_set_trace_host(s, &dest);
+        s->u.tc.dest = dest;
+
+        const uint8_t *payload = s->client_stage + used;
+        size_t payload_len = s->client_stage_len - used;
+        uint8_t req[1024];
+        size_t reqlen = 0;
+        int rs = trojan_client_build_request(&s->u.tc, payload, payload_len, req, sizeof req, &reqlen);
+        if (rs != TR_OK) { s->state = SESS_ERROR; return SESS_ERR; }
+
+        push_remote(s, req, reqlen);
+        if (s->state == SESS_ERROR) return SESS_ERR;
+
+        s->client_stage_len = 0;
+        s->state = SESS_RELAY;
+/* trojan has no distinct response header, so ack the local socks client now */
+        queue_socks_reply(s, SOCKS5_REP_OK);
+    } else if (s->proto == VL_PROTO_SHADOWSOCKS) {
+        session_set_trace_host(s, &dest);
+        s->u.sc.dest = dest;
+
+        const uint8_t *payload = s->client_stage + used;
+        size_t payload_len = s->client_stage_len - used;
+        uint8_t req[16384];
+        size_t reqlen = 0;
+        int rs = ss_client_build_request(&s->u.sc, payload, payload_len, req, sizeof req, &reqlen);
+        if (rs != SS_OK) { s->state = SESS_ERROR; return SESS_ERR; }
+
+        push_remote(s, req, reqlen);
+        if (s->state == SESS_ERROR) return SESS_ERR;
+
+        s->client_stage_len = 0;
+        s->state = SESS_RELAY;
+/* shadowsocks has no distinct response header, so ack the local socks client now */
+        queue_socks_reply(s, SOCKS5_REP_OK);
     }
 
     return SESS_OK;
@@ -687,6 +746,32 @@ sess_status_t session_pump_remote(session_t *s) {
             if (s->state == SESS_RELAY && s->client_stage_len > 0) {
                 push_staged_client(s);
                 if (s->state == SESS_ERROR) return SESS_ERR;
+            }
+            continue;
+        }
+
+        if (s->proto == VL_PROTO_SHADOWSOCKS) {
+            const uint8_t *feed = tmp;
+            size_t feed_len = (size_t)n;
+/* one wire read can hold more full chunks than the plain buffer takes at
+   once, so keep draining the staged ciphertext until nothing more is ready */
+            for (;;) {
+                uint8_t plain[16384];
+                size_t plain_len = 0;
+                int fr = ss_client_feed_downstream(&s->u.sc, feed, feed_len, plain, sizeof plain, &plain_len);
+                feed = NULL;
+                feed_len = 0;
+                if (fr == SS_ERR_BAD_TAG || fr == SS_ERR_CRYPTO) {
+                    fprintf(stderr, "senkod: shadowsocks decrypt failed rc=%d\n", fr);
+                    fail_pending_socks(s);
+                    s->state = SESS_ERROR;
+                    return SESS_ERR;
+                }
+                if (plain_len > 0) {
+                    deliver_client(s, plain, plain_len);
+                    if (s->state == SESS_ERROR) return SESS_ERR;
+                }
+                if (plain_len == 0) break;
             }
             continue;
         }

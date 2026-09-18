@@ -18,6 +18,13 @@
 #include <time.h>
 #include <unistd.h>
 
+#if !defined(__APPLE__)
+/* the host test link runs on glibc, which does not carry the bsd
+   getprogname/setprogname pair the device build gets from Darwin's
+   stdlib.h; the log line only wants a label, not real process identity */
+static const char *getprogname(void) { return "host-test"; }
+#endif
+
 #ifndef C_PROXY_STATE
 #define C_PROXY_STATE "/var/run/senko-c-proxy"
 #endif
@@ -110,9 +117,14 @@ static int socks_open(int fd, const struct sockaddr *dest) {
     uint8_t req[4 + 16 + 2];
     size_t req_len;
 
-    if (send_all(fd, greeting, sizeof greeting) != 0 ||
-        recv_all(fd, reply, 2) != 0 || reply[0] != 5 || reply[1] != 0)
+    if (send_all(fd, greeting, sizeof greeting) != 0) {
+        stl_log("socks: greeting send failed (%s)", strerror(errno));
         return -1;
+    }
+    if (recv_all(fd, reply, 2) != 0 || reply[0] != 5 || reply[1] != 0) {
+        stl_log("socks: greeting reply rejected");
+        return -1;
+    }
 
     req[0] = 5;
     req[1] = 1;
@@ -133,19 +145,27 @@ static int socks_open(int fd, const struct sockaddr *dest) {
         return -1;
     }
 
-    if (send_all(fd, req, req_len) != 0 || recv_all(fd, reply, 4) != 0 ||
-        reply[0] != 5 || reply[1] != 0 || reply[2] != 0)
+    if (send_all(fd, req, req_len) != 0) {
+        stl_log("socks: connect request send failed (%s)", strerror(errno));
         return -1;
-
-    if (reply[3] == 1)
-        return recv_all(fd, reply + 4, 6) == 0 ? 0 : -1;
-    if (reply[3] == 4)
-        return recv_all(fd, reply + 4, 18) == 0 ? 0 : -1;
-    if (reply[3] == 3) {
-        if (recv_all(fd, reply + 4, 1) != 0) return -1;
-        return recv_all(fd, reply + 5, (size_t)reply[4] + 2) == 0 ? 0 : -1;
     }
-    return -1;
+    if (recv_all(fd, reply, 4) != 0 || reply[0] != 5 || reply[1] != 0 || reply[2] != 0) {
+        stl_log("socks: connect request rejected, reply code %d", reply[1]);
+        return -1;
+    }
+
+    int ok;
+    if (reply[3] == 1)
+        ok = recv_all(fd, reply + 4, 6) == 0;
+    else if (reply[3] == 4)
+        ok = recv_all(fd, reply + 4, 18) == 0;
+    else if (reply[3] == 3)
+        ok = recv_all(fd, reply + 4, 1) == 0 &&
+             recv_all(fd, reply + 5, (size_t)reply[4] + 2) == 0;
+    else
+        ok = 0;
+    if (!ok) stl_log("socks: bound address read failed, addr type %d", reply[3]);
+    return ok ? 0 : -1;
 }
 
 static int stl_connect(int fd, const struct sockaddr *addr, socklen_t addr_len) {
@@ -176,6 +196,20 @@ static int stl_connect(int fd, const struct sockaddr *addr, socklen_t addr_len) 
     int port = read_proxy_port();
     if (port == 0) return orig_connect(fd, addr, addr_len);
 
+    char dest_text[INET6_ADDRSTRLEN] = "?";
+    uint16_t dest_port = 0;
+    if (addr->sa_family == AF_INET) {
+        const struct sockaddr_in *v4 = (const struct sockaddr_in *)addr;
+        inet_ntop(AF_INET, &v4->sin_addr, dest_text, sizeof dest_text);
+        dest_port = ntohs(v4->sin_port);
+    } else {
+        const struct sockaddr_in6 *v6 = (const struct sockaddr_in6 *)addr;
+        inet_ntop(AF_INET6, &v6->sin6_addr, dest_text, sizeof dest_text);
+        dest_port = ntohs(v6->sin6_port);
+    }
+    stl_log("redirect %s: fd %d to %s:%u via 127.0.0.1:%d",
+            getprogname() ? getprogname() : "?", fd, dest_text, dest_port, port);
+
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return orig_connect(fd, addr, addr_len);
     struct timeval old_rcv, old_snd;
@@ -195,6 +229,9 @@ static int stl_connect(int fd, const struct sockaddr *addr, socklen_t addr_len) 
     local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     local.sin_port = htons((uint16_t)port);
     int rc = orig_connect(fd, (const struct sockaddr *)&local, sizeof local);
+    if (rc != 0)
+        stl_log("redirect %s: loopback connect to 127.0.0.1:%d failed (%s)",
+                getprogname() ? getprogname() : "?", port, strerror(errno));
     if (rc == 0) rc = socks_open(fd, addr);
 
     if (have_rcv) (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &old_rcv, sizeof old_rcv);

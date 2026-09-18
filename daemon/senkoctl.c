@@ -23,13 +23,19 @@ static int reply_complete(const char *buf, size_t len) {
         if (llen > 0) {
             const char *ln = buf + start;
             int stream =
+                (llen >= 5 && memcmp(ln, "STAT ", 5) == 0) ||
+                (llen >= 4 && memcmp(ln, "SET ", 4) == 0) ||
+                (llen >= 5 && memcmp(ln, "RULE ", 5) == 0) ||
+                (llen >= 5 && memcmp(ln, "DIAG ", 5) == 0) ||
                 (llen >= 4 && memcmp(ln, "SRV ", 4) == 0) ||
                 (llen >= 4 && memcmp(ln, "SUB ", 4) == 0) ||
                 (llen >= 8 && memcmp(ln, "SUBMETA ", 8) == 0) ||
                 (llen >= 8 && memcmp(ln, "SUBINFO ", 8) == 0) ||
                 (llen >= 7 && memcmp(ln, "SUBHDR ", 7) == 0) ||
                 (llen >= 8 && memcmp(ln, "SECTION ", 8) == 0) ||
-                (llen >= 6 && memcmp(ln, "FDATA ", 6) == 0);
+                (llen >= 6 && memcmp(ln, "FDATA ", 6) == 0) ||
+                (llen >= 7 && memcmp(ln, "FWLINE ", 7) == 0) ||
+                (llen >= 6 && memcmp(ln, "STAGE ", 6) == 0);
             if (!stream) return 1;
         }
         start = i + 1;
@@ -154,11 +160,14 @@ static ssize_t read_line(int fd, char *buf, size_t cap) {
     return -1;
 }
 
-/* bound control reads so a dead daemon cannot hang the cli */
+/* bound control reads so a dead daemon cannot hang the cli. out_timed_out, when
+   given, is set when the deadline hit before a terminal reply line arrived, so
+   the caller can tell a real timeout from an empty-but-complete reply */
 static ssize_t talk_ex(const char *sock, const char *line, size_t line_len,
                        char *buf, size_t cap, int timeout_sec,
-                       int (*done)(const char *, size_t)) {
+                       int (*done)(const char *, size_t), int *out_timed_out) {
     int fd;
+    if (out_timed_out) *out_timed_out = 0;
     if (connect_sock(sock, &fd) != 0) return -1;
 
 /* every command needs the token, including read-only status */
@@ -184,7 +193,10 @@ static ssize_t talk_ex(const char *sock, const char *line, size_t line_len,
             continue;
         }
         if (r == 0) break;
-        if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (out_timed_out) *out_timed_out = 1;
+            break;
+        }
         if (errno == EINTR) continue;
         break;
     }
@@ -262,6 +274,10 @@ static void usage(const char *a0) {
         "usage: %s [-s sock] <command>\n"
         "  status | list | disconnect | crash\n"
         "  connect <idx> | ping <idx> | refresh <sub-idx> | del <idx>\n"
+        "  settings | set <key> <value>\n"
+        "  rules | rule <action> <type> <value> | delrule <idx>\n"
+        "  diag | fwconf | flush <dns|bypass|rules|config> | hwidreset\n"
+        "  check <tcp|proxy|tunnel|handshake> <idx>\n"
         "  fetch <url> | addsrv <link> | addsub <url> <name...> | raw <verb...>\n"
         "sock defaults to $SENKOD_SOCK or " DEFAULT_SOCK "\n", a0);
 }
@@ -338,6 +354,35 @@ int main(int argc, char **argv) {
     } else if (strcmp(cmd, "refresh") == 0) {
         if (i >= argc) { usage(argv[0]); return 2; }
         snprintf(line, sizeof line, "REFRESH %d\n", atoi(argv[i]));
+    } else if (strcmp(cmd, "diag") == 0) {
+        snprintf(line, sizeof line, "DIAG\n");
+    } else if (strcmp(cmd, "fwconf") == 0) {
+        snprintf(line, sizeof line, "FWCONF\n");
+    } else if (strcmp(cmd, "hwidreset") == 0) {
+        snprintf(line, sizeof line, "HWIDRESET\n");
+    } else if (strcmp(cmd, "flush") == 0) {
+        if (i >= argc) { usage(argv[0]); return 2; }
+        snprintf(line, sizeof line, "FLUSH %s\n", argv[i]);
+    } else if (strcmp(cmd, "check") == 0) {
+/* the stage lines are the point of running a check from a terminal: over ssh
+   there is no row to watch turn red */
+        if (i + 1 >= argc) { usage(argv[0]); return 2; }
+        snprintf(line, sizeof line, "CHECK %s %d stages\n",
+                 argv[i], atoi(argv[i + 1]));
+    } else if (strcmp(cmd, "rules") == 0) {
+        snprintf(line, sizeof line, "RULES\n");
+    } else if (strcmp(cmd, "rule") == 0) {
+        if (i + 2 >= argc) { usage(argv[0]); return 2; }
+        snprintf(line, sizeof line, "SET rule %s %s %s\n",
+                 argv[i], argv[i + 1], argv[i + 2]);
+    } else if (strcmp(cmd, "delrule") == 0) {
+        if (i >= argc) { usage(argv[0]); return 2; }
+        snprintf(line, sizeof line, "DELRULE %d\n", atoi(argv[i]));
+    } else if (strcmp(cmd, "settings") == 0) {
+        snprintf(line, sizeof line, "SETTINGS\n");
+    } else if (strcmp(cmd, "set") == 0) {
+        if (i + 1 >= argc) { usage(argv[0]); return 2; }
+        snprintf(line, sizeof line, "SET %s %s\n", argv[i], argv[i + 1]);
     } else if (strcmp(cmd, "del") == 0) {
         if (i >= argc) { usage(argv[0]); return 2; }
         snprintf(line, sizeof line, "DELSRV %d\n", atoi(argv[i]));
@@ -367,19 +412,33 @@ int main(int argc, char **argv) {
     int is_tunnel = (strcmp(cmd, "connect") == 0 || strcmp(cmd, "disconnect") == 0);
     int is_ping = (strcmp(cmd, "ping") == 0);
     int is_check = strncmp(line, "CHECK ", 6) == 0;
-/* leave timeout headroom for verification and two ping samples */
-    int timeout_sec = is_tunnel ? 60 : (is_ping ? 8 : (is_check ? 12 : 5));
+    int is_refresh = strncmp(line, "REFRESH ", 8) == 0;
+/* leave timeout headroom for verification, two ping samples, and a refresh's
+   own 15s network fetch budget (daemon_ctl_fetch), which a shorter client
+   timeout would cut off before the daemon ever answers */
+    int timeout_sec = is_tunnel ? 60 : (is_ping ? 8 : (is_check ? 12 :
+                      (is_refresh ? 20 : 5)));
     int (*done)(const char *, size_t) =
         is_tunnel ? tunnel_reply_complete : reply_complete;
+    int timed_out = 0;
     ssize_t n = talk_ex(sock, line, strlen(line), buf, sizeof buf,
-                        timeout_sec, done);
+                        timeout_sec, done, &timed_out);
     if (n < 0) {
         fprintf(stderr, "senkoctl: cannot reach daemon at %s (%s)\n",
                 sock, strerror(errno));
         return 2;
     }
-    fputs(buf, stdout);
-    if (n > 0 && buf[n - 1] != '\n') fputc('\n', stdout);
+    if (n > 0) {
+        fputs(buf, stdout);
+        if (buf[n - 1] != '\n') fputc('\n', stdout);
+    }
+    if (timed_out) {
+/* the daemon may still be working (a refresh keeps running after the client
+   gives up), so this is a client-side timeout, not proof of failure */
+        fprintf(stderr, "senkoctl: timed out after %ds waiting for the daemon's reply\n",
+                timeout_sec);
+        return 2;
+    }
 
     for (size_t p = 0; p < (size_t)n; ) {
         if (strncmp(buf + p, "ERR ", 4) == 0 || strncmp(buf + p, "ERR\n", 4) == 0)

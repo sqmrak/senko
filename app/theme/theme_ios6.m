@@ -8,8 +8,8 @@ static void FillLight(void) {
     SenkoThemeSetSlot(&kFelt,       SenkoThemeC(0.940, 0.930, 0.910));
     SenkoThemeSetSlot(&kConnOn,     SenkoThemeC(1.000, 0.620, 0.220));
     SenkoThemeSetSlot(&kConnOnLo,   SenkoThemeC(0.900, 0.480, 0.140));
-    SenkoThemeSetSlot(&kIdleGrey,   SenkoThemeC(0.780, 0.770, 0.750)); /* off disc readable on white */
-    SenkoThemeSetSlot(&kIdleGreyLo, SenkoThemeC(0.620, 0.600, 0.580));
+    SenkoThemeSetSlot(&kIdleGrey,   SenkoThemeC(0.980, 0.780, 0.580)); /* light orange, not the flat grey disc */
+    SenkoThemeSetSlot(&kIdleGreyLo, SenkoThemeC(0.920, 0.660, 0.420));
     SenkoThemeSetSlot(&kInk,        SenkoThemeC(0.120, 0.100, 0.080));
     SenkoThemeSetSlot(&kInkMuted,   SenkoThemeC(0.450, 0.400, 0.350));
     SenkoThemeSetSlot(&kAccentBlue, SenkoThemeC(0.950, 0.480, 0.120));

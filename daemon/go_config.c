@@ -160,6 +160,71 @@ static int append_outbound(json_out_t *j, const vl_server_t *s,
         return j->failed ? -1 : 0;
     }
 
+    if (s->proto == VL_PROTO_HYSTERIA2) {
+/* the outbound settings only carry the destination: auth and the quic
+   transport itself live in streamSettings.hysteriaSettings below */
+        append_raw(j, "{\"tag\":\"senko-out\",\"protocol\":\"hysteria\",\"settings\":{\"version\":2,\"address\":");
+        append_string(j, endpoint_ip);
+        append_format(j, ",\"port\":%u}", (unsigned)s->port);
+        append_raw(j, ",\"streamSettings\":{\"network\":\"hysteria\",\"security\":\"tls\",\"tlsSettings\":{\"serverName\":");
+        append_string(j, s->sni[0] ? s->sni : s->host);
+        append_raw(j, ",\"fingerprint\":");
+        append_string(j, s->fp[0] ? s->fp : "chrome");
+/* this fork removed allowInsecure outright, so a self-signed node has no way
+   through except a pinned hash */
+        if (s->pin_sha256[0]) {
+            append_raw(j, ",\"pinnedPeerCertSha256\":");
+            append_string(j, s->pin_sha256);
+        }
+        append_raw(j, "},\"hysteriaSettings\":{\"version\":2,\"auth\":");
+        append_string(j, s->pass);
+        append_raw(j, "}");
+        if ((s->obfs[0] && strcmp(s->obfs, "none") != 0) || s->port_hop[0]) {
+            int need_comma = 0;
+            append_raw(j, ",\"finalmask\":{");
+            if (s->obfs[0] && strcmp(s->obfs, "none") != 0) {
+                append_raw(j, "\"udp\":[{\"type\":");
+                append_string(j, s->obfs);
+                append_raw(j, ",\"settings\":{\"password\":");
+                append_string(j, s->obfs_password);
+                append_raw(j, "}}]");
+                need_comma = 1;
+            }
+            if (s->port_hop[0]) {
+                if (need_comma) append_raw(j, ",");
+                append_raw(j, "\"quicParams\":{\"udpHop\":{\"ports\":");
+                append_string(j, s->port_hop);
+                append_raw(j, "}}");
+            }
+            append_raw(j, "}");
+        }
+        append_raw(j, "}}");
+        return j->failed ? -1 : 0;
+    }
+
+    if (s->proto == VL_PROTO_TROJAN) {
+        append_raw(j, "{\"tag\":\"senko-out\",\"protocol\":\"trojan\",\"settings\":{\"servers\":[{\"address\":");
+        append_string(j, endpoint_ip);
+        append_format(j, ",\"port\":%u,\"password\":", (unsigned)s->port);
+        append_string(j, s->pass);
+        append_raw(j, "}]}");
+        if (append_stream(j, s) != 0) return -1;
+        append_raw(j, "}");
+        return j->failed ? -1 : 0;
+    }
+
+    if (s->proto == VL_PROTO_SHADOWSOCKS) {
+        append_raw(j, "{\"tag\":\"senko-out\",\"protocol\":\"shadowsocks\",\"settings\":{\"servers\":[{\"address\":");
+        append_string(j, endpoint_ip);
+        append_format(j, ",\"port\":%u,\"method\":", (unsigned)s->port);
+        append_string(j, s->encryption);
+        append_raw(j, ",\"password\":");
+        append_string(j, s->pass);
+        append_raw(j, "}]}");
+        append_raw(j, "}");
+        return j->failed ? -1 : 0;
+    }
+
     protocol = (s->proto == VL_PROTO_SOCKS5) ? "socks" : "http";
     append_raw(j, "{\"tag\":\"senko-out\",\"protocol\":");
     append_string(j, protocol);
@@ -183,9 +248,49 @@ static int append_outbound(json_out_t *j, const vl_server_t *s,
     return j->failed ? -1 : 0;
 }
 
-int go_config_render(const vl_server_t *server, const char *endpoint_ip,
-                     const char *ifname,
-                     char *out, size_t out_cap) {
+static void append_routing_rule(json_out_t *j, const rule_t *rule, int *first) {
+    if (!*first) append_raw(j, ",");
+    *first = 0;
+    append_raw(j, "{\"type\":\"field\",\"outboundTag\":");
+    if (rule->action == RULE_ACTION_DIRECT) append_string(j, "direct");
+    else if (rule->action == RULE_ACTION_BLOCK) append_string(j, "block");
+    else append_string(j, "senko-out");
+    if (rule->type == RULE_TYPE_IP_CIDR) {
+        append_raw(j, ",\"ip\":[");
+        append_string(j, rule->value);
+    } else {
+        char domain[RULE_VALUE_MAX + 16];
+        int n = snprintf(domain, sizeof domain, "%s%s",
+                         rule->type == RULE_TYPE_DOMAIN_SUFFIX ? "domain:" : "keyword:",
+                         rule->value);
+        if (n < 0 || (size_t)n >= sizeof domain) {
+            j->failed = 1;
+            return;
+        }
+        append_raw(j, ",\"domain\":[");
+        append_string(j, domain);
+    }
+    append_raw(j, "]}");
+}
+
+static void append_routing(json_out_t *j, const ruleset_t *rules) {
+    append_raw(j, ",\"routing\":{\"domainStrategy\":\"IPIfNonMatch\",\"rules\":[");
+    int first = 1;
+    if (rules) {
+        const rule_action_t order[] = {
+            RULE_ACTION_BLOCK, RULE_ACTION_DIRECT, RULE_ACTION_PROXY
+        };
+        for (size_t rank = 0; rank < sizeof order / sizeof order[0]; ++rank)
+            for (size_t i = 0; i < rules->count; ++i)
+                if (rules->entries[i].action == order[rank])
+                    append_routing_rule(j, &rules->entries[i], &first);
+    }
+    append_raw(j, "]}");
+}
+
+int go_config_render_rules(const vl_server_t *server, const char *endpoint_ip,
+                           const char *ifname, const ruleset_t *rules,
+                           char *out, size_t out_cap) {
     json_out_t j;
     char reason[128];
     if (!server || !endpoint_ip || !endpoint_ip[0] ||
@@ -201,6 +306,15 @@ int go_config_render(const vl_server_t *server, const char *endpoint_ip,
     append_string(&j, ifname);
     append_raw(&j, ",\"mtu\":1500},\"sniffing\":{\"enabled\":true,\"destOverride\":[\"http\",\"tls\",\"quic\"],\"routeOnly\":true}}],\"outbounds\":[");
     if (append_outbound(&j, server, endpoint_ip) != 0) return -1;
-    append_raw(&j, "]}");
+    append_raw(&j, ",{\"tag\":\"direct\",\"protocol\":\"freedom\"},"
+                   "{\"tag\":\"block\",\"protocol\":\"blackhole\"}]");
+    append_routing(&j, rules);
+    append_raw(&j, "}");
     return j.failed ? -1 : 0;
+}
+
+int go_config_render(const vl_server_t *server, const char *endpoint_ip,
+                     const char *ifname,
+                     char *out, size_t out_cap) {
+    return go_config_render_rules(server, endpoint_ip, ifname, NULL, out, out_cap);
 }

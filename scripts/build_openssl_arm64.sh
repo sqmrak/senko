@@ -3,11 +3,13 @@
 set -euo pipefail
 
 THEOS="${THEOS:?set THEOS to theos root}"
-PREFIX="${SENKO_OSSL_V64:?set SENKO_OSSL_V64 to the arm64 openssl prefix}"
-BLD="${SENKO_OPENSSL_BLD64:-${PREFIX}/build-arm64}"
+PREFIX="${SENKO_OSSL_PREFIX:-${SENKO_OSSL_V64:?set SENKO_OSSL_V64 to the arm64 openssl prefix}}"
+OSSL_ARCH="${SENKO_OSSL_ARCH:-arm64}"
+OSSL_TRIPLE="${SENKO_OSSL_TRIPLE:-arm64-apple-darwin}"
+BLD="${SENKO_OSSL_BLD:-${SENKO_OPENSSL_BLD64:-${PREFIX}/build-${OSSL_ARCH}}}"
 TC="${SENKO_TC:-${THEOS}/toolchain/linux/iphone/bin}"
 ARM64_CLANG="${SENKO_ARM64_CLANG:-${BLD}/arm64-clang}"
-SDK="${SENKO_SDK_V64:?set SENKO_SDK_V64 to the arm64 sdk}"
+SDK="${SENKO_OSSL_SDK:-${SENKO_SDK_V64:?set SENKO_SDK_V64 to the arm64 sdk}}"
 
 if [[ -f "${PREFIX}/lib/libssl.a" && -f "${PREFIX}/lib/libcrypto.a" ]]; then
   echo "openssl arm64 already at ${PREFIX}"
@@ -21,9 +23,22 @@ if [[ ! -f "${SRC}/Configure" ]]; then
   exit 1
 fi
 
+rm -rf "${BLD}"
+mkdir -p "${BLD}"
+
 cat > "${ARM64_CLANG}" <<EOF
-#!/bin/sh
-exec ${TC}/clang -target arm64-apple-darwin -B ${TC} "\$@"
+#!/usr/bin/env bash
+# ios64-xcrun hardcodes its own "-arch arm64" in Configurations/15-ios.conf;
+# forwarding that alongside ours made clang emit a fat arm64+arm64e object,
+# and ld64 could not pull the arm64e slice back out of the resulting archive
+args=()
+skip=0
+for a in "\$@"; do
+  if [ "\${skip}" = 1 ]; then skip=0; continue; fi
+  if [ "\${a}" = "-arch" ]; then skip=1; continue; fi
+  args+=("\${a}")
+done
+exec ${TC}/clang -target ${OSSL_TRIPLE} -B ${TC} -arch ${OSSL_ARCH} "\${args[@]}"
 EOF
 chmod +x "${ARM64_CLANG}"
 
@@ -35,8 +50,6 @@ export CROSS_TOP
 export CROSS_SDK="iPhoneOS.sdk"
 export PATH="${TC}:${PATH}"
 
-rm -rf "${BLD}"
-mkdir -p "${BLD}"
 cd "${BLD}"
 
 "${SRC}/Configure" ios64-cross \
@@ -63,8 +76,9 @@ fi
 mkdir -p "${PREFIX}/lib" "${PREFIX}/include"
 cp -a "${BLD}/libssl.a" "${BLD}/libcrypto.a" "${PREFIX}/lib/"
 cp -a "${BLD}/include/openssl" "${PREFIX}/include/" 2>/dev/null || true
-rsync -a --ignore-existing "${SRC}/include/openssl/" "${PREFIX}/include/openssl/" 2>/dev/null || true
+mkdir -p "${PREFIX}/include/openssl"
+cp -rn "${SRC}/include/openssl/." "${PREFIX}/include/openssl/" 2>/dev/null || true
 cp -a "${BLD}/include/openssl/configuration.h" "${PREFIX}/include/openssl/" 2>/dev/null || true
 
-echo "openssl arm64 installed: ${PREFIX}"
+echo "openssl ${OSSL_ARCH} installed: ${PREFIX}"
 ls -lh "${PREFIX}/lib/libssl.a" "${PREFIX}/lib/libcrypto.a"

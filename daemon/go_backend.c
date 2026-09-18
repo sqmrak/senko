@@ -3,11 +3,14 @@
 #include "go_backend.h"
 #include "go_config.h"
 #include "awg_utun.h"
+#include "awg_pfroute.h"
 #include "legacy_ios.h"
 #include "../common/senko_paths.h"
+#include "core/net_safe.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <arpa/inet.h>
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
@@ -18,10 +21,17 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#ifdef __APPLE__
+#include <sys/socket.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#endif
+
 extern char **environ;
 
 #define GO_CORE SENKO_USR_LIB "/senko-core"
 #define GO_CORE_CONFIG "/var/run/senko-core.json"
+#define GO_CONFIG_MAX (2 * 1024 * 1024)
 
 static void set_reason(char *reason, size_t cap, const char *value) {
     if (reason && cap) snprintf(reason, cap, "%s", value ? value : "go backend failed");
@@ -80,10 +90,11 @@ static int spawn_core(go_backend_t *backend) {
 }
 
 int go_backend_start(go_backend_t *backend, const vl_server_t *server,
-                     const char *endpoint_ip, char *reason, size_t reason_cap) {
+                     const char *endpoint_ip, const ruleset_t *rules,
+                     char *reason, size_t reason_cap) {
     char ifname[32];
     char gateway[64];
-    char config[8192];
+    char *config = NULL;
     awg_config_t route_config;
     if (!backend || !server || !endpoint_ip) return -1;
     go_backend_stop(backend);
@@ -112,9 +123,15 @@ int go_backend_start(go_backend_t *backend, const vl_server_t *server,
     snprintf(route_config.addresses[1], sizeof route_config.addresses[1], "fd00::1/128");
     route_config.address_count = 2;
     route_config.mtu = 1500;
+    config = (char *)malloc(GO_CONFIG_MAX);
+    if (!config) {
+        set_reason(reason, reason_cap, "the routing configuration is too large for memory");
+        goto fail;
+    }
     if (awg_route_plan_build(&route_config, ifname, endpoint_ip, gateway,
                              &backend->route) != 0 ||
-        go_config_render(server, endpoint_ip, ifname, config, sizeof config) != 0) {
+        go_config_render_rules(server, endpoint_ip, ifname, rules,
+                               config, GO_CONFIG_MAX) != 0) {
         set_reason(reason, reason_cap, "selected profile could not be converted for the TUN core");
         goto fail;
     }
@@ -122,6 +139,8 @@ int go_backend_start(go_backend_t *backend, const vl_server_t *server,
         set_reason(reason, reason_cap, "secure runtime configuration could not be written");
         goto fail;
     }
+    free(config);
+    config = NULL;
     if (spawn_core(backend) != 0) {
         set_reason(reason, reason_cap, "the go core could not be started");
         goto fail;
@@ -136,6 +155,7 @@ int go_backend_start(go_backend_t *backend, const vl_server_t *server,
     return 0;
 
 fail:
+    free(config);
     go_backend_stop(backend);
     return -1;
 }
@@ -144,6 +164,8 @@ void go_backend_stop(go_backend_t *backend) {
     if (!backend) return;
     if (backend->active) awg_route_plan_down(&backend->route);
     backend->active = 0;
+    memset(&backend->upload, 0, sizeof backend->upload);
+    memset(&backend->download, 0, sizeof backend->download);
     if (backend->child > 0) {
         int status;
         (void)kill(backend->child, SIGTERM);
@@ -168,6 +190,26 @@ void go_backend_stop(go_backend_t *backend) {
     unlink(GO_CORE_CONFIG);
 }
 
+int go_backend_bypass_add_ipv4(go_backend_t *backend, const char *ip) {
+    char literal[INET_ADDRSTRLEN];
+    if (!backend || !backend->active || !backend->route.gateway[0] ||
+        !net_ipv4_literal(ip, literal, sizeof literal))
+        return -1;
+    /* the endpoint route is installed for the life of the tunnel, so a probe
+       to that same address must not remove it on cleanup */
+    if (strcmp(literal, backend->route.endpoint) == 0) return 0;
+    return awg_pfroute_host4(1, literal, backend->route.gateway);
+}
+
+void go_backend_bypass_remove_ipv4(go_backend_t *backend, const char *ip) {
+    char literal[INET_ADDRSTRLEN];
+    if (!backend || !backend->route.gateway[0] ||
+        !net_ipv4_literal(ip, literal, sizeof literal))
+        return;
+    if (strcmp(literal, backend->route.endpoint) == 0) return;
+    (void)awg_pfroute_host4(0, literal, backend->route.gateway);
+}
+
 int go_backend_running(go_backend_t *backend) {
     int status;
     pid_t waited;
@@ -177,4 +219,34 @@ int go_backend_running(go_backend_t *backend) {
     if (waited == 0) return 1;
     backend->child = 0;
     return 0;
+}
+
+int go_backend_stats(go_backend_t *backend, uint64_t *up, uint64_t *down) {
+    if (up) *up = 0;
+    if (down) *down = 0;
+    if (!backend || !up || !down) return -1;
+    if (!backend->active) return 0;
+#ifdef __APPLE__
+    struct ifaddrs *addresses = NULL;
+    int found = 0;
+    if (getifaddrs(&addresses) != 0) return -1;
+    for (struct ifaddrs *a = addresses; a; a = a->ifa_next) {
+        if (!a->ifa_addr || !a->ifa_data || !a->ifa_name ||
+            a->ifa_addr->sa_family != AF_LINK ||
+            strcmp(a->ifa_name, backend->route.ifname) != 0) continue;
+        const struct if_data *data = (const struct if_data *)a->ifa_data;
+        /* utun output leaves the device stack; input returns from the core */
+        traffic_counter_update(&backend->upload, data->ifi_obytes);
+        traffic_counter_update(&backend->download, data->ifi_ibytes);
+        found = 1;
+        break;
+    }
+    freeifaddrs(addresses);
+    if (!found) return -1;
+    *up = backend->upload.bytes;
+    *down = backend->download.bytes;
+    return 0;
+#else
+    return -1;
+#endif
 }

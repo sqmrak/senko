@@ -56,7 +56,8 @@ int senko_ios_major_from_darwin(const char *release) {
     return darwin >= 15 ? darwin - 6 : 0;
 }
 
-int senko_ios_major(void) {
+static int ios_major_detect(const char **source) {
+    if (source) *source = "unknown";
     FILE *f = fopen("/System/Library/CoreServices/SystemVersion.plist", "r");
     if (f) {
         /* the file is well under 1 KiB; one read keeps tag matching immune to
@@ -66,7 +67,10 @@ int senko_ios_major(void) {
         fclose(f);
         buf[n] = '\0';
         int major = senko_ios_major_from_plist(buf);
-        if (major > 0) return major;
+        if (major > 0) {
+            if (source) *source = "SystemVersion.plist";
+            return major;
+        }
     }
 
 #if defined(__APPLE__)
@@ -75,12 +79,21 @@ int senko_ios_major(void) {
        answering 0 here left the ios 12 branches that disable the legacy tls
        shim switched off on exactly the systems they exist for */
     struct utsname uts;
-    if (uname(&uts) == 0)
-        return senko_ios_major_from_darwin(uts.release);
+    if (uname(&uts) == 0) {
+        int major = senko_ios_major_from_darwin(uts.release);
+        if (major > 0 && source) *source = "darwin kernel";
+        return major;
+    }
 #endif
     return 0;
 }
 
-int senko_is_ios5(void) {
-    return senko_ios_major() == 5;
+int senko_ios_major(void) {
+    return ios_major_detect(NULL);
+}
+
+const char *senko_ios_major_source(void) {
+    const char *source = "unknown";
+    (void)ios_major_detect(&source);
+    return source;
 }

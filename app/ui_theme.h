@@ -1,7 +1,7 @@
 #ifndef SENKO_UI_THEME_H
 #define SENKO_UI_THEME_H
 
-#import <UIKit/UIKit.h>
+#import "ios_compat.h"
 #import <QuartzCore/QuartzCore.h>
 
 /* filled by initpalette / applycurrentpalette */
@@ -73,6 +73,11 @@ void SenkoInstallFrost(UIView *host);
 /* solid frost fill; scroll-safe on armv7 */
 void SenkoInstallFrostLite(UIView *host);
 void SenkoRemoveFrost(UIView *host);
+/* where anything drawn over a frosted host must live: a UIVisualEffectView
+   throws NSInternalInconsistencyException if a subview is added to it
+   directly instead of to its contentView. safe to call on a plain (non
+   effect) view too, since it just returns the view itself */
+UIView *SenkoEffectContentView(UIView *effectView);
 /* wallpaper gradient (theme only; ios16 is 3-stop diagonal) */
 void SenkoApplyBackgroundGradient(CAGradientLayer *g);
 /* state ignored - wallpaper stays pure theme; glow is around connect */
@@ -152,8 +157,43 @@ UIImage *SenkoIconPencil(CGFloat side, UIColor *tint);
 UIImage *SenkoIconTrash(CGFloat side, UIColor *tint);
 UIImage *SenkoIconClose(CGFloat side, UIColor *tint);
 void StyleNavBarClassic(UINavigationController *nav);
+/* the status card sets the column every list plate lines up with: the rows, the
+   section headers and the empty panel all sit inside the table, and the table
+   already carries the card's own x and width. anything inset further than this
+   reads as a second, narrower column beside the card */
+#define SENKO_LIST_PLATE_INSET 0.0f
+
+/* the rounded plate a grouped row sits on. settings and the developer screens
+   draw the same one, and both need the engraved rule between rows, so the view
+   lives here instead of being copied into each */
+@interface SenkoGroupCellBackground : UIView {
+    UIRectCorner _roundedCorners;
+    BOOL         _showsSeparator;
+    CALayer     *_grooveDark;
+    CALayer     *_grooveLight;
+}
+@property (nonatomic, assign) UIRectCorner roundedCorners;
+@property (nonatomic, assign) BOOL showsSeparator;
+@end
+
+/* apply the plate to one cell: rounds the ends of the group and rules every row
+   but the last. rows comes from the data source, because asking the table for it
+   while it is building a cell re-enters a table that has not finished loading */
+void SenkoStyleGroupCell(UITableViewCell *cell, NSIndexPath *ip, NSInteger rows);
+
+/* give a filled control its light from above: the body darkens downward, a
+   sheen sits over the top half, a hairline rim separates it from the wallpaper
+   and a short shadow lifts it off. the caller owns the fill layer and passes it
+   in. flat themes are left alone, because the absence of this is their point */
+void SenkoApplyRelief(UIButton *button, CAGradientLayer *fill,
+                      UIColor *top, UIColor *bottom, CGFloat radius);
+
 /* capsule button; skips rebuild if size/colors match */
 void StyleGlossyCapsule(UIButton *button, UIColor *top, UIColor *bottom);
+/* the classic home screen paints the connect control as a dome instead of the
+   status card, so both the gradient body and the per-theme variants come back */
+CAGradientLayer *ApplyGlossyDome(UIButton *button, UIColor *top, UIColor *bottom);
+void StyleDomeColors(UIButton *button, UIColor *top, UIColor *bottom);
 /* resize capsule layers without color rebuild */
 void StyleGlossyCapsuleLayout(UIButton *button);
 CGFloat GetTopOffset(void);

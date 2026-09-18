@@ -14,6 +14,7 @@
     UIView      *core;  /* plain dot for every state but connected */
     UIImageView *glyph; /* shield once the tunnel carries traffic */
     UILabel     *state;
+    UILabel     *traffic;
 }
 @end
 
@@ -21,9 +22,8 @@
 enum {
     SenkoHomeTagTitle    = 8001,
     SenkoHomeTagGear     = 8002,
-    SenkoHomeTagRefresh  = 8003,
-    SenkoHomeTagPlus     = 8004,
-    SenkoHomeTagConnect  = 8005,
+    SenkoHomeTagPlus     = 8003,
+    SenkoHomeTagConnect  = 8004,
     SenkoHomeTagCard     = 8010,
     SenkoHomeTagWell     = 9001
 };
@@ -33,7 +33,6 @@ enum {
 typedef struct {
     UILabel         *title;
     UIButton        *gear;
-    UIButton        *refresh;
     UIButton        *plus;
     SenkoHomeCard   *card;
     UIButton        *connect;
@@ -45,6 +44,9 @@ typedef struct {
 } SenkoHomeChrome;
 
 SenkoHomeCard *SenkoHomeBuildStatusCard(UIView *root);
+NSString *SenkoFormatBytes(unsigned long long value);
+void SenkoHomeApplyTraffic(const SenkoHomeChrome *ui, BOOL known,
+                           uint64_t up, uint64_t down);
 
 /* repaint the card, the header buttons, and both pills for the current theme */
 void SenkoHomeStyleChrome(const SenkoHomeChrome *ui);
@@ -58,6 +60,12 @@ void SenkoHomeApplyStatus(const SenkoHomeChrome *ui, NSString *state,
    frame and a top inset, so a scroll frame costs no table relayout */
 void SenkoHomeLayout(UIView *root, const SenkoHomeChrome *ui,
                      CGFloat headerProgress);
+
+/* the same screen with the pre-rebuild hero: a dome connect button above the
+   check and status pills, no status card. the header and the list are placed
+   exactly as above, so everything the rebuild added still works underneath */
+void SenkoHomeLayoutClassic(UIView *root, const SenkoHomeChrome *ui,
+                            CGFloat headerProgress);
 
 /* centre of the orb in root coordinates, for the status glow behind it */
 CGPoint SenkoHomeOrbCenter(const SenkoHomeChrome *ui);

@@ -6,7 +6,9 @@
 #import <QuartzCore/QuartzCore.h>
 #import <objc/message.h>
 #include <dlfcn.h>
-#import "quirc.h"
+#include <stdlib.h>
+#include <string.h>
+#include <zbar.h>
 
 @interface QRScanVC () <AVCaptureVideoDataOutputSampleBufferDelegate>
 /* AVCaptureMetadataOutputObjectsDelegate does not exist in the ios 5 sdk this
@@ -50,7 +52,9 @@ static NSString *SenkoQRMetadataType(void) {
     }
     if (_session) [(AVCaptureSession *)_session stopRunning];
     if (_queue) dispatch_sync(_queue, ^{});
-    if (_qr) quirc_destroy(_qr);
+    if (_zbarImage) zbar_image_destroy(_zbarImage);
+    if (_zbarScanner) zbar_image_scanner_destroy(_zbarScanner);
+    free(_zbarPixels);
     [_hintLabel release];
     [_aimView release];
     [_captureOutput release];
@@ -165,8 +169,11 @@ static void SenkoFocusForScanning(AVCaptureDevice *cam) {
 }
 
 - (BOOL)addFrameOutput:(AVCaptureSession *)sess {
-    _qr = quirc_new();
-    if (!_qr) return NO;
+    _zbarScanner = zbar_image_scanner_create();
+    _zbarImage = zbar_image_create();
+    if (!_zbarScanner || !_zbarImage) return NO;
+    zbar_image_scanner_set_config(_zbarScanner, ZBAR_QRCODE, ZBAR_CFG_ENABLE, 1);
+    zbar_image_scanner_enable_cache(_zbarScanner, 0);
     AVCaptureVideoDataOutput *out = [[AVCaptureVideoDataOutput alloc] init];
     out.alwaysDiscardsLateVideoFrames = YES;
     if (![sess canAddOutput:out]) {
@@ -262,7 +269,11 @@ static void SenkoFocusForScanning(AVCaptureDevice *cam) {
 
     /* the outputs are attached after the session is configured, because what a
        detector reports it can read depends on the input and the preset */
-    if (![self addMetadataOutput:sess] && ![self addFrameOutput:sess]) {
+    BOOL hasMetadata = [self addMetadataOutput:sess];
+    /* qr metadata starts with ios 7. zbar remains attached because ios 5 and 6
+       deliver camera frames but have no system QR detector. */
+    BOOL hasFrames = [self addFrameOutput:sess];
+    if (!hasMetadata && !hasFrames) {
         [sess release];
         [self showNoCamera];
         return;
@@ -350,48 +361,52 @@ static void SenkoFocusForScanning(AVCaptureDevice *cam) {
     [self showCameraProblem:@"No camera available"];
 }
 
-- (void)feedQuircFromBuffer:(CVImageBufferRef)img width:(size_t)w height:(size_t)h {
-    if (_qrw != (int)w || _qrh != (int)h) {
-        if (quirc_resize(_qr, (int)w, (int)h) >= 0) { _qrw = (int)w; _qrh = (int)h; }
+- (BOOL)copyZBarPixelsFromBuffer:(CVImageBufferRef)img width:(size_t)w height:(size_t)h {
+    if (!w || !h || w > SIZE_MAX / h) return NO;
+    size_t count = w * h;
+    if (count > _zbarCapacity) {
+        zbar_image_set_data(_zbarImage, NULL, 0, NULL);
+        uint8_t *pixels = (uint8_t *)realloc(_zbarPixels, count);
+        if (!pixels) return NO;
+        _zbarPixels = pixels;
+        _zbarCapacity = count;
     }
-    if (_qrw != (int)w || _qrh != (int)h) return;
-
-    int qw = 0, qh = 0;
-    uint8_t *dst = quirc_begin(_qr, &qw, &qh);
+    uint8_t *dst = _zbarPixels;
     OSType fmt = CVPixelBufferGetPixelFormatType(img);
 
     if (fmt == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
         fmt == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) {
         uint8_t *base = (uint8_t *)CVPixelBufferGetBaseAddressOfPlane(img, 0);
         size_t stride = CVPixelBufferGetBytesPerRowOfPlane(img, 0);
-        if (base) {
-            for (size_t y = 0; y < h; ++y)
-                memcpy(dst + y * w, base + y * stride, w);
-        }
+        if (!base) return NO;
+        for (size_t y = 0; y < h; ++y)
+            memcpy(dst + y * w, base + y * stride, w);
     } else {
         uint8_t *base = (uint8_t *)CVPixelBufferGetBaseAddress(img);
         size_t stride = CVPixelBufferGetBytesPerRow(img);
-        if (base) {
-            for (size_t y = 0; y < h; ++y) {
-                uint8_t *row = base + y * stride;
-                uint8_t *drow = dst + y * w;
-                for (size_t x = 0; x < w; ++x) {
-                    uint8_t b = row[x * 4 + 0];
-                    uint8_t g = row[x * 4 + 1];
-                    uint8_t r = row[x * 4 + 2];
-                    drow[x] = (uint8_t)((r * 77 + g * 150 + b * 29) >> 8);
-                }
+        if (!base) return NO;
+        for (size_t y = 0; y < h; ++y) {
+            uint8_t *row = base + y * stride;
+            uint8_t *drow = dst + y * w;
+            for (size_t x = 0; x < w; ++x) {
+                uint8_t b = row[x * 4 + 0];
+                uint8_t g = row[x * 4 + 1];
+                uint8_t r = row[x * 4 + 2];
+                drow[x] = (uint8_t)((r * 77 + g * 150 + b * 29) >> 8);
             }
         }
     }
-    quirc_end(_qr);
+    zbar_image_set_format(_zbarImage, zbar_fourcc('Y', '8', '0', '0'));
+    zbar_image_set_size(_zbarImage, (unsigned)w, (unsigned)h);
+    zbar_image_set_data(_zbarImage, _zbarPixels, (unsigned long)count, NULL);
+    return YES;
 }
 
 - (void)captureOutput:(AVCaptureOutput *)out
 didOutputSampleBuffer:(CMSampleBufferRef)sb
        fromConnection:(AVCaptureConnection *)conn {
     (void)out; (void)conn;
-    if (_done || !_qr) return;
+    if (_done || !_zbarScanner || !_zbarImage) return;
 
     CVImageBufferRef img = CMSampleBufferGetImageBuffer(sb);
     if (!img) return;
@@ -410,21 +425,20 @@ didOutputSampleBuffer:(CMSampleBufferRef)sb
         h = CVPixelBufferGetHeightOfPlane(img, 0);
     }
 
-    if (w > 0 && h > 0)
-        [self feedQuircFromBuffer:img width:w height:h];
-
-    int n = quirc_count(_qr);
-    for (int i = 0; i < n; ++i) {
-        struct quirc_code code;
-        struct quirc_data data;
-        quirc_extract(_qr, i, &code);
-        if (quirc_decode(&code, &data) == QUIRC_SUCCESS) {
-            NSString *txt = [[[NSString alloc] initWithBytes:data.payload
-                                                      length:(NSUInteger)data.payload_len
+    if (w > 0 && h > 0 && [self copyZBarPixelsFromBuffer:img width:w height:h]) {
+        zbar_scan_image(_zbarScanner, _zbarImage);
+        for (const zbar_symbol_t *symbol = zbar_image_first_symbol(_zbarImage);
+             symbol;
+             symbol = zbar_symbol_next(symbol)) {
+            if (zbar_symbol_get_type(symbol) != ZBAR_QRCODE) continue;
+            const char *data = zbar_symbol_get_data(symbol);
+            unsigned int length = zbar_symbol_get_data_length(symbol);
+            NSString *txt = [[[NSString alloc] initWithBytes:data
+                                                      length:(NSUInteger)length
                                                     encoding:NSUTF8StringEncoding] autorelease];
             if ([txt length] == 0)
-                txt = [[[NSString alloc] initWithBytes:data.payload
-                                                length:(NSUInteger)data.payload_len
+                txt = [[[NSString alloc] initWithBytes:data
+                                                length:(NSUInteger)length
                                               encoding:NSISOLatin1StringEncoding] autorelease];
             if ([txt length]) { [self hit:txt]; break; }
         }

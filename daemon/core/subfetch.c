@@ -149,6 +149,9 @@ static void parser_info(const http_parser_t *hp, subfetch_info_t *info) {
         info->download = userinfo_value(hp->subscription_userinfo, "download");
         info->total = userinfo_value(hp->subscription_userinfo, "total");
     }
+    if (hp->have_subscription_title)
+        copy_metadata_text(hp->subscription_title,
+                           info->title, sizeof info->title);
     if (hp->have_subscription_description)
         copy_metadata_text(hp->subscription_description,
                            info->description, sizeof info->description);

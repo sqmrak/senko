@@ -17,13 +17,23 @@ typedef enum {
     CTL_ACT_START, /* ask the daemon to start the selected tunnel */
     CTL_ACT_STOP, /* ask the daemon to stop the active tunnel */
     CTL_ACT_PING, /* ask the daemon to measure the selected server */
-    CTL_ACT_REFRESH /* ask the daemon to refresh a subscription */
+    CTL_ACT_REFRESH, /* ask the daemon to refresh a subscription */
+    CTL_ACT_SET /* ask the daemon to change one of its settings */
 } ctl_action_kind_t;
+
+/* long enough for every key and value the daemon settings accept; the engine
+   rejects anything longer instead of truncating it into another setting */
+#define CTL_ACT_KEY_MAX   32
+#define CTL_ACT_VALUE_MAX 64
 
 typedef struct {
     ctl_action_kind_t kind;
     int               server_index; /* target retained for async work */
     vl_server_t       server; /* copy retained after store lookup */
+    /* CTL_ACT_SET only. the daemon owns the settings copy, so the engine
+       forwards the pair instead of keeping one of its own */
+    char              key[CTL_ACT_KEY_MAX];
+    char              value[CTL_ACT_VALUE_MAX];
 } ctl_action_t;
 
 typedef struct {

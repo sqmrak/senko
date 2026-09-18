@@ -94,6 +94,56 @@ int cfg_validate_server(const vl_server_t *s, char *reason, size_t reason_cap) {
         s->proto == VL_PROTO_HTTPS)
         return 1;
 
+    if (s->proto == VL_PROTO_TROJAN) {
+        if (!s->pass[0]) {
+            cfg_reason(reason, reason_cap, "trojan requires password");
+            return 0;
+        }
+        if (s->security != VL_SEC_TLS) {
+            cfg_reason(reason, reason_cap, "trojan requires tls");
+            return 0;
+        }
+        if (s->net != VL_NET_TCP && s->net != VL_NET_WS) {
+            cfg_reason(reason, reason_cap, "unsupported trojan transport");
+            return 0;
+        }
+        return 1;
+    }
+
+    if (s->proto == VL_PROTO_SHADOWSOCKS) {
+        if (!s->pass[0]) {
+            cfg_reason(reason, reason_cap, "shadowsocks requires password");
+            return 0;
+        }
+        if (strcmp(s->encryption, "aes-256-gcm") &&
+            strcmp(s->encryption, "aes-128-gcm") &&
+            strcmp(s->encryption, "chacha20-ietf-poly1305")) {
+            cfg_reason(reason, reason_cap, "unsupported shadowsocks cipher");
+            return 0;
+        }
+        return 1;
+    }
+
+    if (s->proto == VL_PROTO_HYSTERIA2) {
+        if (!s->pass[0]) {
+            cfg_reason(reason, reason_cap, "hysteria2 requires an auth password");
+            return 0;
+        }
+        if (s->obfs[0] && strcmp(s->obfs, "none") != 0) {
+/* the go core's finalmask udp mask only builds a salamander conn */
+            if (strcmp(s->obfs, "salamander") != 0) {
+                cfg_reason(reason, reason_cap, "unsupported hysteria2 obfuscation type");
+                return 0;
+            }
+            if (!s->obfs_password[0]) {
+                cfg_reason(reason, reason_cap,
+                          "hysteria2 salamander obfuscation requires obfs-password");
+                return 0;
+            }
+        }
+        return 1;
+    }
+
     if (s->proto != VL_PROTO_VLESS) {
         cfg_reason(reason, reason_cap, "unsupported protocol");
         return 0;
@@ -255,6 +305,53 @@ int url_percent_decode(const char *src, size_t src_len, char *dst, size_t cap) {
     return url_percent_decode_ex(src, src_len, dst, cap, 0);
 }
 
+int cfg_parse_port_hop(const char *text, size_t len, char *dst, size_t dst_cap,
+                       uint16_t *first_port_out) {
+    const char *end;
+    const char *tok;
+    unsigned long first = 0;
+    int have_first = 0;
+
+    if (!text || len == 0 || (dst && len + 1 > dst_cap)) return -1;
+    end = text + len;
+    tok = text;
+
+    for (const char *c = text; c <= end; ++c) {
+        if (c != end && *c != ',') continue;
+        {
+            const char *dash = memchr(tok, '-', (size_t)(c - tok));
+            const char *from_end = dash ? dash : c;
+            unsigned long from = 0, to;
+            if (from_end == tok) return -1;
+            for (const char *d = tok; d < from_end; ++d) {
+                if (*d < '0' || *d > '9') return -1;
+                from = from * 10 + (unsigned long)(*d - '0');
+                if (from > 65535) return -1;
+            }
+            if (dash) {
+                if (dash + 1 >= c) return -1;
+                to = 0;
+                for (const char *d = dash + 1; d < c; ++d) {
+                    if (*d < '0' || *d > '9') return -1;
+                    to = to * 10 + (unsigned long)(*d - '0');
+                    if (to > 65535) return -1;
+                }
+                if (to < from) return -1;
+            }
+            if (from == 0) return -1;
+            if (!have_first) { first = from; have_first = 1; }
+        }
+        tok = c + 1;
+    }
+    if (!have_first) return -1;
+    if (dst) {
+        memcpy(dst, text, len);
+        dst[len] = '\0';
+    }
+    if (first_port_out) *first_port_out = (uint16_t)first;
+    return 0;
+}
+
 /* panel templates prepend a long shared banner to every node name, so clipping
    a name at a byte boundary can leave every server in a feed reading the same.
    decode into a wide scratch first, then step back to a codepoint boundary so a
@@ -330,6 +427,16 @@ static void assign_kv(vl_server_t *s,
         url_percent_decode(v, vlen, s->path, sizeof s->path);
     } else if (KEY_IS("mode")) {
         copy_query_value(v, vlen, s->mode, sizeof s->mode);
+    } else if (KEY_IS("allowInsecure") || KEY_IS("insecure")) {
+        char tmp[8];
+        if (copy_span(v, v + vlen, tmp, sizeof tmp) == 0)
+            s->insecure = (strcmp(tmp, "1") == 0 || strcmp(tmp, "true") == 0);
+    } else if (KEY_IS("pinSHA256") || KEY_IS("pinsha256")) {
+        copy_query_value(v, vlen, s->pin_sha256, sizeof s->pin_sha256);
+    } else if (KEY_IS("obfs")) {
+        copy_query_value(v, vlen, s->obfs, sizeof s->obfs);
+    } else if (KEY_IS("obfs-password") || KEY_IS("obfs_password")) {
+        copy_query_value(v, vlen, s->obfs_password, sizeof s->obfs_password);
     }
 
     #undef KEY_IS
@@ -373,9 +480,17 @@ static void normalize_grpc_path(vl_server_t *s) {
     snprintf(s->mode, sizeof s->mode, "grpc");
 }
 
-cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out) {
+/* happ:// unwrapping and the ss:// legacy-base64 form both re-enter this
+   function with content they themselves decoded. Both are driven by bytes an
+   untrusted subscription panel supplied, so a crafted chain that keeps
+   re-decoding into another instance of itself needs a hard stop rather than
+   riding the C stack down. */
+#define CFG_PARSE_LINK_MAX_DEPTH 8
+
+static cfg_status_t cfg_parse_link_inner(const char *uri, vl_server_t *out, int depth) {
     if (!uri || !out) return CFG_ERR_BAD_ARG;
     memset(out, 0, sizeof *out);
+    if (depth > CFG_PARSE_LINK_MAX_DEPTH) return CFG_ERR_SCHEME;
 
 /* happ://crypt... unwraps to vless/socks/http before scheme match */
     if (strncmp(uri, "happ://", 7) == 0 || strncmp(uri, "HAPP://", 7) == 0) {
@@ -384,7 +499,7 @@ cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out) {
         const char *p, *end, *nl;
         if (happ_unwrap(uri, plain, sizeof plain) != 0)
             return CFG_ERR_SCHEME;
-        if (cfg_parse_link(plain, out) == CFG_OK)
+        if (cfg_parse_link_inner(plain, out, depth + 1) == CFG_OK)
             return CFG_OK;
         p = plain;
         end = plain + strlen(plain);
@@ -397,7 +512,7 @@ cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out) {
             if (llen > 0 && llen < sizeof line) {
                 memcpy(line, p, llen);
                 line[llen] = '\0';
-                if (cfg_parse_link(line, out) == CFG_OK)
+                if (cfg_parse_link_inner(line, out, depth + 1) == CFG_OK)
                     return CFG_OK;
             }
             if (!nl) break;
@@ -422,6 +537,18 @@ cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out) {
     } else if (strncmp(p, "https://", 8) == 0) {
         proto = VL_PROTO_HTTPS;
         slen = 8;
+    } else if (strncmp(p, "trojan://", 9) == 0) {
+        proto = VL_PROTO_TROJAN;
+        slen = 9;
+    } else if (strncmp(p, "ss://", 5) == 0) {
+        proto = VL_PROTO_SHADOWSOCKS;
+        slen = 5;
+    } else if (strncmp(p, "hysteria2://", 12) == 0) {
+        proto = VL_PROTO_HYSTERIA2;
+        slen = 12;
+    } else if (strncmp(p, "hy2://", 6) == 0) {
+        proto = VL_PROTO_HYSTERIA2;
+        slen = 6;
     } else {
         return CFG_ERR_SCHEME;
     }
@@ -431,10 +558,59 @@ cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out) {
     const char *frag = strchr(p, '#');
     const char *body_end = frag ? frag : (p + strlen(p));
 
+    if (proto == VL_PROTO_SHADOWSOCKS) {
+        const char *at_check = memchr(p, '@', (size_t)(body_end - p));
+        if (!at_check) {
+            unsigned char dec[1024];
+            size_t dec_len = 0;
+            if (b64_decode(p, (size_t)(body_end - p), dec, sizeof dec - 1, &dec_len) == 0 && dec_len > 0) {
+                dec[dec_len] = '\0';
+                char reconstituted[1280];
+                int n = frag
+                    ? snprintf(reconstituted, sizeof reconstituted, "ss://%s%s", (char *)dec, frag)
+                    : snprintf(reconstituted, sizeof reconstituted, "ss://%s", (char *)dec);
+                if (n < 0 || (size_t)n >= sizeof reconstituted) return CFG_ERR_TOO_LONG;
+                return cfg_parse_link_inner(reconstituted, out, depth + 1);
+            }
+        }
+    }
+
     const char *at = memchr(p, '@', (size_t)(body_end - p));
     if (at) {
         if (proto == VL_PROTO_VLESS) {
             if (copy_span(p, at, out->uuid, sizeof out->uuid) != 0) return CFG_ERR_TOO_LONG;
+        } else if (proto == VL_PROTO_TROJAN || proto == VL_PROTO_HYSTERIA2) {
+/* the whole userinfo is one opaque auth token, not a user:pass pair: a
+   hysteria2 password commonly contains a colon of its own */
+            char encoded_pass[sizeof out->pass];
+            if (copy_span(p, at, encoded_pass, sizeof encoded_pass) != 0 ||
+                url_percent_decode(encoded_pass, strlen(encoded_pass), out->pass, sizeof out->pass) < 0)
+                return CFG_ERR_TOO_LONG;
+        } else if (proto == VL_PROTO_SHADOWSOCKS) {
+            const char *colon = memchr(p, ':', (size_t)(at - p));
+            if (!colon) {
+                unsigned char udec[256];
+                size_t udlen = 0;
+                if (b64_decode(p, (size_t)(at - p), udec, sizeof udec - 1, &udlen) == 0 && udlen > 0) {
+                    udec[udlen] = '\0';
+                    char *uc = strchr((char *)udec, ':');
+                    if (uc) {
+                        *uc = '\0';
+                        snprintf(out->user, sizeof out->user, "%s", (char *)udec);
+                        snprintf(out->encryption, sizeof out->encryption, "%s", (char *)udec);
+                        snprintf(out->pass, sizeof out->pass, "%s", uc + 1);
+                    }
+                }
+            } else {
+                char enc_u[sizeof out->user];
+                char enc_p[sizeof out->pass];
+                if (copy_span(p, colon, enc_u, sizeof enc_u) != 0 ||
+                    copy_span(colon + 1, at, enc_p, sizeof enc_p) != 0)
+                    return CFG_ERR_TOO_LONG;
+                url_percent_decode(enc_u, strlen(enc_u), out->user, sizeof out->user);
+                snprintf(out->encryption, sizeof out->encryption, "%s", out->user);
+                url_percent_decode(enc_p, strlen(enc_p), out->pass, sizeof out->pass);
+            }
         } else {
             const char *colon = memchr(p, ':', (size_t)(at - p));
             char encoded_user[sizeof out->user];
@@ -457,7 +633,9 @@ cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out) {
         }
         p = at + 1;
     } else {
-        if (proto == VL_PROTO_VLESS) return CFG_ERR_NO_AT;
+        if (proto == VL_PROTO_VLESS || proto == VL_PROTO_TROJAN ||
+            proto == VL_PROTO_SHADOWSOCKS || proto == VL_PROTO_HYSTERIA2)
+            return CFG_ERR_NO_AT;
     }
 
     const char *hostport = p;
@@ -489,13 +667,24 @@ cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out) {
     unsigned long port = 0;
     const char *pp = colon + 1;
     if (pp >= hp_end) return CFG_ERR_BAD_PORT;
-    for (; pp < hp_end; ++pp) {
-        if (*pp < '0' || *pp > '9') return CFG_ERR_BAD_PORT;
-        port = port * 10 + (unsigned long)(*pp - '0');
-        if (port > 65535) return CFG_ERR_BAD_PORT;
+/* hysteria2 alone carries a "multi-port" hop list in place of one port
+   (host:123,5000-6000): the go core dials a random port from it and hops */
+    if (proto == VL_PROTO_HYSTERIA2 &&
+        (memchr(pp, ',', (size_t)(hp_end - pp)) || memchr(pp, '-', (size_t)(hp_end - pp)))) {
+        uint16_t first_port = 0;
+        if (cfg_parse_port_hop(pp, (size_t)(hp_end - pp), out->port_hop,
+                               sizeof out->port_hop, &first_port) != 0)
+            return CFG_ERR_BAD_PORT;
+        out->port = first_port;
+    } else {
+        for (; pp < hp_end; ++pp) {
+            if (*pp < '0' || *pp > '9') return CFG_ERR_BAD_PORT;
+            port = port * 10 + (unsigned long)(*pp - '0');
+            if (port > 65535) return CFG_ERR_BAD_PORT;
+        }
+        if (port == 0) return CFG_ERR_BAD_PORT;
+        out->port = (uint16_t)port;
     }
-    if (port == 0) return CFG_ERR_BAD_PORT;
-    out->port = (uint16_t)port;
 
     if (qmark) parse_query(out, qmark + 1, body_end);
 
@@ -516,9 +705,27 @@ cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out) {
     if (out->security == VL_SEC_REALITY && out->net == VL_NET_UNKNOWN)
         out->net = VL_NET_TCP;
 
+    if (out->proto == VL_PROTO_HYSTERIA2) {
+/* quic carries its own tls handshake; there is no plain or reality variant */
+        out->security = VL_SEC_TLS;
+        out->net = VL_NET_TCP;
+        if (out->sni[0] == '\0') snprintf(out->sni, sizeof out->sni, "%s", out->host);
+    } else if (out->proto == VL_PROTO_TROJAN) {
+        if (out->security == VL_SEC_UNKNOWN) out->security = VL_SEC_TLS;
+        if (out->net == VL_NET_UNKNOWN) out->net = VL_NET_TCP;
+    } else if (out->proto == VL_PROTO_SHADOWSOCKS) {
+        if (out->security == VL_SEC_UNKNOWN) out->security = VL_SEC_NONE;
+        if (out->net == VL_NET_UNKNOWN) out->net = VL_NET_TCP;
+        if (!out->user[0]) snprintf(out->user, sizeof out->user, "chacha20-ietf-poly1305");
+    }
+
     if (frag) copy_remark(frag + 1, strlen(frag + 1), out->remark, sizeof out->remark);
 
     return CFG_OK;
+}
+
+cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out) {
+    return cfg_parse_link_inner(uri, out, 0);
 }
 
 /* the blob is not nul terminated, so strstr cannot be used on it */
@@ -559,7 +766,9 @@ static int embedded_link_start(const char *p) {
     return strncmp(p, "vless://", 8) == 0 ||
            strncmp(p, "socks5://", 9) == 0 ||
            strncmp(p, "happ://", 7) == 0 ||
-           strncmp(p, "HAPP://", 7) == 0;
+           strncmp(p, "HAPP://", 7) == 0 ||
+           strncmp(p, "trojan://", 9) == 0 ||
+           strncmp(p, "ss://", 5) == 0;
 }
 
 static int link_token_char(char c) {
@@ -695,10 +904,11 @@ static int jstr_copy_any(const cJSON *obj, char *dst, size_t cap,
 }
 
 /* shortid may be a hex string or an array of candidates; keep the first */
-static void j_copy_short_id(const cJSON *reality, char *dst, size_t cap) {
+static void j_copy_short_id_key(const cJSON *reality, const char *key,
+                                char *dst, size_t cap) {
     const cJSON *sid;
-    if (!reality || !dst || cap == 0) return;
-    sid = cJSON_GetObjectItemCaseSensitive(reality, "shortId");
+    if (!reality || !key || !dst || cap == 0) return;
+    sid = cJSON_GetObjectItemCaseSensitive(reality, key);
     if (cJSON_IsString(sid) && sid->valuestring) {
         snprintf(dst, cap, "%s", sid->valuestring);
         return;
@@ -708,6 +918,17 @@ static void j_copy_short_id(const cJSON *reality, char *dst, size_t cap) {
         if (cJSON_IsString(first) && first->valuestring)
             snprintf(dst, cap, "%s", first->valuestring);
     }
+}
+
+static void j_copy_short_id(const cJSON *reality, char *dst, size_t cap) {
+    j_copy_short_id_key(reality, "shortId", dst, cap);
+}
+
+/* sing-box spells it short_id, xray shortId, and a hand-merged config can carry
+   either */
+static void j_copy_short_id_any(const cJSON *reality, char *dst, size_t cap) {
+    j_copy_short_id_key(reality, "short_id", dst, cap);
+    if (dst[0] == '\0') j_copy_short_id_key(reality, "shortId", dst, cap);
 }
 
 static int j_port(const cJSON *obj, const char *key, uint16_t *out) {
@@ -728,41 +949,198 @@ static int j_port(const cJSON *obj, const char *key, uint16_t *out) {
     return 0;
 }
 
-static int count_proxy_outbounds(const cJSON *outbounds) {
-    int n = 0;
-    const cJSON *o;
-    if (!cJSON_IsArray(outbounds)) return 0;
-    cJSON_ArrayForEach(o, outbounds) {
-        const cJSON *proto = cJSON_GetObjectItemCaseSensitive(o, "protocol");
-        const char *p;
-        if (!cJSON_IsString(proto) || !proto->valuestring) continue;
-        p = proto->valuestring;
-        if (strcmp(p, "freedom") == 0 || strcmp(p, "blackhole") == 0 ||
-            strcmp(p, "dns") == 0 || strcmp(p, "loopback") == 0 ||
-            strcmp(p, "direct") == 0 || strcmp(p, "block") == 0)
-            continue;
-        n++;
+/* both formats name the same wire transports, and each has spelled some of them
+   more than one way across versions */
+static void json_set_network(vl_server_t *s, const char *network) {
+    if (strcmp(network, "tcp") == 0 || strcmp(network, "raw") == 0)
+        s->net = VL_NET_TCP;
+    else if (strcmp(network, "ws") == 0 || strcmp(network, "websocket") == 0)
+        s->net = VL_NET_WS;
+    else if (strcmp(network, "xhttp") == 0 || strcmp(network, "splithttp") == 0)
+        s->net = VL_NET_XHTTP;
+    else if (strcmp(network, "grpc") == 0)
+        s->net = VL_NET_GRPC;
+    else if (strcmp(network, "http") == 0 || strcmp(network, "h2") == 0 ||
+             strcmp(network, "httpupgrade") == 0)
+        s->net = VL_NET_HTTP;
+    else
+        s->net = VL_NET_UNKNOWN;
+}
+
+/* sing-box gates tls and reality on their own boolean, and a block that is
+   present but disabled means plain tcp, not tls */
+static int json_flag_on(const cJSON *obj, const char *key) {
+    const cJSON *v;
+    if (!cJSON_IsObject(obj)) return 0;
+    v = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (cJSON_IsBool(v)) return cJSON_IsTrue(v) ? 1 : 0;
+    if (cJSON_IsNumber(v)) return v->valuedouble != 0.0;
+    return 0;
+}
+
+/* the defaults are the same in both formats: an absent sni follows the host,
+   and a websocket without a Host header follows the sni */
+static int json_server_finish(vl_server_t *s, const cJSON *ob,
+                              const char *remarks, int multi) {
+    char tag[128];
+
+    /* the ui keeps same-name profiles as one row and tries every endpoint, so
+       an endpoint suffix here would split one provider location into copies */
+    (void)multi;
+
+    normalize_grpc_path(s);
+
+    if (s->sni[0] == '\0' &&
+        (s->security == VL_SEC_TLS || s->security == VL_SEC_REALITY))
+        snprintf(s->sni, sizeof s->sni, "%s", s->host);
+
+    if (s->net == VL_NET_WS && s->ws_host[0] == '\0') {
+        if (s->sni[0])
+            snprintf(s->ws_host, sizeof s->ws_host, "%s", s->sni);
+        else
+            snprintf(s->ws_host, sizeof s->ws_host, "%s", s->host);
     }
-    return n;
+
+    tag[0] = '\0';
+    (void)jstr_copy(ob, "tag", tag, sizeof tag);
+    if (remarks && remarks[0]) {
+        size_t rl = strlen(remarks);
+        if (rl > 80) rl = 80;
+        snprintf(s->remark, sizeof s->remark, "%.*s", (int)rl, remarks);
+    } else if (tag[0]) {
+        snprintf(s->remark, sizeof s->remark, "%s", tag);
+    } else {
+        snprintf(s->remark, sizeof s->remark, "%.120s:%u",
+                 s->host, (unsigned)s->port);
+    }
+
+    if (!cfg_validate_server(s, NULL, 0)) return -1;
+    return 0;
+}
+
+/* this fork's own hysteria outbound shape (see go_config.c's append_outbound):
+   the destination sits in settings, auth and quic live under
+   streamSettings.hysteriaSettings, and finalmask carries obfuscation and
+   port hopping when the node uses either */
+static int xray_hysteria_to_server(const cJSON *ob, const cJSON *settings,
+                                   const char *remarks, int multi,
+                                   vl_server_t *s) {
+    const cJSON *stream = cJSON_GetObjectItemCaseSensitive(ob, "streamSettings");
+    const cJSON *hy, *ts, *fm;
+
+    if (jstr_copy(settings, "address", s->host, sizeof s->host) != 0) return -1;
+    if (j_port(settings, "port", &s->port) != 0) return -1;
+    if (!cJSON_IsObject(stream)) return -1;
+
+    hy = cJSON_GetObjectItemCaseSensitive(stream, "hysteriaSettings");
+    if (!cJSON_IsObject(hy) || jstr_copy(hy, "auth", s->pass, sizeof s->pass) != 0)
+        return -1;
+
+    s->proto = VL_PROTO_HYSTERIA2;
+    s->security = VL_SEC_TLS;
+    s->net = VL_NET_TCP;
+
+    ts = cJSON_GetObjectItemCaseSensitive(stream, "tlsSettings");
+    if (cJSON_IsObject(ts)) {
+        (void)jstr_copy_any(ts, s->sni, sizeof s->sni, "serverName", "server_name");
+        (void)jstr_copy(ts, "pinnedPeerCertSha256", s->pin_sha256, sizeof s->pin_sha256);
+    }
+
+    fm = cJSON_GetObjectItemCaseSensitive(stream, "finalmask");
+    if (cJSON_IsObject(fm)) {
+        const cJSON *udp = cJSON_GetObjectItemCaseSensitive(fm, "udp");
+        if (cJSON_IsArray(udp) && cJSON_GetArraySize(udp) > 0) {
+            const cJSON *mask = cJSON_GetArrayItem(udp, 0);
+            if (cJSON_IsObject(mask) &&
+                jstr_copy(mask, "type", s->obfs, sizeof s->obfs) == 0) {
+                const cJSON *mset = cJSON_GetObjectItemCaseSensitive(mask, "settings");
+                if (cJSON_IsObject(mset))
+                    (void)jstr_copy(mset, "password", s->obfs_password,
+                                   sizeof s->obfs_password);
+            }
+        }
+        {
+            const cJSON *qp = cJSON_GetObjectItemCaseSensitive(fm, "quicParams");
+            const cJSON *hop = cJSON_IsObject(qp)
+                ? cJSON_GetObjectItemCaseSensitive(qp, "udpHop") : NULL;
+            if (cJSON_IsObject(hop))
+                (void)jstr_copy(hop, "ports", s->port_hop, sizeof s->port_hop);
+        }
+    }
+
+    return json_server_finish(s, ob, remarks, multi);
+}
+
+/* trojan and shadowsocks both list their one endpoint under settings.servers[0],
+   the shape xray-core gives every outbound that is not vless */
+static int xray_trojan_or_ss_to_server(const char *protocol_name,
+                                       const cJSON *ob, const cJSON *settings,
+                                       const char *remarks, int multi,
+                                       vl_server_t *s) {
+    const cJSON *servers = cJSON_GetObjectItemCaseSensitive(settings, "servers");
+    const cJSON *srv;
+    if (!cJSON_IsArray(servers) || cJSON_GetArraySize(servers) < 1) return -1;
+    srv = cJSON_GetArrayItem(servers, 0);
+    if (!cJSON_IsObject(srv)) return -1;
+    if (jstr_copy(srv, "address", s->host, sizeof s->host) != 0) return -1;
+    if (j_port(srv, "port", &s->port) != 0) return -1;
+    if (jstr_copy(srv, "password", s->pass, sizeof s->pass) != 0) return -1;
+
+    if (strcmp(protocol_name, "trojan") == 0) {
+        const cJSON *stream = cJSON_GetObjectItemCaseSensitive(ob, "streamSettings");
+        s->proto = VL_PROTO_TROJAN;
+        s->security = VL_SEC_TLS;
+        if (cJSON_IsObject(stream)) {
+            const cJSON *netj = cJSON_GetObjectItemCaseSensitive(stream, "network");
+            const cJSON *ts = cJSON_GetObjectItemCaseSensitive(stream, "tlsSettings");
+            if (cJSON_IsString(netj) && netj->valuestring &&
+                strcmp(netj->valuestring, "ws") == 0)
+                s->net = VL_NET_WS;
+            if (cJSON_IsObject(ts))
+                (void)jstr_copy_any(ts, s->sni, sizeof s->sni, "serverName", "server_name");
+            if (s->net == VL_NET_WS) {
+                const cJSON *ws = cJSON_GetObjectItemCaseSensitive(stream, "wsSettings");
+                if (cJSON_IsObject(ws))
+                    (void)jstr_copy(ws, "path", s->path, sizeof s->path);
+            }
+        }
+    } else {
+        char method[32];
+        s->proto = VL_PROTO_SHADOWSOCKS;
+        if (jstr_copy(srv, "method", method, sizeof method) == 0) {
+            snprintf(s->encryption, sizeof s->encryption, "%s", method);
+            snprintf(s->user, sizeof s->user, "%s", method);
+        }
+    }
+    return json_server_finish(s, ob, remarks, multi);
 }
 
 static int xray_outbound_to_server(const cJSON *ob, const char *remarks,
-                                   int multi_proxy, vl_server_t *s) {
+                                   int multi, vl_server_t *s) {
     const cJSON *proto, *settings, *stream, *vnext, *user, *netj, *secj;
     const char *network = "tcp";
     const char *security = "none";
-    char tag[128];
+    const char *protocol_name;
 
     if (!ob || !s) return -1;
     memset(s, 0, sizeof *s);
-    s->proto = VL_PROTO_VLESS;
 
     proto = cJSON_GetObjectItemCaseSensitive(ob, "protocol");
     if (!cJSON_IsString(proto) || !proto->valuestring) return -1;
-    if (strcmp(proto->valuestring, "vless") != 0) return -1;
+    protocol_name = proto->valuestring;
 
     settings = cJSON_GetObjectItemCaseSensitive(ob, "settings");
     if (!cJSON_IsObject(settings)) return -1;
+
+    if (strcmp(protocol_name, "trojan") == 0 || strcmp(protocol_name, "shadowsocks") == 0)
+        return xray_trojan_or_ss_to_server(protocol_name, ob, settings, remarks, multi, s);
+
+    if (strcmp(protocol_name, "hysteria") == 0)
+        return xray_hysteria_to_server(ob, settings, remarks, multi, s);
+
+    if (strcmp(protocol_name, "vless") != 0) return -1;
+    s->proto = VL_PROTO_VLESS;
+
     vnext = cJSON_GetObjectItemCaseSensitive(settings, "vnext");
     if (!cJSON_IsArray(vnext) || cJSON_GetArraySize(vnext) < 1) return -1;
     vnext = cJSON_GetArrayItem(vnext, 0);
@@ -788,19 +1166,7 @@ static int xray_outbound_to_server(const cJSON *ob, const char *remarks,
         if (cJSON_IsString(secj) && secj->valuestring) security = secj->valuestring;
     }
 
-    if (strcmp(network, "tcp") == 0 || strcmp(network, "raw") == 0)
-        s->net = VL_NET_TCP;
-    else if (strcmp(network, "ws") == 0 || strcmp(network, "websocket") == 0)
-        s->net = VL_NET_WS;
-    else if (strcmp(network, "xhttp") == 0 || strcmp(network, "splithttp") == 0)
-        s->net = VL_NET_XHTTP;
-    else if (strcmp(network, "grpc") == 0)
-        s->net = VL_NET_GRPC;
-    else if (strcmp(network, "http") == 0 || strcmp(network, "h2") == 0 ||
-             strcmp(network, "httpupgrade") == 0)
-        s->net = VL_NET_HTTP;
-    else
-        s->net = VL_NET_UNKNOWN;
+    json_set_network(s, network);
 
     if (strcmp(security, "reality") == 0)
         s->security = VL_SEC_REALITY;
@@ -851,49 +1217,190 @@ static int xray_outbound_to_server(const cJSON *ob, const char *remarks,
             (void)jstr_copy(gr, "serviceName", s->path, sizeof s->path);
     }
 
-    normalize_grpc_path(s);
-
-    if (s->sni[0] == '\0' &&
-        (s->security == VL_SEC_TLS || s->security == VL_SEC_REALITY))
-        snprintf(s->sni, sizeof s->sni, "%s", s->host);
-
-    if (s->net == VL_NET_WS && s->ws_host[0] == '\0') {
-        if (s->sni[0])
-            snprintf(s->ws_host, sizeof s->ws_host, "%s", s->sni);
-        else
-            snprintf(s->ws_host, sizeof s->ws_host, "%s", s->host);
-    }
-
-    tag[0] = '\0';
-    (void)jstr_copy(ob, "tag", tag, sizeof tag);
-    if (remarks && remarks[0] && multi_proxy) {
-/* keep host suffix so multi-outbound groups stay distinguishable */
-        size_t rl = strlen(remarks);
-        if (rl > 80) rl = 80;
-        snprintf(s->remark, sizeof s->remark, "%.*s · %.40s",
-                 (int)rl, remarks, s->host);
-    } else if (remarks && remarks[0]) {
-        snprintf(s->remark, sizeof s->remark, "%s", remarks);
-    } else if (tag[0]) {
-        snprintf(s->remark, sizeof s->remark, "%s", tag);
-    } else {
-        snprintf(s->remark, sizeof s->remark, "%.120s:%u",
-                 s->host, (unsigned)s->port);
-    }
-
-    if (!cfg_validate_server(s, NULL, 0)) return -1;
-    return 0;
+    return json_server_finish(s, ob, remarks, multi);
 }
 
-static void xray_collect_outbounds(const cJSON *outbounds, const char *remarks,
+/* sing-box names everything differently from xray: the protocol is "type", the
+   endpoint is server/server_port, the credential sits on the outbound itself,
+   and tls and transport are nested objects that carry their own enabled flags.
+   it is what every current panel and gui exports, and a feed in it used to
+   parse as no servers at all because none of the xray keys are present. trojan
+   and shadowsocks spell the same endpoint shape, just without vless's users
+   array */
+static int singbox_trojan_or_ss_to_server(const char *type_name, const cJSON *ob,
+                                          const char *remarks, int multi,
+                                          vl_server_t *s) {
+    if (jstr_copy(ob, "server", s->host, sizeof s->host) != 0) return -1;
+    if (j_port(ob, "server_port", &s->port) != 0) return -1;
+    if (jstr_copy(ob, "password", s->pass, sizeof s->pass) != 0) return -1;
+
+    if (strcmp(type_name, "trojan") == 0) {
+        const cJSON *tls = cJSON_GetObjectItemCaseSensitive(ob, "tls");
+        const cJSON *transport = cJSON_GetObjectItemCaseSensitive(ob, "transport");
+        s->proto = VL_PROTO_TROJAN;
+        s->security = VL_SEC_TLS;
+        if (cJSON_IsObject(tls))
+            (void)jstr_copy_any(tls, s->sni, sizeof s->sni, "server_name", "serverName");
+        if (cJSON_IsObject(transport)) {
+            const cJSON *tt = cJSON_GetObjectItemCaseSensitive(transport, "type");
+            if (cJSON_IsString(tt) && tt->valuestring && strcmp(tt->valuestring, "ws") == 0) {
+                s->net = VL_NET_WS;
+                (void)jstr_copy(transport, "path", s->path, sizeof s->path);
+            }
+        }
+    } else {
+        char method[32];
+        s->proto = VL_PROTO_SHADOWSOCKS;
+        if (jstr_copy(ob, "method", method, sizeof method) == 0) {
+            snprintf(s->encryption, sizeof s->encryption, "%s", method);
+            snprintf(s->user, sizeof s->user, "%s", method);
+        }
+    }
+    return json_server_finish(s, ob, remarks, multi);
+}
+
+/* sing-box's hysteria2 outbound: server/server_port/password sit on the
+   outbound itself, obfs is its own nested object, and tls only carries sni
+   since this fork's hysteria transport has no allowInsecure to read */
+static int singbox_hysteria2_to_server(const cJSON *ob, const char *remarks,
+                                       int multi, vl_server_t *s) {
+    const cJSON *tls, *obfs;
+
+    if (jstr_copy(ob, "server", s->host, sizeof s->host) != 0) return -1;
+    if (j_port(ob, "server_port", &s->port) != 0) return -1;
+    if (jstr_copy(ob, "password", s->pass, sizeof s->pass) != 0) return -1;
+
+    s->proto = VL_PROTO_HYSTERIA2;
+    s->security = VL_SEC_TLS;
+    s->net = VL_NET_TCP;
+
+    tls = cJSON_GetObjectItemCaseSensitive(ob, "tls");
+    if (cJSON_IsObject(tls))
+        (void)jstr_copy_any(tls, s->sni, sizeof s->sni, "server_name", "serverName");
+
+    obfs = cJSON_GetObjectItemCaseSensitive(ob, "obfs");
+    if (cJSON_IsObject(obfs) && jstr_copy(obfs, "type", s->obfs, sizeof s->obfs) == 0)
+        (void)jstr_copy(obfs, "password", s->obfs_password, sizeof s->obfs_password);
+
+    return json_server_finish(s, ob, remarks, multi);
+}
+
+static int singbox_outbound_to_server(const cJSON *ob, const char *remarks,
+                                      int multi, vl_server_t *s) {
+    const cJSON *type, *tls, *transport;
+    const char *network = "tcp";
+    const char *type_name;
+
+    if (!ob || !s) return -1;
+    type = cJSON_GetObjectItemCaseSensitive(ob, "type");
+    if (!cJSON_IsString(type) || !type->valuestring) return -1;
+    type_name = type->valuestring;
+
+    if (strcmp(type_name, "trojan") == 0 || strcmp(type_name, "shadowsocks") == 0) {
+        memset(s, 0, sizeof *s);
+        return singbox_trojan_or_ss_to_server(type_name, ob, remarks, multi, s);
+    }
+
+    if (strcmp(type_name, "hysteria2") == 0) {
+        memset(s, 0, sizeof *s);
+        return singbox_hysteria2_to_server(ob, remarks, multi, s);
+    }
+
+    if (strcmp(type_name, "vless") != 0) return -1;
+
+    memset(s, 0, sizeof *s);
+    s->proto = VL_PROTO_VLESS;
+
+    if (jstr_copy(ob, "server", s->host, sizeof s->host) != 0) return -1;
+    if (j_port(ob, "server_port", &s->port) != 0) return -1;
+    if (jstr_copy(ob, "uuid", s->uuid, sizeof s->uuid) != 0) return -1;
+    (void)jstr_copy(ob, "flow", s->flow, sizeof s->flow);
+/* sing-box has no per-user encryption field: vless over it is always none */
+    snprintf(s->encryption, sizeof s->encryption, "%s", "none");
+
+    transport = cJSON_GetObjectItemCaseSensitive(ob, "transport");
+    if (cJSON_IsObject(transport)) {
+        const cJSON *tt = cJSON_GetObjectItemCaseSensitive(transport, "type");
+        if (cJSON_IsString(tt) && tt->valuestring) network = tt->valuestring;
+    }
+    json_set_network(s, network);
+
+    tls = cJSON_GetObjectItemCaseSensitive(ob, "tls");
+    if (json_flag_on(tls, "enabled")) {
+        const cJSON *reality = cJSON_GetObjectItemCaseSensitive(tls, "reality");
+        const cJSON *utls = cJSON_GetObjectItemCaseSensitive(tls, "utls");
+        s->security = VL_SEC_TLS;
+        (void)jstr_copy_any(tls, s->sni, sizeof s->sni, "server_name", "serverName");
+        if (json_flag_on(utls, "enabled"))
+            (void)jstr_copy(utls, "fingerprint", s->fp, sizeof s->fp);
+        if (json_flag_on(reality, "enabled")) {
+            s->security = VL_SEC_REALITY;
+            (void)jstr_copy_any(reality, s->pbk, sizeof s->pbk,
+                                "public_key", "publicKey");
+            j_copy_short_id_any(reality, s->sid, sizeof s->sid);
+        }
+    } else {
+        s->security = VL_SEC_NONE;
+    }
+
+    if (cJSON_IsObject(transport)) {
+        if (s->net == VL_NET_WS || s->net == VL_NET_HTTP) {
+            (void)jstr_copy(transport, "path", s->path, sizeof s->path);
+            {
+                const cJSON *hdr = cJSON_GetObjectItemCaseSensitive(transport, "headers");
+                if (cJSON_IsObject(hdr))
+                    (void)jstr_copy_any(hdr, s->ws_host, sizeof s->ws_host,
+                                        "Host", "host");
+            }
+            if (s->ws_host[0] == '\0') {
+/* the http transport lists hosts as an array, the httpupgrade one as a string */
+                const cJSON *h = cJSON_GetObjectItemCaseSensitive(transport, "host");
+                if (cJSON_IsString(h) && h->valuestring)
+                    snprintf(s->ws_host, sizeof s->ws_host, "%s", h->valuestring);
+                else if (cJSON_IsArray(h) && cJSON_GetArraySize(h) > 0) {
+                    const cJSON *first = cJSON_GetArrayItem(h, 0);
+                    if (cJSON_IsString(first) && first->valuestring)
+                        snprintf(s->ws_host, sizeof s->ws_host, "%s", first->valuestring);
+                }
+            }
+        }
+        if (s->net == VL_NET_GRPC)
+            (void)jstr_copy_any(transport, s->path, sizeof s->path,
+                                "service_name", "serviceName");
+    }
+
+    return json_server_finish(s, ob, remarks, multi);
+}
+
+/* every proxy outbound in one feed shares the panel's single "remarks"/name;
+   count how many actually turn into servers so json_server_finish knows
+   whether it must keep them apart with a host suffix or a shared name would
+   leave the list with indistinguishable rows */
+static int json_count_proxy_outbounds(const cJSON *outbounds) {
+    const cJSON *ob;
+    vl_server_t probe;
+    int n = 0;
+    if (!cJSON_IsArray(outbounds)) return 0;
+    cJSON_ArrayForEach(ob, outbounds) {
+        if (xray_outbound_to_server(ob, NULL, 0, &probe) == 0 ||
+            singbox_outbound_to_server(ob, NULL, 0, &probe) == 0)
+            n++;
+    }
+    return n;
+}
+
+/* both formats are accepted from the same array, because a panel that exports
+   one of them still labels the file the same way */
+static void json_collect_outbounds(const cJSON *outbounds, const char *remarks,
                                    vl_server_t *out, size_t max, size_t *count) {
     const cJSON *ob;
     int multi;
     if (!cJSON_IsArray(outbounds) || !out || !count) return;
-    multi = count_proxy_outbounds(outbounds) > 1;
+    multi = json_count_proxy_outbounds(outbounds) > 1;
     cJSON_ArrayForEach(ob, outbounds) {
         if (*count >= max) return;
-        if (xray_outbound_to_server(ob, remarks, multi, &out[*count]) == 0)
+        if (xray_outbound_to_server(ob, remarks, multi, &out[*count]) == 0 ||
+            singbox_outbound_to_server(ob, remarks, multi, &out[*count]) == 0)
             (*count)++;
     }
 }
@@ -917,7 +1424,7 @@ static int parse_xray_json(const char *blob, size_t blob_len,
             (void)jstr_copy(item, "remarks", remarks, sizeof remarks);
             outbounds = cJSON_GetObjectItemCaseSensitive(item, "outbounds");
             if (cJSON_IsArray(outbounds))
-                xray_collect_outbounds(outbounds, remarks, out, max, count);
+                json_collect_outbounds(outbounds, remarks, out, max, count);
         }
     } else if (cJSON_IsObject(root)) {
         const cJSON *outbounds = cJSON_GetObjectItemCaseSensitive(root, "outbounds");
@@ -925,7 +1432,7 @@ static int parse_xray_json(const char *blob, size_t blob_len,
         remarks[0] = '\0';
         (void)jstr_copy(root, "remarks", remarks, sizeof remarks);
         if (cJSON_IsArray(outbounds))
-            xray_collect_outbounds(outbounds, remarks, out, max, count);
+            json_collect_outbounds(outbounds, remarks, out, max, count);
     }
 
     cJSON_Delete(root);
@@ -1087,4 +1594,7 @@ cfg_status_t cfg_parse_subscription(const char *blob, size_t blob_len,
     parse_link_lines((const char *)scratch, dec_len, out, max_servers, out_count);
     free(scratch);
     return CFG_OK;
+}
+rules_status_t cfg_parse_rule(const char *text, size_t len, rule_t *out) {
+    return rules_parse(text, len, out);
 }

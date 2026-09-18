@@ -3,6 +3,8 @@
 #import "ui_theme.h"
 
 #import <QuartzCore/QuartzCore.h>
+#import <objc/message.h>
+#include <arpa/inet.h>
 
 static BOOL SenkoCellRegional(unichar c) {
     return c >= 0xDDE6 && c <= 0xDDFF;
@@ -10,6 +12,38 @@ static BOOL SenkoCellRegional(unichar c) {
 
 static NSString *SenkoCellFlagCode(NSString *flag);
 static NSString *SenkoCellRemark(NSString *raw);
+
+static BOOL SenkoCellTechnicalSuffix(NSString *suffix) {
+    if (![suffix length]) return NO;
+    NSCharacterSet *separators = [NSCharacterSet characterSetWithCharactersInString:@" /+|,"];
+    NSArray *parts = [suffix componentsSeparatedByCharactersInSet:separators];
+    BOOL found = NO;
+    for (NSString *part in parts) {
+        NSString *token = [[part stringByTrimmingCharactersInSet:
+                            [NSCharacterSet whitespaceAndNewlineCharacterSet]] lowercaseString];
+        if (![token length]) continue;
+        if (![token isEqualToString:@"grpc"] &&
+            ![token isEqualToString:@"h2"] &&
+            ![token isEqualToString:@"http2"] &&
+            ![token isEqualToString:@"ws"] &&
+            ![token isEqualToString:@"websocket"] &&
+            ![token isEqualToString:@"tcp"] &&
+            ![token isEqualToString:@"tls"] &&
+            ![token isEqualToString:@"reality"] &&
+            ![token isEqualToString:@"xhttp"] &&
+            ![token isEqualToString:@"vless"] &&
+            ![token isEqualToString:@"trojan"] &&
+            ![token isEqualToString:@"ss"] &&
+            ![token isEqualToString:@"shadowsocks"] &&
+            ![token isEqualToString:@"vmess"] &&
+            ![token isEqualToString:@"tuic"] &&
+            ![token isEqualToString:@"hy2"] &&
+            ![token isEqualToString:@"hysteria2"])
+            return NO;
+        found = YES;
+    }
+    return found;
+}
 
 static NSString *SenkoCellFlag(NSString *raw) {
     if (![raw length]) return nil;
@@ -45,19 +79,34 @@ static NSString *SenkoCellFlagCode(NSString *flag) {
             (char)('a' + b - 0xDDE6)];
 }
 
+static NSCache *gFlagImageCache = nil;
+
+static UIImage *SenkoCellCachedImage(NSString *name) {
+    if (!name || ![name length]) return nil;
+    if (!gFlagImageCache) {
+        gFlagImageCache = [[NSCache alloc] init];
+        [gFlagImageCache setCountLimit:128];
+    }
+    UIImage *img = [gFlagImageCache objectForKey:name];
+    if (img) return img;
+    img = [UIImage imageNamed:name];
+    if (img) [gFlagImageCache setObject:img forKey:name];
+    return img;
+}
+
 static UIImage *SenkoCellServerIcon(NSString *raw) {
     NSString *flag = SenkoCellFlag(raw);
     NSString *code = SenkoCellFlagCode(flag);
     UIImage *image = [code length]
-        ? [UIImage imageNamed:[NSString stringWithFormat:@"flag-%@.png", code]]
+        ? SenkoCellCachedImage([NSString stringWithFormat:@"flag-%@.png", code])
         : nil;
-    return image ? image : [UIImage imageNamed:@"server-placeholder.png"];
+    return image ? image : SenkoCellCachedImage(@"server-placeholder.png");
 }
 
 static BOOL SenkoCellHasFlag(NSString *raw) {
     NSString *code = SenkoCellFlagCode(SenkoCellFlag(raw));
     return [code length] &&
-           [UIImage imageNamed:[NSString stringWithFormat:@"flag-%@.png", code]] != nil;
+           SenkoCellCachedImage([NSString stringWithFormat:@"flag-%@.png", code]) != nil;
 }
 
 static NSString *SenkoCellRemark(NSString *raw) {
@@ -74,8 +123,44 @@ static NSString *SenkoCellRemark(NSString *raw) {
         text = [text stringByReplacingCharactersInRange:NSMakeRange(i, 4) withString:@""];
         break;
     }
-    return [text stringByTrimmingCharactersInSet:
+    text = [text stringByTrimmingCharactersInSet:
             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    for (;;) {
+        NSRange close = [text rangeOfString:@")" options:NSBackwardsSearch];
+        if (close.location == NSNotFound || close.location + 1 != [text length]) break;
+        NSRange open = [text rangeOfString:@"(" options:NSBackwardsSearch
+                                      range:NSMakeRange(0, close.location)];
+        if (open.location == NSNotFound || open.location == 0) break;
+        NSString *suffix = [text substringWithRange:
+                            NSMakeRange(open.location + 1, close.location - open.location - 1)];
+        if (!SenkoCellTechnicalSuffix(suffix)) break;
+        /* subscriptions append transport labels to a city, but the endpoint
+           retains those values separately and the list should group by city */
+        text = [[text substringToIndex:open.location]
+                stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    }
+    /* some panels append the resolved ipv4 address to a country name. the
+       endpoint is already shown on the next line, so keeping it here creates
+       four visible copies of one country when a balancer rotates addresses */
+    NSRange split = [text rangeOfCharacterFromSet:
+                     [NSCharacterSet whitespaceCharacterSet]
+                                             options:NSBackwardsSearch];
+    if (split.location != NSNotFound && split.location + 1 < [text length]) {
+        NSString *tail = [text substringFromIndex:split.location + 1];
+        NSRange colon = [tail rangeOfString:@":" options:NSBackwardsSearch];
+        if (colon.location != NSNotFound && colon.location + 1 < [tail length]) {
+            NSString *port = [tail substringFromIndex:colon.location + 1];
+            if ([[port stringByTrimmingCharactersInSet:
+                  [NSCharacterSet decimalDigitCharacterSet]] length] == 0)
+                tail = [tail substringToIndex:colon.location];
+        }
+        struct in_addr address;
+        if (inet_pton(AF_INET, [tail UTF8String], &address) == 1)
+            text = [[text substringToIndex:split.location]
+                    stringByTrimmingCharactersInSet:
+                        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    }
+    return text;
 }
 
 static NSString *ServerProtocolLabel(SenkoServer *server) {
@@ -84,13 +169,35 @@ static NSString *ServerProtocolLabel(SenkoServer *server) {
                 server->proto ? server->proto : @"vless",
                 server->net ? server->net : @"tcp",
                 server->security ? server->security : @"none"];
+    if ([server->proto isEqualToString:@"trojan"])
+        return [NSString stringWithFormat:@"%@/%@/%@",
+                server->proto,
+                server->net ? server->net : @"tcp",
+                server->security ? server->security : @"tls"];
+    if ([server->proto isEqualToString:@"shadowsocks"] || [server->proto isEqualToString:@"ss"])
+        return [NSString stringWithFormat:@"ss/%@",
+                server->security ? server->security : @"aead"];
+    if ([server->proto isEqualToString:@"hysteria2"])
+        return @"hysteria2/quic";
     return server->proto ? server->proto : @"unknown";
 }
 
-static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
-    if (hideLinks) return SenkoLocalizedText(@"hidden :3");
+/* the row itself no longer shows this: a named server already carries its
+   name up top, and the raw endpoint added nothing beside the protocol line.
+   it survives only as the fallback title for a server with no remark, where
+   host:port is the one thing left to call it */
+static NSString *ServerEndpointLabel(SenkoServer *server) {
     return [NSString stringWithFormat:@"%@:%d",
             server->host ? server->host : @"", server->port];
+}
+
+/* a standard spinner identifies the one socket operation that is active. the
+   daemon handles checks serially on ios 6, so animating every row suggested
+   work that had not started and cost needless compositing time. */
+static void SenkoSetRowChecking(UIActivityIndicatorView *activity, BOOL checking) {
+    if (!activity) return;
+    if (checking) [activity startAnimating];
+    else [activity stopAnimating];
 }
 
 @implementation ServerCell {
@@ -118,8 +225,11 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
         _plate.layer.shouldRasterize = YES;
         if (_plate.layer.shouldRasterize)
             _plate.layer.rasterizationScale = [UIScreen mainScreen].scale;
-        if ([_plate.layer respondsToSelector:@selector(setDrawsAsynchronously:)])
-            _plate.layer.drawsAsynchronously = YES;
+        /* asynchronous layer drawing can publish an old raster after a reused
+           cell has already been rebound under a different theme */
+        SEL asyncSel = @selector(setDrawsAsynchronously:);
+        if ([_plate.layer respondsToSelector:asyncSel])
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(_plate.layer, asyncSel, NO);
         _plateGrad = [CAGradientLayer layer];
         _plateGrad.actions = [NSDictionary dictionaryWithObjectsAndKeys:
                               [NSNull null], @"colors",
@@ -170,9 +280,12 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
 
         _transport = [[UILabel alloc] initWithFrame:CGRectZero];
         _transport.backgroundColor = [UIColor clearColor];
+/* the protocol line took over the row the endpoint used to have and reads as
+   the row's one line of secondary text now, not a cramped third line, so it
+   gets the bump the endpoint's removal left room for */
         _transport.font = SenkoThemeIsIos16()
-            ? SenkoFontBody(11, YES)
-            : [UIFont boldSystemFontOfSize:11];
+            ? SenkoFontBody(13, YES)
+            : [UIFont boldSystemFontOfSize:13];
         _transport.lineBreakMode = NSLineBreakByClipping;
         _transport.adjustsFontSizeToFitWidth = YES;
         _transport.minimumFontSize = 8.0f;
@@ -199,6 +312,13 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
         SenkoStyleAccentLabel(_ping);
         [_plate addSubview:_ping];
 
+        _pingActivity = [[UIActivityIndicatorView alloc]
+            initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
+        _pingActivity.hidesWhenStopped = YES;
+        if ([_pingActivity respondsToSelector:@selector(setColor:)])
+            _pingActivity.color = kAccentBlue;
+        [_plate addSubview:_pingActivity];
+
         _chevron = [[UIImageView alloc] initWithFrame:CGRectZero];
         _chevron.contentMode = UIViewContentModeScaleAspectFit;
         _chevron.userInteractionEnabled = NO;
@@ -224,6 +344,7 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
     [_transport release];
     [_unsupported release];
     [_ping release];
+    [_pingActivity release];
     [_pingButton release];
     [_serverIcon release];
     [_chevron release];
@@ -233,7 +354,7 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGRect bounds = self.contentView.bounds;
-    CGFloat pad = SenkoThemeIsIos16() ? 10.0f : 7.0f;
+    CGFloat pad = SENKO_LIST_PLATE_INSET;
     CGFloat vpad = 3.0f;
     CGRect plate = CGRectInset(bounds, pad, vpad);
     BOOL sizeChanged = !_plateSized || !CGSizeEqualToSize(_plate.bounds.size, plate.size);
@@ -247,7 +368,11 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
         _plateGrad.frame = _plate.bounds;
         _plateGrad.cornerRadius = cr;
         _plate.layer.cornerRadius = cr;
-        _plate.layer.shadowPath = nil;
+        if (_plate.layer.shadowOpacity > 0.0f)
+            _plate.layer.shadowPath = [UIBezierPath
+                bezierPathWithRoundedRect:_plate.bounds cornerRadius:cr].CGPath;
+        else
+            _plate.layer.shadowPath = nil;
         _plateSized = YES;
     }
     SenkoEndSilentLayers();
@@ -278,6 +403,10 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
     CGFloat pingH = 20.0f;
     CGFloat pingX = chevronX - 8.0f - pingW;
     _ping.frame = CGRectMake(pingX, rowMid - pingH * 0.5f, pingW, pingH);
+    /* match the gauge's right-aligned image position. centring this in the
+       reading field put the live spinner 18pt left of the resting ping glyph */
+    _pingActivity.frame = CGRectMake(chevronX - 30.0f, rowMid - 9.0f,
+                                     18.0f, 18.0f);
     _pingButton.frame = CGRectMake(pingX - 6.0f, rowMid - 15.0f,
                                    chevronX - pingX + 6.0f, 30.0f);
     CGFloat textW = pingX - textX - 8.0f;
@@ -292,17 +421,19 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
         CGFloat blockH = 24.0f + 16.0f + extra;
         CGFloat top = floorf((plateH - blockH) * 0.5f);
         if (top < 2.0f) top = 2.0f;
-        CGFloat split = floorf(detailW * 0.56f);
         _title.frame = CGRectMake(textX, top, textW, 22);
-        _detail.frame = CGRectMake(textX, top + 24.0f, split - 10.0f, 15);
-        _transport.frame = CGRectMake(textX + split, top + 24.0f, detailW - split, 15);
+/* _detail and _transport share this one line: a server row leaves _detail
+   empty and shows the protocol here, the amneziawg row does the opposite.
+   they never both carry text, so the shared rect never has to be split */
+        _detail.frame = CGRectMake(textX, top + 24.0f, detailW, 15);
+        _transport.frame = CGRectMake(textX, top + 24.0f, detailW, 16);
         _unsupported.frame = CGRectMake(textX, top + 41.0f, detailW, 12);
         return;
     }
     _title.frame = CGRectMake(textX, 2, textW, 22);
     _detail.frame = CGRectMake(textX, 24, detailW, 14);
-    _transport.frame = CGRectMake(textX, 38, detailW, 13);
-    _unsupported.frame = CGRectMake(textX, 51, detailW, 11);
+    _transport.frame = CGRectMake(textX, 24, detailW, 16);
+    _unsupported.frame = CGRectMake(textX, 42, detailW, 12);
 }
 
 - (void)applyPicked:(BOOL)picked {
@@ -400,8 +531,11 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
         _plate.layer.borderWidth = 0.75f;
         _plate.layer.borderColor = [kAccentBlue colorWithAlphaComponent:0.58f].CGColor;
     }
-/* only rasterize glass themes; classic cards scroll cheaper without offscreen bitmaps */
-    _plate.layer.shouldRasterize = ios16 || ios26;
+/* the classic plate has a gradient, three labels and embossed ink. redrawing
+   that stack for each scroll tick is slower than keeping one bounded tile on
+   armv7, just as the ios 16 plate already does. glass stays unrasterized
+   because its translucent material must sample the wallpaper behind it. */
+    _plate.layer.shouldRasterize = !ios26;
     if (_plate.layer.shouldRasterize)
         _plate.layer.rasterizationScale = [UIScreen mainScreen].scale;
     SenkoEndSilentLayers();
@@ -427,7 +561,6 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
 
 - (void)configureWithServer:(SenkoServer *)server
                       picked:(BOOL)picked
-                   hideLinks:(BOOL)hideLinks
                      pingVal:(NSNumber *)ping
                  displayName:(NSString *)displayName {
     [self applyPicked:picked];
@@ -444,9 +577,9 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
         ? [UIColor clearColor] : [UIColor colorWithWhite:1.0f alpha:0.94f];
     NSString *title = [displayName length] ? displayName
         : ([server->remark length] ? SenkoCellRemark(server->remark)
-                                   : ServerEndpointLabel(server, hideLinks));
+                                   : ServerEndpointLabel(server));
     _title.text = title;
-    _detail.text = ServerEndpointLabel(server, hideLinks);
+    _detail.text = nil;
     _transport.text = ServerProtocolLabel(server);
     _unsupported.hidden = server->supported;
     if (!server->supported) {
@@ -457,6 +590,10 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
 
     _chevron.image = SenkoIconChevron(14.0f, kInkMuted);
     _chevron.hidden = NO;
+    BOOL checking = ping && [ping intValue] == -3;
+    if ([_pingActivity respondsToSelector:@selector(setColor:)])
+        _pingActivity.color = kAccentBlue;
+    SenkoSetRowChecking(_pingActivity, checking);
     if (!ping) {
         _ping.text = picked ? @"   " : @"";
         SenkoStyleAccentLabel(_ping);
@@ -464,10 +601,10 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
         _ping.text = [NSString stringWithFormat:@"%d ms", [ping intValue]];
         SenkoStyleAccentLabel(_ping);
     } else if ([ping intValue] == -3) {
-        _ping.text = SenkoLocalizedText(@"checking");
+        _ping.text = @"";
         SenkoStyleAccentLabel(_ping);
     } else {
-        _ping.text = SenkoLocalizedText(@"failed");
+        _ping.text = SenkoLocalizedText(@"Timeout");
         _ping.textColor = SenkoThemeIsLight()
             ? [UIColor colorWithRed:0.72 green:0.10 blue:0.08 alpha:1.0]
             : [UIColor colorWithRed:1.0 green:0.45 blue:0.36 alpha:1.0];
@@ -483,12 +620,16 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
     if (!_pingButton.hidden) {
         NSString *shown = [_ping.text stringByTrimmingCharactersInSet:
                            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        [_pingButton setImage:[shown length] ? nil : GaugeIcon(18.0f, kAccentBlue)
+        BOOL checking = [_pingActivity isAnimating];
+        _pingButton.enabled = !checking;
+        [_pingButton setImage:(!checking && ![shown length])
+                              ? GaugeIcon(18.0f, kAccentBlue) : nil
                       forState:UIControlStateNormal];
         _pingButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentRight;
         _pingButton.imageEdgeInsets = UIEdgeInsetsMake(0, 0, 0, 12.0f);
         [_pingButton addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
     } else {
+        _pingButton.enabled = NO;
         [_pingButton setImage:nil forState:UIControlStateNormal];
     }
 }
@@ -508,6 +649,7 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
     _transport.text = nil;
     _unsupported.hidden = YES;
     _ping.text = status ? status : (picked ? @"   " : @"");
+    SenkoSetRowChecking(_pingActivity, NO);
     /* the amneziawg row has no per-server card of its own */
     _chevron.hidden = YES;
     [self setPingTarget:nil action:NULL serverIndex:-1];
@@ -521,6 +663,16 @@ static NSString *ServerEndpointLabel(SenkoServer *server, BOOL hideLinks) {
     _detail.text = nil;
     _transport.text = nil;
     _ping.text = nil;
+    /* a recycled row must not carry a spinner into another server's result */
+    SenkoSetRowChecking(_pingActivity, NO);
+    [_pingButton removeTarget:nil action:NULL forControlEvents:UIControlEventTouchUpInside];
+    [_pingButton setImage:nil forState:UIControlStateNormal];
+    _pingButton.enabled = NO;
+    _pingButton.hidden = YES;
+    _unsupported.hidden = YES;
+    _chevron.hidden = NO;
+    [_plate.layer removeAllAnimations];
+    [self.contentView.layer removeAllAnimations];
     _plate.transform = CGAffineTransformIdentity;
     /* a row can be recycled mid entrance, so its lift has to be cleared or the
        next binding inherits the offset */

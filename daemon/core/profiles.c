@@ -229,8 +229,66 @@ static int entry_to_server(const prof_entry_t *e, vl_server_t *s) {
             if (u) snprintf(s->user, sizeof s->user, "%s", u);
             if (p) snprintf(s->pass, sizeof s->pass, "%s", p);
         }
+    } else if (ci_equal(type, "trojan")) {
+        s->proto = VL_PROTO_TROJAN;
+        s->security = VL_SEC_TLS;
+        s->net = VL_NET_TCP;
+        const char *p = entry_get(e, "password");
+        if (p) snprintf(s->pass, sizeof s->pass, "%s", p);
+        const char *sni = entry_get_any(e, "sni", "server-name");
+        if (sni) snprintf(s->sni, sizeof s->sni, "%s", sni);
+        const char *net = entry_get(e, "network");
+        if (net && ci_equal(net, "ws")) {
+            s->net = VL_NET_WS;
+            const char *path = entry_get(e, "ws-opts.path");
+            if (path) snprintf(s->path, sizeof s->path, "%s", path);
+        } else if (net && ci_equal(net, "grpc")) {
+            s->net = VL_NET_GRPC;
+            const char *svc = entry_get_any(e, "grpc-opts.grpc-service-name", "grpc-opts.serviceName");
+            if (svc) snprintf(s->path, sizeof s->path, "%s", svc);
+        }
+    } else if (ci_equal(type, "ss") || ci_equal(type, "shadowsocks")) {
+        s->proto = VL_PROTO_SHADOWSOCKS;
+        s->security = VL_SEC_NONE;
+        s->net = VL_NET_TCP;
+        const char *p = entry_get(e, "password");
+        const char *c = entry_get(e, "cipher");
+        if (p) snprintf(s->pass, sizeof s->pass, "%s", p);
+        if (c) {
+            snprintf(s->encryption, sizeof s->encryption, "%s", c);
+            snprintf(s->user, sizeof s->user, "%s", c);
+        }
+    } else if (ci_equal(type, "hysteria2")) {
+/* hysteria1 ("hysteria") is a different, incompatible handshake: only the
+   type spelled exactly "hysteria2" reaches the go core's hysteria client */
+        const char *pass = entry_get_any(e, "password", "auth");
+        if (!pass || !pass[0]) return -1;
+        s->proto = VL_PROTO_HYSTERIA2;
+        s->security = VL_SEC_TLS;
+        s->net = VL_NET_TCP;
+        snprintf(s->pass, sizeof s->pass, "%s", pass);
+        {
+            const char *sni = entry_get_any(e, "sni", "servername");
+            if (sni && sni[0]) snprintf(s->sni, sizeof s->sni, "%s", sni);
+        }
+        {
+            const char *obfs = entry_get(e, "obfs");
+            if (obfs && obfs[0] && !ci_equal(obfs, "none")) {
+                const char *op = entry_get_any(e, "obfs-password", "obfs_password");
+                snprintf(s->obfs, sizeof s->obfs, "%s", obfs);
+                if (op) snprintf(s->obfs_password, sizeof s->obfs_password, "%s", op);
+            }
+        }
+        {
+/* clash-meta and surge both spell the port hop range "ports"; surge also
+   accepts "mport" */
+            const char *ports = entry_get_any(e, "ports", "mport");
+            if (ports && ports[0])
+                (void)cfg_parse_port_hop(ports, strlen(ports), s->port_hop,
+                                         sizeof s->port_hop, NULL);
+        }
     } else {
-        return -1; /* vmess, ss, trojan and hysteria have no senko transport */
+        return -1; /* vmess has no senko transport */
     }
 
     finish_server(s);

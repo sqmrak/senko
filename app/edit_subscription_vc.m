@@ -107,6 +107,7 @@ static NSString *SenkoHeaderWithHWID(NSString *header, BOOL enabled, BOOL *compa
     UIView *_urlLine;
     UITextField *_headerField;
     UIView *_headerLine;
+    UITextField *_activeField;
 
 }
 
@@ -122,6 +123,7 @@ static NSString *SenkoHeaderWithHWID(NSString *header, BOOL enabled, BOOL *compa
 }
 
 - (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     [_name release];
     [_url release];
     [_header release];
@@ -256,9 +258,14 @@ static NSString *SenkoHeaderWithHWID(NSString *header, BOOL enabled, BOOL *compa
     if (contentW > 620.0f) contentW = 620.0f;
 
     _scroll = [[UIScrollView alloc] initWithFrame:b];
+    SenkoScrollViewUseManualInsets(_scroll);
     _scroll.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     _scroll.backgroundColor = [UIColor clearColor];
     _scroll.alwaysBounceVertical = YES;
+    UITapGestureRecognizer *tap = [[[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(dismissKeyboard)] autorelease];
+    tap.cancelsTouchesInView = NO;
+    [_scroll addGestureRecognizer:tap];
     [self.view addSubview:_scroll];
 
     _plate = [[UIView alloc] initWithFrame:CGRectMake(0, 0, contentW, 410)];
@@ -331,6 +338,15 @@ static NSString *SenkoHeaderWithHWID(NSString *header, BOOL enabled, BOOL *compa
         : [UIColor colorWithWhite:1 alpha:0.28];
     [_plate addSubview:_headerLine];
 
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(keyboardChanged:)
+                                                 name:UIKeyboardWillShowNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(keyboardChanged:)
+                                                 name:UIKeyboardWillHideNotification
+                                               object:nil];
+
     [self layoutEditForm];
 }
 
@@ -364,6 +380,48 @@ static NSString *SenkoHeaderWithHWID(NSString *header, BOOL enabled, BOOL *compa
         [tf resignFirstResponder];
     }
     return YES;
+}
+
+- (void)dismissKeyboard {
+    [self.view endEditing:YES];
+}
+
+- (void)keyboardChanged:(NSNotification *)note {
+    CGFloat keyboard = 0.0f;
+    if ([note.name isEqualToString:UIKeyboardWillShowNotification]) {
+        NSValue *value = [note.userInfo objectForKey:UIKeyboardFrameEndUserInfoKey];
+        CGRect frame = [self.view convertRect:[value CGRectValue] fromView:nil];
+        CGFloat overlap = CGRectGetHeight(self.view.bounds) - CGRectGetMinY(frame);
+        if (overlap > 0.0f) keyboard = overlap;
+    }
+    NSTimeInterval duration = 0.25;
+    UIViewAnimationCurve curve = UIViewAnimationCurveEaseInOut;
+    NSNumber *durNum = [note.userInfo objectForKey:UIKeyboardAnimationDurationUserInfoKey];
+    if (durNum) duration = [durNum doubleValue];
+    NSNumber *curvNum = [note.userInfo objectForKey:UIKeyboardAnimationCurveUserInfoKey];
+    if (curvNum) curve = (UIViewAnimationCurve)[curvNum integerValue];
+
+    [UIView beginAnimations:@"keyboard" context:NULL];
+    [UIView setAnimationDuration:duration];
+    [UIView setAnimationCurve:curve];
+    _scroll.contentInset = UIEdgeInsetsMake(0, 0, keyboard, 0);
+    _scroll.scrollIndicatorInsets = UIEdgeInsetsMake(0, 0, keyboard, 0);
+    [UIView commitAnimations];
+
+    if (keyboard > 0.0f && _activeField) {
+        CGRect r = [_scroll convertRect:_activeField.bounds fromView:_activeField];
+        [_scroll scrollRectToVisible:CGRectInset(r, 0, -20.0f) animated:YES];
+    }
+}
+
+- (void)textFieldDidBeginEditing:(UITextField *)tf {
+    _activeField = tf;
+    CGRect r = [_scroll convertRect:tf.bounds fromView:tf];
+    [_scroll scrollRectToVisible:CGRectInset(r, 0, -20.0f) animated:YES];
+}
+
+- (void)textFieldDidEndEditing:(UITextField *)tf {
+    if (_activeField == tf) _activeField = nil;
 }
 
 @end

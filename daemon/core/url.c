@@ -5,6 +5,7 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 url_status_t url_parse(const char *url, url_t *out) {
     if (!url || !out) return URL_ERR_ARG;
@@ -219,6 +220,12 @@ void url_device_hwid(char *out, size_t cap) {
         fprintf(f, "%s\n", out);
         fclose(f);
     }
+}
+
+void url_device_hwid_reset(char *out, size_t cap) {
+    if (!out || cap < 33) return;
+    (void)unlink(SENKO_HWID_PATH);
+    url_device_hwid(out, cap);
 }
 
 static int header_name_is(const char *header, const char *name) {

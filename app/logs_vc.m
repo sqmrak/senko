@@ -186,16 +186,19 @@ static NSString *SenkoAppCrashSection(void) {
 }
 
 /* springboard writes which status bar it found and whether the vpn badge could
-   be shown without touching the wifi glyph; the app cannot see its log */
-static NSString *SenkoVPNIconSection(void) {
-    NSString *line = [NSString stringWithContentsOfFile:
-                      @"/var/mobile/Library/Preferences/com.senko.vpnicon.status"
-                                               encoding:NSUTF8StringEncoding
-                                                  error:NULL];
-    line = [line stringByTrimmingCharactersInSet:
-            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (![line length]) return @"";
-    return [NSString stringWithFormat:@"[app] status bar: %@\n", line];
+   be shown without touching the wifi glyph; the app cannot see its log.
+   this is an append-only ring now, so the tail can show the sequence that
+   led up to a wifi glyph report, not just the last state */
+static NSString *SenkoStatusSection(void) {
+    NSString *tail = SenkoReadLogTail(
+        @"/var/mobile/Library/Preferences/com.senko.status.log", 8000);
+    if (![tail length]) return @"";
+    NSMutableString *tagged = [NSMutableString string];
+    for (NSString *line in [tail componentsSeparatedByString:@"\n"]) {
+        if (![line length]) continue;
+        [tagged appendFormat:@"[status bar] %@\n", line];
+    }
+    return tagged;
 }
 
 - (void)loadLogs {
@@ -207,7 +210,7 @@ static NSString *SenkoVPNIconSection(void) {
                    SenkoTagLegacyLog(core, @"senkod"),
                    SenkoTagLegacyLog(awg, @"awg")];
     }
-    NSString *crash = [SenkoVPNIconSection()
+    NSString *crash = [SenkoStatusSection()
                        stringByAppendingString:SenkoAppCrashSection()];
     if ([content length] || [crash length]) {
         [self showLogText:[crash stringByAppendingString:content ? content : @""]];
@@ -218,7 +221,7 @@ static NSString *SenkoVPNIconSection(void) {
     _textView.text = SenkoLocalizedText(@"Loading logs...");
     if (!_ctl) _ctl = [[SenkoControl alloc] initWithSocketPath:SENKO_SOCK];
     [_ctl daemonLogTail:^(NSString *text) {
-        [self showLogText:[[SenkoVPNIconSection()
+        [self showLogText:[[SenkoStatusSection()
                             stringByAppendingString:SenkoAppCrashSection()]
                            stringByAppendingString:text ? text : @""]];
     }];

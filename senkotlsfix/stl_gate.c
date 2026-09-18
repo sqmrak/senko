@@ -82,11 +82,6 @@ static int stl_external_tlsfix(void) {
 
 static void stl_gate_init(void) {
     int ios_major = senko_ios_major();
-    if (ios_major == 5) {
-        g_gate_state = -1;
-        stl_log("gate: ios 5 disabled");
-        return;
-    }
     if (ios_major >= 12) {
         /* injecting the legacy shim on ios 12 adds crash surface without fixing TLS */
         g_gate_state = -1;
