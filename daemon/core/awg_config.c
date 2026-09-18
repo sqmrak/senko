@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <openssl/rand.h>
+
 #define AWG_CONFIG_FILE_MAX (64 * 1024)
 
 typedef enum {
@@ -255,11 +257,26 @@ static awg_cfg_status_t assign_peer(awg_config_t *cfg,
         if (copy_span(cfg->allowed_ips, sizeof cfg->allowed_ips, value_start, value_end) != 0)
             goto bad_value;
     } else if (span_equals(key_start, key_end, "PersistentKeepalive")) {
-        /* wg-quick spells a disabled keepalive "off" */
-        if (span_equals(value_start, value_end, "off"))
+        /* wg-quick spells a disabled keepalive "off"; awg 2.0 exporters
+           randomize the interval as a min-max range the same way they do
+           the rekey and reject timers, so senko has to accept one too even
+           though it only ever sends at a single fixed pace once picked */
+        if (span_equals(value_start, value_end, "off")) {
             cfg->persistent_keepalive = 0;
-        else if (parse_u16(value_start, value_end, &cfg->persistent_keepalive) != 0)
-            goto bad_value;
+        } else {
+            uint32_t lo = 0, hi = 0;
+            if (parse_header_range(value_start, value_end, &lo, &hi) != 0 ||
+                hi > UINT16_MAX)
+                goto bad_value;
+            uint32_t span = hi - lo + 1;
+            uint32_t pick = lo;
+            if (span > 1) {
+                uint32_t r;
+                if (RAND_bytes((unsigned char *)&r, sizeof r) != 1) goto bad_value;
+                pick = lo + r % span;
+            }
+            cfg->persistent_keepalive = (uint16_t)pick;
+        }
     }
     return AWG_CFG_OK;
 

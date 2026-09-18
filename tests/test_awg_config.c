@@ -165,6 +165,18 @@ int main(void) {
         "[Peer]\nPublicKey = " K_PUB "\nEndpoint = 127.0.0.1:51820\n";
     bad |= expect_status(trailers_off, AWG_CFG_OK, "inert awg 2.0 knobs");
 
+    /* real exporters randomize the keepalive the same way they randomize
+       the junk and rekey timers, and a real profile with a huge split
+       tunnel list must not be truncated into an unparsable peer value */
+    static const char keepalive_range[] =
+        "[Interface]\nPrivateKey = " K_PRIV "\nAddress = 10.0.0.2/32\n"
+        "[Peer]\nPublicKey = " K_PUB "\nEndpoint = 127.0.0.1:51820\n"
+        "PersistentKeepalive = 25-35\n";
+    r = parse(keepalive_range, &cfg, reason, sizeof reason);
+    bad |= expect(r == AWG_CFG_OK, "persistent keepalive range parses");
+    bad |= expect(cfg.persistent_keepalive >= 25 && cfg.persistent_keepalive <= 35,
+                  "persistent keepalive lands inside its range");
+
     r = awg_config_load_file("../../warp.conf", &cfg, reason, sizeof reason);
     if (r == AWG_CFG_OK) {
         bad |= expect(strcmp(cfg.endpoint_host, "162.159.192.1") == 0 && cfg.endpoint_port == 500,
