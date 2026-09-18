@@ -2,9 +2,13 @@
 
 > [!WARNING]
 > Jailbreak is strictly required.
+> Senko needs it to route traffic for the whole device. It cannot work like a
+> normal App Store app.
 
 > [!NOTE]
 > but not for all devivces...
+> Some devices and ios versions are not supported. Check the device, ios
+> version and jailbreak before installing.
 
 <p align="center">
   <img src="assets/senko-readme.png" width="420" alt="senko">
