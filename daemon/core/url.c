@@ -253,6 +253,7 @@ url_status_t url_build_get_cookie_header(const url_t *u, const char *cookie,
     int custom_accept = header_name_is(hdr, "Accept");
     int custom_cookie = header_name_is(hdr, "Cookie");
     int custom_hwid = header_name_is(hdr, "x-hwid") || header_name_is(hdr, "X-HWID");
+    int custom_encoding = header_name_is(hdr, "Accept-Encoding");
     size_t off = 0;
     int n = strchr(u->host, ':') ?
         snprintf(buf + off, cap - off, "GET %s HTTP/1.0\r\nHost: [%s]",
@@ -289,6 +290,14 @@ url_status_t url_build_get_cookie_header(const url_t *u, const char *cookie,
     }
     if (!custom_accept) {
         n = snprintf(buf + off, cap - off, "Accept: */*\r\n");
+        if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
+        off += (size_t)n;
+    }
+    if (!custom_encoding) {
+        /* subfetch only unpacks gzip; some cdns default to zstd or br for
+           text bodies when a client sends no preference at all, and senko
+           would otherwise hand the parser undecodable compressed bytes */
+        n = snprintf(buf + off, cap - off, "Accept-Encoding: identity\r\n");
         if (n < 0 || (size_t)n >= cap - off) return URL_ERR_TOOLONG;
         off += (size_t)n;
     }
