@@ -968,14 +968,28 @@ static int subfetch_dial_direct(const char *host, uint16_t port) {
     return fd;
 }
 
+/* a selected server that is up enough to accept a local socks5 handshake but
+   then drops the upstream session mid-fetch never trips the fd<0 fallback
+   below: the dial itself looked fine, the failure only shows up later, deep
+   inside subfetch's own read loop. force_direct lets daemon_ctl_fetch retry
+   the whole fetch bypassing the tunnel once that happens, instead of leaving
+   a dead server able to block every subscription refresh along with it */
+typedef struct {
+    void *real_ctx;
+    int force_direct;
+} fetch_dial_ctx_t;
+
 static int subfetch_dial(void *ctx, const char *host, uint16_t port) {
-    daemon_ctl_t *d = (daemon_ctl_t *)ctx;
-    if (d && d->full_device && d->c_backend.active && d->loop) {
-        uint16_t sp = loop_listen_port(d->loop);
-        if (sp) {
-            long deadline = probe_now_ms() + 8000;
-            int fd = socks5_dial_via_loop(d, sp, host, port, deadline, NULL);
-            if (fd >= 0) return fd;
+    const fetch_dial_ctx_t *w = (const fetch_dial_ctx_t *)ctx;
+    daemon_ctl_t *d = w ? (daemon_ctl_t *)w->real_ctx : NULL;
+    if (!w || !w->force_direct) {
+        if (d && d->full_device && d->c_backend.active && d->loop) {
+            uint16_t sp = loop_listen_port(d->loop);
+            if (sp) {
+                long deadline = probe_now_ms() + 8000;
+                int fd = socks5_dial_via_loop(d, sp, host, port, deadline, NULL);
+                if (fd >= 0) return fd;
+            }
         }
     }
     return subfetch_dial_direct(host, port);
@@ -985,10 +999,11 @@ int daemon_ctl_fetch(void *ctx, const char *url,
                      const char *request_header,
                      unsigned char *buf, size_t cap, size_t *len,
                      ctl_fetch_meta_t *meta) {
+    fetch_dial_ctx_t dial_ctx = { ctx, 0 };
     subfetch_cfg_t cfg;
     memset(&cfg, 0, sizeof cfg);
     cfg.dial = subfetch_dial;
-    cfg.dial_ctx = ctx;
+    cfg.dial_ctx = &dial_ctx;
     cfg.pump = subfetch_pump_loop;
     cfg.pump_ctx = ctx;
     cfg.tcp = &transport_tcp;
@@ -998,6 +1013,16 @@ int daemon_ctl_fetch(void *ctx, const char *url,
 
     subfetch_info_t info;
     subfetch_status_t r = subfetch_get_info(&cfg, url, buf, cap, len, 15000, &info);
+/* the selected server dying mid-fetch and a genuinely unreachable url look
+   identical here (dial/transport failure), so retry once bypassing the
+   tunnel before giving up: a dead server must not also block every
+   subscription refresh that could otherwise replace it */
+    if ((r == SUBFETCH_ERR_DIAL || r == SUBFETCH_ERR_TRANSPORT) &&
+        !dial_ctx.force_direct) {
+        dial_ctx.force_direct = 1;
+        fprintf(stderr, "senkod: subfetch retrying direct, bypassing the tunnel\n");
+        r = subfetch_get_info(&cfg, url, buf, cap, len, 15000, &info);
+    }
     if (r != SUBFETCH_OK) {
         const char *why = "unknown";
         switch (r) {
