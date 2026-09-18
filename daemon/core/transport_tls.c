@@ -31,6 +31,15 @@ static void *tls_open(int fd, const transport_tls_cfg_t *cfg) {
     SSL_CTX_set_min_proto_version(h->ctx, TLS1_2_VERSION);
     SSL_CTX_set_max_proto_version(h->ctx, TLS1_3_VERSION);
 
+/* a bare ClientHello with no alpn and openssl's own suite/group order is a
+   free dpi fingerprint for "not a browser"; match what chrome actually sends
+   without touching certificate validation */
+    static const unsigned char alpn[] = "\x02h2\x08http/1.1";
+    SSL_CTX_set_alpn_protos(h->ctx, alpn, sizeof alpn - 1);
+    SSL_CTX_set_ciphersuites(h->ctx,
+        "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256");
+    SSL_CTX_set1_groups_list(h->ctx, "X25519:P-256:P-384");
+
     int reality = (cfg && cfg->reality_pbk && cfg->reality_pbk[0]);
     if (reality || (cfg && cfg->insecure)) {
         SSL_CTX_set_verify(h->ctx, SSL_VERIFY_NONE, NULL);
