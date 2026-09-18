@@ -36,6 +36,52 @@
 #define CT_HANDSHAKE   22
 #define CT_APPDATA     23
 
+/* rfc 8446 section b.2: the wire code is the only clue a fronted server ever
+   gives for why it closed on us, and "proto (-3)" alone cannot tell a tester
+   unrecognized_name from handshake_failure from a plain protocol_version
+   mismatch */
+static const char *tls_alert_description(uint8_t desc) {
+    switch (desc) {
+        case 0:   return "close_notify";
+        case 10:  return "unexpected_message";
+        case 20:  return "bad_record_mac";
+        case 22:  return "record_overflow";
+        case 40:  return "handshake_failure";
+        case 42:  return "bad_certificate";
+        case 43:  return "unsupported_certificate";
+        case 44:  return "certificate_revoked";
+        case 45:  return "certificate_expired";
+        case 46:  return "certificate_unknown";
+        case 47:  return "illegal_parameter";
+        case 48:  return "unknown_ca";
+        case 49:  return "access_denied";
+        case 50:  return "decode_error";
+        case 51:  return "decrypt_error";
+        case 70:  return "protocol_version";
+        case 71:  return "insufficient_security";
+        case 80:  return "internal_error";
+        case 86:  return "inappropriate_fallback";
+        case 90:  return "user_canceled";
+        case 109: return "missing_extension";
+        case 110: return "unsupported_extension";
+        case 112: return "unrecognized_name";
+        case 113: return "bad_certificate_status_response";
+        case 115: return "unknown_psk_identity";
+        case 116: return "certificate_required";
+        case 120: return "no_application_protocol";
+        default:  return "unknown";
+    }
+}
+
+static void log_tls_alert(const char *where, const uint8_t *body, size_t len) {
+    if (len < 2) {
+        fprintf(stderr, "senkod: REALITY %s: truncated alert (%zu bytes)\n", where, len);
+        return;
+    }
+    fprintf(stderr, "senkod: REALITY %s: alert level=%u %s (%u)\n",
+            where, body[0], tls_alert_description(body[1]), body[1]);
+}
+
 #define HS_SERVER_HELLO        2
 #define HS_NEW_SESSION_TICKET  4
 #define HS_ENCRYPTED_EXTS      8
@@ -185,7 +231,10 @@ static int flight_fill(flight_t *f) {
         size_t rlen;
         if (read_record(f->fd, &type, rec, sizeof rec, &rlen, NULL) != 0) return -1;
         if (type == CT_CCS) continue; /* middlebox-compat, ignore */
-        if (type == CT_ALERT) return -1;
+        if (type == CT_ALERT) {
+            log_tls_alert("plaintext alert during server flight", rec, rlen);
+            return -1;
+        }
         if (type != CT_APPDATA) return -1; /* expected encrypted record */
 
         uint8_t plain[MAX_RECORD]; size_t plen = 0; uint8_t inner = 0;
@@ -198,7 +247,10 @@ static int flight_fill(flight_t *f) {
                                                   plain, sizeof plain, &plen, &inner);
         if (rs != TLS13_REC_OK) return -2;
         f->seq++;
-        if (inner == CT_ALERT) return -1;
+        if (inner == CT_ALERT) {
+            log_tls_alert("encrypted alert during server flight", plain, plen);
+            return -1;
+        }
         if (inner != CT_HANDSHAKE) continue; /* ignore non-handshake */
         if (f->len + plen > sizeof f->buf) return -1;
         memcpy(f->buf + f->len, plain, plen);
@@ -321,6 +373,7 @@ void *reality_handshake_open(int fd, const rh_params_t *p, rh_status_t *err) {
     do {
         if (read_record(fd, &shtype, shrec, sizeof shrec, &shlen, NULL) != 0) FAIL(RH_ERR_IO);
     } while (shtype == CT_CCS);
+    if (shtype == CT_ALERT) log_tls_alert("ServerHello read", shrec, shlen);
     if (shtype != CT_HANDSHAKE) FAIL(RH_ERR_PROTO);
 
     stage = "ServerHello parse";
@@ -687,7 +740,10 @@ static int rh_read(void *handle, uint8_t *buf, size_t len) {
         int rr = nb_next_record(c, &type, rec, sizeof rec, &rlen);
         if (rr != 0) return rr;
         if (type == CT_CCS) continue;
-        if (type == CT_ALERT) return TRANSPORT_EOF;
+        if (type == CT_ALERT) {
+            log_tls_alert("plaintext alert during data transfer", rec, rlen);
+            return TRANSPORT_EOF;
+        }
         if (type != CT_APPDATA) return TRANSPORT_ERR;
 
 /* use the consumed wire header as aead aad */
@@ -709,7 +765,10 @@ static int rh_read(void *handle, uint8_t *buf, size_t len) {
             return TRANSPORT_ERR;
         }
         c->s_app_seq++;
-        if (inner == CT_ALERT) return TRANSPORT_EOF;
+        if (inner == CT_ALERT) {
+            log_tls_alert("encrypted alert during data transfer", c->rxbuf, plen);
+            return TRANSPORT_EOF;
+        }
         if (inner == CT_HANDSHAKE) {
             if (rh_handle_post_hs(c, c->rxbuf, plen) != 0)
                 return TRANSPORT_ERR;
