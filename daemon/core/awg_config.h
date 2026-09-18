@@ -26,7 +26,10 @@ typedef struct {
 
     char endpoint_host[256];
     uint16_t endpoint_port;
-    char allowed_ips[512];
+    /* real providers ship full-tunnel profiles with hundreds of split CIDRs
+       in one line; 512 bytes truncated actual exports as "invalid peer
+       value" long before the field was ever large enough to matter */
+    char allowed_ips[8192];
     uint16_t mtu;
     uint16_t persistent_keepalive;
 

@@ -452,7 +452,21 @@ void *reality_handshake_open(int fd, const rh_params_t *p, rh_status_t *err) {
     return c;
 
 fail:
-    fprintf(stderr, "senkod: REALITY %s failed (%s)\n", stage, rh_status_name(e));
+    /* the sealed session id carries this device's clock, and a fronted
+       server that finds it too far off its own quietly falls back to the
+       camouflage site instead of ever presenting its real certificate;
+       printing the wall clock here makes a stuck rtc battery obvious
+       without sending anyone into settings to check it by hand */
+    {
+        time_t now = time(NULL);
+        char stamp[32];
+        struct tm tm_buf;
+        if (gmtime_r(&now, &tm_buf) && strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M:%S", &tm_buf))
+            fprintf(stderr, "senkod: REALITY %s failed (%s) at device clock %s UTC\n",
+                    stage, rh_status_name(e), stamp);
+        else
+            fprintf(stderr, "senkod: REALITY %s failed (%s)\n", stage, rh_status_name(e));
+    }
     if (tr.ctx) tls13_transcript_free(&tr);
     if (c) free(c);
     if (err) *err = e;
