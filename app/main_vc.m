@@ -2,17 +2,21 @@
 #import "crash_report.h"
 
 #import <fcntl.h>
+#import <unistd.h>
 
-/* the injected status bar badge is retired: it never earned its keep against
-   an outright wrong build gate (it ran on the jailbreak build, which has no
-   other vpn indicator, and skipped the stock build, which actually needed
-   it). writing the marker senkostatus already understands turns it off for
-   both without touching the substrate hook itself */
+/* the stock build gets apple's own vpn glyph from NEVPNManager, so the
+   injected badge would only duplicate it there. the jailbreak build has no
+   other vpn indicator, so it keeps the badge; clear the marker on launch in
+   case an older build (or the user's own toggle) left it turned off */
 static void SenkoDisableInjectedStatusBadge(void) {
+#if SENKO_STOCK_NATIVE
     int fd = open(SENKO_VPN_BADGE_OFF_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) return;
     (void)write(fd, "removed\n", 8);
     close(fd);
+#else
+    unlink(SENKO_VPN_BADGE_OFF_PATH);
+#endif
 }
 
 @implementation MainVC
