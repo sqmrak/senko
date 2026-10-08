@@ -45,7 +45,6 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"Compatibility", @"Совместимость");
     SenkoAddTranslation(@"Token-authenticated control socket · subscription SSRF protection · secret redaction · real transport checks.", @"Control socket с токеном · защита подписок от SSRF · скрытие секретов в логах · настоящая проверка транспорта.");
     SenkoAddTranslation(@"Links", @"Ссылки");
-    SenkoAddTranslation(@"Sponsor", @"Спонсор");
     SenkoAddTranslation(@"Credits", @"Благодарности");
     SenkoAddTranslation(@"Special thanks", @"Особая благодарность");
     SenkoAddTranslation(@"Sponsors", @"Спонсоры");
@@ -388,8 +387,6 @@ static void SenkoBuildTranslations(void) {
                         @"Бандл Happ crypt5 на этой странице не открылся: он либо повреждён, либо запечатан ключом, которого нет в этой сборке.");
     SenkoAddTranslation(@"This address opens a web page instead of a subscription feed. Copy the subscription link the page offers, not the page address.",
                         @"По этому адресу открывается веб-страница, а не подписка. Скопируйте ссылку на подписку, которую предлагает страница, а не адрес самой страницы.");
-    SenkoAddTranslation(@"Copy link", @"Копировать ссылку");
-    SenkoAddTranslation(@"Copied", @"Скопировано");
     SenkoAddTranslation(@"Senko failed to start %d times and is running with "
                          "the stock theme. The report is in Logs.",
                         @"Senko не смог запуститься %d раза и работает со "
@@ -744,7 +741,6 @@ static void SenkoBuildTranslations(void) {
     SenkoAddChineseTranslation(@"Compatibility", @"兼容性");
     SenkoAddChineseTranslation(@"Token-authenticated control socket · subscription SSRF protection · secret redaction · real transport checks.", @"带令牌认证的控制 socket · 防止订阅 SSRF · 日志隐藏密钥 · 真实传输检查。");
     SenkoAddChineseTranslation(@"Links", @"链接");
-    SenkoAddChineseTranslation(@"Sponsor", @"赞助商");
     SenkoAddChineseTranslation(@"Credits", @"致谢");
     SenkoAddChineseTranslation(@"Special thanks", @"特别感谢");
     SenkoAddChineseTranslation(@"Sponsors", @"赞助者");
@@ -778,8 +774,6 @@ static void SenkoBuildTranslations(void) {
     SenkoAddChineseTranslation(@"Remove", @"移除");
     SenkoAddChineseTranslation(@"Edit", @"编辑");
     SenkoAddChineseTranslation(@"Copy", @"复制");
-    SenkoAddChineseTranslation(@"Copied", @"已复制");
-    SenkoAddChineseTranslation(@"Copy link", @"复制链接");
     SenkoAddChineseTranslation(@"Done", @"完成");
     SenkoAddChineseTranslation(@"Complete", @"完成");
     SenkoAddChineseTranslation(@"Refresh", @"刷新");

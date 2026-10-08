@@ -57,12 +57,6 @@ static NSString *AboutSlice(void) {
 #endif
 }
 
-static NSString *AboutSponsorPromo(void) {
-    if (SenkoLanguageIsChinese()) return @"优惠码 SENKO 可享 15% 折扣";
-    if (SenkoLanguageIsRussian()) return @"промокод SENKO даёт скидку 15%";
-    return @"promo code SENKO takes 15% off";
-}
-
 static UIFont *AboutTitleFont(void) { return SenkoFontBody(16.0f, NO); }
 static UIFont *AboutValueFont(void) { return SenkoFontBody(14.0f, NO); }
 
@@ -261,7 +255,6 @@ static UILabel *AboutHeroLabel(UIView *host, UIFont *font) {
     SenkoAboutHero *_hero;
     SenkoBoykisserField *_field;
     NSArray *_sections;
-    BOOL _copied;
 }
 
 - (void)viewDidLoad {
@@ -340,19 +333,6 @@ static UILabel *AboutHeroLabel(UIView *host, UIFont *font) {
         [withFace setObject:face forKey:kAboutImage];
         developer = withFace;
     }
-    NSDictionary *copy = [self row:_copied ? @"Copied" : @"Copy link"
-                             value:nil glyph:nil action:@selector(sponsorCopyPressed)];
-    NSMutableDictionary *copyRow = [[copy mutableCopy] autorelease];
-    [copyRow setObject:SenkoIconCopy(24.0f, kInk) forKey:kAboutImage];
-
-    NSDictionary *sponsor = [self row:@"Sponsor" value:SenkoSponsorURL()
-                                glyph:@"glyph-rocket.png" action:@selector(sponsorPressed)];
-    NSMutableDictionary *sponsorRow = [[sponsor mutableCopy] autorelease];
-    [sponsorRow setObject:@"2xvpn.shop" forKey:kAboutTitle];
-    [sponsorRow setObject:[NSString stringWithFormat:@"%@\n%@",
-                           AboutSponsorPromo(), SenkoSponsorURL()]
-                   forKey:kAboutValue];
-
     NSArray *sections = [NSArray arrayWithObjects:
         [NSDictionary dictionaryWithObjectsAndKeys:
             SenkoLocalizedText(@"Device"), kAboutTitle,
@@ -391,9 +371,6 @@ static UILabel *AboutHeroLabel(UIView *host, UIFont *font) {
                 [self row:@"Telegram" value:@"t.me/sqmrakdev"
                     glyph:@"glyph-globe.png" action:@selector(telegramPressed)],
                 nil], kAboutValue, nil],
-        [NSDictionary dictionaryWithObjectsAndKeys:
-            SenkoLocalizedText(@"Sponsor"), kAboutTitle,
-            [NSArray arrayWithObjects:sponsorRow, copyRow, nil], kAboutValue, nil],
         [NSDictionary dictionaryWithObjectsAndKeys:
             SenkoLocalizedText(@"Credits"), kAboutTitle,
             [NSArray arrayWithObjects:
@@ -586,27 +563,6 @@ static UILabel *AboutHeroLabel(UIView *host, UIFont *font) {
     cancelButtonTitle:@"OK"
     otherButtonTitles:nil] autorelease];
     [done show];
-}
-
-/* old safari cannot open the shop; the address is shown in full and copyable */
-- (void)sponsorPressed {
-    NSURL *url = [NSURL URLWithString:SenkoSponsorURL()];
-    if (url) [[UIApplication sharedApplication] openURL:url];
-}
-
-- (void)sponsorCopyPressed {
-    [[UIPasteboard generalPasteboard] setString:SenkoSponsorURL()];
-    _copied = YES;
-    [self rebuildRows];
-    [NSObject cancelPreviousPerformRequestsWithTarget:self
-                                             selector:@selector(clearCopied)
-                                               object:nil];
-    [self performSelector:@selector(clearCopied) withObject:nil afterDelay:1.6];
-}
-
-- (void)clearCopied {
-    _copied = NO;
-    [self rebuildRows];
 }
 
 - (void)githubPressed {

@@ -61,10 +61,6 @@ static BOOL SenkoLegacyTlsfixRequired(void) {
     return major > 0 && major < 12;
 }
 
-NSString *SenkoSponsorURL(void) {
-    return @"https://2xvpn.shop/dashboard/buy?promo=SENKO";
-}
-
 /* five taps is the established gesture for a hidden screen, and nothing else in
    this app reacts to a repeated tap, so it cannot shadow a real control */
 #define SENKO_DEV_MENU_TAPS 5
