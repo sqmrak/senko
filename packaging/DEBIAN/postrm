@@ -76,8 +76,15 @@ case "$1" in
     # the app keeps running from memory once its bundle is deleted
     "$KILLALL" -9 senko >/dev/null 2>&1 || true
     if [ "${SENKO_SKIP_RESPRING:-0}" != "1" ]; then
-      ( sleep 2; "$KILLALL" -9 SpringBoard backboardd >/dev/null 2>&1 || true ) \
-        </dev/null >/dev/null 2>&1 &
+      # darwin 20 is ios 14, where killing backboardd reboots userspace and a jailbreak of
+      # that range does not survive it (see the tail of postinst)
+      darwin="$(uname -r 2>/dev/null | sed -n 's/^\([0-9][0-9]*\)\..*/\1/p')"
+      if [ "${darwin:-0}" -ge 20 ] 2>/dev/null; then
+        ( sleep 2; "$KILLALL" -9 SpringBoard >/dev/null 2>&1 || true ) </dev/null >/dev/null 2>&1 &
+      else
+        ( sleep 2; "$KILLALL" -9 SpringBoard backboardd >/dev/null 2>&1 || true ) \
+          </dev/null >/dev/null 2>&1 &
+      fi
     fi
     ;;
 esac

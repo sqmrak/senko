@@ -227,40 +227,95 @@ launchd_stop() {
   return 1
 }
 
+postinst_log() {
+  echo "postinst: $*" >> /var/log/senko-system.log 2>/dev/null
+}
+
+# each line of stdin goes to the log under a label, so one failed start is readable in the
+# app's log screen without a shell
+postinst_log_lines() {
+  label=$1
+  while IFS= read -r line; do
+    postinst_log "diag $label: $line"
+  done
+}
+
+# senkod prints its usage and exits 2 when it gets no arguments, so running it that way
+# shows whether the system lets the binary start at all: a kill by the code signature
+# check shows as status 137, a missing library as dyld text
+probe_senkod_exec() {
+  path=$1
+  [ -e "$path" ] || { postinst_log "diag exec $path: missing"; return 0; }
+  reply="$("$path" 2>&1)"
+  status=$?
+  postinst_log "diag exec $path: status $status, $(printf '%s' "$reply" | sed -n '1p')"
+}
+
+# a launchd that lists senkod while the log stays empty never ran main(): the first line
+# senkod writes comes before anything that can fail. this records the facts that tell the
+# causes apart, none of them needs a shell on the device
+diagnose_senkod() {
+  postinst_log "diag system: $(uname -a 2>/dev/null)"
+  postinst_log "diag cpu: $(sysctl -n hw.machine 2>/dev/null) subtype $(sysctl -n hw.cpusubtype 2>/dev/null)"
+  postinst_log "diag files: $(ls -ld /usr/bin/senkod "${PAYLOAD_ROOT}/usr/bin/senkod" 2>&1 | tr '\n' ';')"
+  "$LAUNCHCTL" list com.senko.senkod 2>&1 | postinst_log_lines launchctl
+  probe_senkod_exec "${PAYLOAD_ROOT}/usr/bin/senkod"
+  [ -z "$JBROOT" ] && probe_senkod_exec /usr/bin/senkod
+  count=0
+  for report in /var/mobile/Library/Logs/CrashReporter/senkod* /var/mobile/Library/Logs/CrashReporter/Retired/senkod*; do
+    [ -e "$report" ] || continue
+    postinst_log "diag crash report: $report"
+    count=$((count + 1))
+    [ "$count" -lt 3 ] || break
+  done
+}
+
+# senkoctl exits non-zero for "STATE error", which is still an answer: a saved tunnel
+# that failed to restore left every install half-configured
+senkod_answers() {
+  attempt=0
+  while [ "$attempt" -lt 8 ]; do
+    reply="$("${PAYLOAD_ROOT}/usr/bin/senkoctl" status 2>/dev/null)"
+    case "$reply" in
+      *"STATE "*) return 0 ;;
+    esac
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 8 ] && sleep 1
+  done
+  return 1
+}
+
+launchd_load_and_kick() {
+  "$LAUNCHCTL" bootstrap system "$PLIST" >/dev/null 2>&1
+  launchd_loaded || "$LAUNCHCTL" load -w "$PLIST" >/dev/null 2>&1
+  launchd_loaded || "$LAUNCHCTL" load "$PLIST" >/dev/null 2>&1
+  launchd_loaded || return 1
+  "$LAUNCHCTL" enable system/com.senko.senkod >/dev/null 2>&1 || true
+  "$LAUNCHCTL" kickstart -k system/com.senko.senkod >/dev/null 2>&1 || \
+    "$LAUNCHCTL" start com.senko.senkod >/dev/null 2>&1 || true
+  return 0
+}
+
 launchd_start() {
   if [ ! -x "$LAUNCHCTL" ]; then
     echo "senko: no launchctl found, senkod was not started" >&2
     return 1
   fi
-  "$LAUNCHCTL" bootstrap system "$PLIST" >/dev/null 2>&1
-  launchd_loaded || "$LAUNCHCTL" load -w "$PLIST" >/dev/null 2>&1
-  launchd_loaded || "$LAUNCHCTL" load "$PLIST" >/dev/null 2>&1
-  if ! launchd_loaded; then
+  if ! launchd_load_and_kick; then
     echo "senko: launchd did not load ${PLIST}, senkod is not running" >&2
-    echo "postinst: launchd did not load ${PLIST}" >> /var/log/senko-system.log 2>/dev/null
+    postinst_log "launchd did not load ${PLIST}"
     return 1
   fi
   # the app shows this log, so a tester can see the step without a shell
-  echo "postinst: launchd holds com.senko.senkod" >> /var/log/senko-system.log 2>/dev/null
-  "$LAUNCHCTL" enable system/com.senko.senkod >/dev/null 2>&1 || true
-  "$LAUNCHCTL" kickstart -k system/com.senko.senkod >/dev/null 2>&1 || \
-    "$LAUNCHCTL" start com.senko.senkod >/dev/null 2>&1 || true
+  postinst_log "launchd holds com.senko.senkod"
   # launchctl can list a job whose process exits before it opens the socket
-  attempt=0
-  while [ "$attempt" -lt 8 ]; do
-    # senkoctl exits non-zero for "STATE error", which is still an answer: a
-    # saved tunnel that failed to restore left every install half-configured
-    reply="$("${PAYLOAD_ROOT}/usr/bin/senkoctl" status 2>/dev/null)"
-    case "$reply" in
-      *"STATE "*)
-        echo "postinst: senkod answered STATUS" >> /var/log/senko-system.log 2>/dev/null
-        return 0 ;;
-    esac
-    attempt=$((attempt + 1))
-    [ "$attempt" -lt 8 ] && sleep 1
-  done
-  echo "postinst: senkod did not answer STATUS after launchd load" >> /var/log/senko-system.log 2>/dev/null
-  return 1
+  if senkod_answers; then
+    postinst_log "senkod answered STATUS"
+    return 0
+  fi
+  postinst_log "senkod did not answer STATUS after launchd load"
+  diagnose_senkod
+  return 2
 }
 
 tlsfix_installed() {
@@ -474,10 +529,18 @@ if [ "${SENKO_UPDATE:-0}" != "1" ]; then
   rm -f /var/tmp/senkod.sock /var/tmp/senkod.token
 
   # senkod brings a recorded amneziawg profile back by itself
-  launchd_start || {
-    echo "senko: senkod was not loaded by launchd; see /var/log/senko-system.log" >&2
-    exit 1
-  }
+  # 2 is a job launchd holds that has not answered yet. KeepAlive starts it again, so
+  # the package is installed and the app and the log say what is missing; failing here left
+  # dpkg half-configured on a taurine ios 14 install, which blocks every later install
+  launchd_start
+  case $? in
+    0) ;;
+    2) echo "senko: senkod is loaded but did not answer yet; see /var/log/senko-system.log" >&2 ;;
+    *)
+      echo "senko: senkod was not loaded by launchd; see /var/log/senko-system.log" >&2
+      exit 1
+      ;;
+  esac
 fi
 
 echo "Senko installed successfully. control socket: /var/tmp/senkod.sock"
@@ -496,14 +559,28 @@ refresh_app_cache() {
   "$UICACHE" -p "$APP" || "$UICACHE"
 }
 
-# backgrounding avoids an ios 6 uicache deadlock while the old app is alive
-( refresh_app_cache >/dev/null 2>&1 || true ) </dev/null &
+# a tester on taurine (ios 14) lost userland to the watchdog while dpkg configured
+# this package, and two things in the old tail were suspect there (not confirmed on a
+# device): uicache ran in the background and the respring cut it off two seconds later,
+# and backboardd was killed with SIGKILL, which makes launchd reboot userspace, which a
+# jailbreak of that range does not survive. from ios 12 uicache finishes first, and from
+# ios 14 only SpringBoard is restarted
+if [ "$IOS_MAJOR" -ge 12 ] 2>/dev/null; then
+  refresh_app_cache >/dev/null 2>&1 </dev/null || true
+else
+  # backgrounding avoids an ios 6 uicache deadlock while the old app is alive
+  ( refresh_app_cache >/dev/null 2>&1 || true ) </dev/null &
+fi
 
 if [ "${SENKO_SKIP_RESPRING:-0}" = "1" ]; then
   exit 0
 fi
 
 # delaying respring lets dpkg record the configured state first
-( sleep 2; "$KILLALL" -9 SpringBoard backboardd >/dev/null 2>&1 || true ) </dev/null >/dev/null 2>&1 &
+if [ "$IOS_MAJOR" -ge 14 ] 2>/dev/null; then
+  ( sleep 2; "$KILLALL" -9 SpringBoard >/dev/null 2>&1 || true ) </dev/null >/dev/null 2>&1 &
+else
+  ( sleep 2; "$KILLALL" -9 SpringBoard backboardd >/dev/null 2>&1 || true ) </dev/null >/dev/null 2>&1 &
+fi
 
 exit 0
