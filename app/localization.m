@@ -544,10 +544,6 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"Dark / Light applies to the selected style. Choice is stored on device.", @"Тёмная или светлая тема зависит от выбранного стиля. Выбор сохраняется на устройстве");
     SenkoAddTranslation(@"Play a short ouch on every button tap.", @"Проигрывать короткий ouch при каждом нажатии");
     SenkoAddTranslation(@"Play a short meow on every button tap.", @"Проигрывать короткий meow при каждом нажатии");
-    SenkoAddTranslation(@"Senko-Miside is Dark only: pattern wallpaper and candy heart ON.", @"Senko-Miside только тёмная: узор на обоях и конфетное сердце включены");
-    SenkoAddTranslation(@"Senko-Boykisser: pink paper or rose ink, with falling boykissers on the home screen.",
-                        @"Senko-Boykisser: розовая бумага или тёмно-розовые чернила, с падающими boykisser на главном экране.");
-    SenkoAddTranslation(@"Senko-Aero is Light only: sky wallpaper and floating gloss bubbles.", @"Senko-Aero только светлая: обои с небом и парящие глянцевые пузыри");
     SenkoAddTranslation(@"the legacy theme for the legacy community", @"для выживших на iOS 6 :D");
     SenkoAddTranslation(@"flat and transparent", @"эстетика 2013 года");
     SenkoAddTranslation(@"meeeeeow :3", @"самая фембойская тема");
@@ -836,9 +832,6 @@ static void SenkoBuildTranslations(void) {
     SenkoAddChineseTranslation(@"Custom", @"自定义");
     SenkoAddChineseTranslation(@"Appearance", @"外观");
     SenkoAddChineseTranslation(@"Dark / Light applies to the selected style. Choice is stored on device.", @"深色和浅色模式应用于所选风格。设置保存在设备上。");
-    SenkoAddChineseTranslation(@"Senko-Miside is Dark only: pattern wallpaper and candy heart ON.", @"Senko-Miside 仅支持深色模式：图案壁纸和糖果心形按钮。");
-    SenkoAddChineseTranslation(@"Senko-Boykisser: pink paper or rose ink, with falling boykissers on the home screen.", @"Senko-Boykisser：粉色纸张或玫瑰色墨迹，主屏幕上有飘落的图案。");
-    SenkoAddChineseTranslation(@"Senko-Aero is Light only: sky wallpaper and floating gloss bubbles.", @"Senko-Aero 仅支持浅色模式：天空壁纸和漂浮的光泽气泡。");
     SenkoAddChineseTranslation(@"Play a short ouch on every button tap.", @"每次点击按钮时播放短音效。");
     SenkoAddChineseTranslation(@"Play a short meow on every button tap.", @"每次点击按钮时播放短猫叫声。");
     SenkoAddChineseTranslation(@"Dark", @"深色");

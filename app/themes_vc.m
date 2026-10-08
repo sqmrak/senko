@@ -472,14 +472,7 @@
         lab.numberOfLines = 0;
         lab.textAlignment = NSTextAlignmentCenter;
         lab.font = [UIFont systemFontOfSize:12];
-        if (SenkoThemeIsMiside())
-            lab.text = SenkoLocalizedText(@"Senko-Miside is Dark only: pattern wallpaper and candy heart ON.");
-        else if (SenkoThemeIsBoykisser())
-            lab.text = SenkoLocalizedText(@"Senko-Boykisser: pink paper or rose ink, with falling boykissers on the home screen.");
-        else if (SenkoThemeIsFrutigeraero())
-            lab.text = SenkoLocalizedText(@"Senko-Aero is Light only: sky wallpaper and floating gloss bubbles.");
-        else
-            lab.text = SenkoLocalizedText(@"Dark / Light applies to the selected style. Choice is stored on device.");
+        lab.text = SenkoLocalizedText(@"Dark / Light applies to the selected style. Choice is stored on device.");
         SenkoStyleMutedLabel(lab);
         lab.autoresizingMask = UIViewAutoresizingFlexibleWidth;
         [wrap addSubview:lab];
