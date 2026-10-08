@@ -33,8 +33,9 @@ typedef enum {
     VL_PROTO_HTTPS,
     VL_PROTO_TROJAN,
     VL_PROTO_SHADOWSOCKS,
-/* quic only: no senko transport carries it, senko-core's own hysteria client
-   does. see transport_for_server and daemon_ctl_apply's CTL_ACT_START */
+/* quic only: no tcp transport carries it. senko-core runs it on ios 12 and
+   later, and the utun backend dials it through daemon/hy2_engine.c everywhere
+   else. see daemon_ctl_apply's CTL_ACT_START */
     VL_PROTO_HYSTERIA2,
 /* a feed entry senko cannot run (vmess, tuic, a bad field), kept as a named row
    so the list shows everything the panel sent. never dialed */

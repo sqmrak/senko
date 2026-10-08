@@ -4,8 +4,8 @@
 const transport_vt_t *transport_for_server(const vl_server_t *s) {
     if (!s) return NULL;
 
-/* quic/udp only. senko-core dials it with its own bundled hysteria
-   client; no senko transport speaks this wire format */
+/* quic/udp only, so no tcp transport exists for it. the utun backend picks
+   transport_hy2 on its own and senko-core has a client of its own */
     if (s->proto == VL_PROTO_HYSTERIA2) return NULL;
 
     if (s->net == VL_NET_WS) {

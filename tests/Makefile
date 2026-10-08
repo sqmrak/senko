@@ -42,6 +42,7 @@ LWIP_SRC  = $(wildcard $(LWIP)/core/*.c) $(wildcard $(LWIP)/core/ipv4/*.c) \
 TUN_SESSION_SRC = $(CORE)/session.c $(CORE)/socks5.c $(NET_SAFE) \
                   $(CORE)/vless.c $(CORE)/vless_conn.c $(CORE)/socks5_client.c \
                   $(CORE)/http_client.c $(CORE)/vision.c $(CORE)/trojan_client.c \
+                  $(CORE)/hy2_proto.c $(CORE)/blake2b256.c \
                   $(CORE)/shadowsocks_client.c $(CORE)/reality_crypto.c $(MLKEM768_SRC) \
                   $(TRACE) $(REPLAY) $(UPLOAD) $(TIME)
 TRACE    = $(CORE)/senko_trace.c
@@ -75,6 +76,8 @@ HOST_TESTS += test_shadowsocks
 HOST_TESTS += test_qr_zbar
 HOST_TESTS += test_subfetch_budget
 HOST_TESTS += test_blake2b256
+HOST_TESTS += test_hy2_proto
+HOST_TESTS += test_session_hy2
 HOST_TESTS += test_tun_plan
 HOST_TESTS += test_endpoint_pool
 HOST_TESTS += test_utun_framing
@@ -112,6 +115,8 @@ all: test
 test: $(HOST_TESTS)
 	python3 check_emoji_assets.py
 	./test_blake2b256
+	./test_hy2_proto
+	./test_session_hy2
 	./test_real_probe
 	./test_trojan
 	./test_shadowsocks
@@ -251,7 +256,7 @@ test_loop_traffic: test_loop_traffic.c $(DAEMON)/loop.c $(CORE)/session.c
 	      $(CORE)/session.c $(CORE)/socks5.c $(NET_SAFE) \
 	      $(CORE)/vless.c $(CORE)/vless_conn.c $(CORE)/socks5_client.c \
 	      $(CORE)/http_client.c $(CORE)/vision.c $(CORE)/transport_tcp.c \
-	      $(CORE)/trojan_client.c $(CORE)/shadowsocks_client.c $(CORE)/reality_crypto.c $(MLKEM768_SRC) \
+	      $(CORE)/trojan_client.c $(CORE)/hy2_proto.c $(CORE)/blake2b256.c $(CORE)/shadowsocks_client.c $(CORE)/reality_crypto.c $(MLKEM768_SRC) \
 	      $(TRACE) $(REPLAY) $(UPLOAD) $(TIME) -o $@ $(TLS_LDFLAGS) $(THREAD_LDFLAGS)
 
 test_senko_core_config: test_senko_core_config.c $(DAEMON)/senko_core_config.c $(CFG_SRC)
@@ -328,6 +333,12 @@ test_b64: test_b64.c $(CORE)/b64.c $(CORE)/b64.h
 
 test_blake2b256: test_blake2b256.c $(CORE)/blake2b256.c $(CORE)/blake2b256.h
 	$(CC) $(CFLAGS) test_blake2b256.c $(CORE)/blake2b256.c -o $@
+
+test_hy2_proto: test_hy2_proto.c $(CORE)/hy2_proto.c $(CORE)/hy2_proto.h $(CORE)/blake2b256.c
+	$(CC) $(CFLAGS) test_hy2_proto.c $(CORE)/hy2_proto.c $(CORE)/blake2b256.c -o $@
+
+test_session_hy2: test_session_hy2.c fake_transport.c $(TUN_SESSION_SRC)
+	$(CC) $(CFLAGS) $(TLS_CFLAGS) -I. test_session_hy2.c fake_transport.c $(TUN_SESSION_SRC) -o $@ $(TLS_LDFLAGS)
 
 test_tun_plan: test_tun_plan.c $(CORE)/tun_plan.c $(CORE)/tun_plan.h
 	$(CC) $(CFLAGS) test_tun_plan.c $(CORE)/tun_plan.c -o $@
@@ -446,11 +457,11 @@ test_storefile: test_storefile.c $(DAEMON)/storefile.c $(DAEMON)/settings.c \
 
 test_session_direct: test_session_direct.c $(CORE)/session.c $(CORE)/socks5.c $(NET_SAFE) \
               $(CORE)/vless.c $(CORE)/vless_conn.c $(CORE)/socks5_client.c $(CORE)/http_client.c $(CORE)/vision.c \
-              $(CORE)/trojan_client.c $(CORE)/shadowsocks_client.c $(CORE)/reality_crypto.c $(MLKEM768_SRC) $(TRACE) $(REPLAY) $(UPLOAD) $(TIME)
+              $(CORE)/trojan_client.c $(CORE)/hy2_proto.c $(CORE)/blake2b256.c $(CORE)/shadowsocks_client.c $(CORE)/reality_crypto.c $(MLKEM768_SRC) $(TRACE) $(REPLAY) $(UPLOAD) $(TIME)
 	$(CC) $(CFLAGS) $(TLS_CFLAGS) test_session_direct.c $(CORE)/session.c \
 	      $(CORE)/socks5.c $(NET_SAFE) $(CORE)/vless.c $(CORE)/vless_conn.c \
 	      $(CORE)/socks5_client.c $(CORE)/http_client.c $(CORE)/vision.c \
-	      $(CORE)/trojan_client.c $(CORE)/shadowsocks_client.c $(CORE)/reality_crypto.c $(MLKEM768_SRC) \
+	      $(CORE)/trojan_client.c $(CORE)/hy2_proto.c $(CORE)/blake2b256.c $(CORE)/shadowsocks_client.c $(CORE)/reality_crypto.c $(MLKEM768_SRC) \
 	      $(TRACE) $(REPLAY) $(UPLOAD) $(TIME) -o $@ $(TLS_LDFLAGS)
 
 # the probe drives a whole protocol session over the real transports

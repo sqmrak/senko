@@ -5,6 +5,7 @@
 #include "awg_route.h"
 #include "core/transport_pick.h"
 #include "core/senko_time.h"
+#include "../common/senko_paths.h"
 #include "core/vless.h"
 #include "legacy_ios.h"
 #include "route_socket.h"
@@ -369,6 +370,7 @@ int utun_backend_runtime_init(utun_backend_t *backend) {
 void utun_backend_stop(utun_backend_t *backend) {
     if (!backend || !backend->initialized) return;
     if (backend->dialer.ready) tun_dialer_cancel(&backend->dialer);
+    hy2_engine_cancel(backend->hy2);
     utun_dns_withdraw(&backend->dns);
     backend->dns_state[0] = '\0';
     if (backend->thread_started) {
@@ -402,6 +404,9 @@ void utun_backend_stop(utun_backend_t *backend) {
     backend->tcp = NULL;
     backend->udp = NULL;
     if (backend->dialer.ready) tun_dialer_destroy(&backend->dialer);
+    /* the opener threads were joined with the loop, so no dial is still inside */
+    hy2_engine_stop(backend->hy2);
+    backend->hy2 = NULL;
     backend->ready = 0;
     backend->ended = 0;
 }
@@ -432,6 +437,36 @@ void utun_backend_stats(utun_backend_t *backend, uint64_t *up, uint64_t *down) {
     tun_loop_byte_counts(backend->loop, up, down);
 }
 
+/* the hysteria2 client runs inside senkod because senko-core's go runtime
+   needs ios 12 on arm64 and has no armv7 build at all */
+static int hysteria_engine_start(utun_backend_t *backend, const vl_server_t *server,
+                                 const uint8_t addresses[][16], const uint8_t *lengths,
+                                 size_t count) {
+    if (server->obfs[0] && strcmp(server->obfs, "none") != 0 &&
+        (strcmp(server->obfs, "salamander") != 0 || !server->obfs_password[0])) {
+        snprintf(backend->error, sizeof backend->error,
+                 "hysteria2 obfuscation \"%.31s\" is not supported, only salamander with a password",
+                 server->obfs);
+        return -1;
+    }
+    hy2_engine_config_t config;
+    memset(&config, 0, sizeof config);
+    config.addresses = addresses;
+    config.address_lens = lengths;
+    config.address_count = count;
+    config.port = server->port;
+    config.sni = server->sni;
+    config.peer_host = server->host;
+    config.auth = server->pass;
+    config.pin_sha256 = server->pin_sha256;
+    if (server->obfs[0] && strcmp(server->obfs, "none") != 0)
+        config.obfs_password = server->obfs_password;
+    config.ca_file = SENKO_USR_LIB "/senko/cacert.pem";
+    config.connect_timeout_ms = 8000;
+    backend->hy2 = hy2_engine_start(&config, backend->error, sizeof backend->error);
+    return backend->hy2 ? 0 : -1;
+}
+
 int utun_backend_start(utun_backend_t *backend, const vl_server_t *server,
                        const char *resolved_ipv4, ruleset_t *rules,
                        const char *dns_upstream, dns_block_response_t block_response,
@@ -441,7 +476,8 @@ int utun_backend_start(utun_backend_t *backend, const vl_server_t *server,
         !dns_upstream) return -1;
     utun_backend_stop(backend);
     backend->error[0] = '\0';
-    const transport_vt_t *vt = transport_for_server(server);
+    int hysteria = server->proto == VL_PROTO_HYSTERIA2;
+    const transport_vt_t *vt = hysteria ? &transport_hy2 : transport_for_server(server);
     if (!vt) {
         reason_set(reason, reason_cap,
             "this profile's protocol or transport has no senko client to carry it");
@@ -505,8 +541,16 @@ int utun_backend_start(utun_backend_t *backend, const vl_server_t *server,
         route_errno_append(backend->error, sizeof backend->error, saved);
         goto failed;
     }
-    if (tun_dialer_init(&backend->dialer, addresses, lengths,
-                        input.endpoint_count, server->port, 8000) != 0) {
+    tun_opener_dial_fn dial = tun_dialer_connect;
+    void *dial_ctx = &backend->dialer;
+    if (hysteria) {
+        if (hysteria_engine_start(backend, server, (const uint8_t (*)[16])addresses, lengths,
+                                  input.endpoint_count) != 0)
+            goto failed;
+        dial = hy2_engine_dial;
+        dial_ctx = backend->hy2;
+    } else if (tun_dialer_init(&backend->dialer, addresses, lengths,
+                               input.endpoint_count, server->port, 8000) != 0) {
         reason_set(backend->error, sizeof backend->error, "server dialer could not start");
         goto failed;
     }
@@ -569,11 +613,11 @@ int utun_backend_start(utun_backend_t *backend, const vl_server_t *server,
     tcp.policy = &backend->policy;
     tcp.direct_socket = direct_socket_bound;
     tcp.direct_ctx = &backend->direct;
-    tcp.dial = tun_dialer_connect;
-    tcp.dial_ctx = &backend->dialer;
+    tcp.dial = dial;
+    tcp.dial_ctx = dial_ctx;
     tcp.opener_threads = 2;
     tcp.max_flows = 8;
-    tcp.use_shared_tls = server->security != VL_SEC_NONE;
+    tcp.use_shared_tls = !hysteria && server->security != VL_SEC_NONE;
     memcpy(tcp.dns_upstream, dns, 4);
     tcp.dns_upstream_len = 4;
     tun_udp_config_t udp;
@@ -588,13 +632,13 @@ int utun_backend_start(utun_backend_t *backend, const vl_server_t *server,
     udp.policy = &backend->policy;
     udp.direct_socket = direct_socket_bound;
     udp.direct_ctx = &backend->direct;
-    udp.dial = tun_dialer_connect;
-    udp.dial_ctx = &backend->dialer;
+    udp.dial = dial;
+    udp.dial_ctx = dial_ctx;
     udp.opener_threads = 1;
     udp.block_response = block_response;
     memcpy(udp.dns_upstream, dns, 4);
     udp.dns_upstream_len = 4;
-    udp.use_shared_tls = server->security != VL_SEC_NONE;
+    udp.use_shared_tls = !hysteria && server->security != VL_SEC_NONE;
     int relays_ok = tun_tcp_init(backend->tcp, &tcp, &config) == TUN_TCP_OK &&
                     tun_udp_init(backend->udp, &udp, &config) == 0;
     if (relays_ok) {

@@ -8,6 +8,7 @@
 #include "core/config.h"
 #include "core/rules.h"
 #include "core/tun_plan.h"
+#include "hy2_engine.h"
 #include "tun_dialer.h"
 #include "tun_loop.h"
 #include "tun_tcp.h"
@@ -47,6 +48,7 @@ typedef struct {
     vl_server_t server;
     utun_device_t device;
     tun_dialer_t dialer;
+    hy2_engine_t *hy2; /* hysteria2 dials its quic streams here instead of the dialer */
     tun_plan_t plan;
     tun_loop_t *loop;
     tun_tcp_t *tcp;

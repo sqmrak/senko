@@ -406,6 +406,8 @@ sess_status_t session_init(session_t *s,
         trojan_client_init(&s->u.tc, pass, &(vless_dest_t){0});
     } else if (proto == VL_PROTO_SHADOWSOCKS) {
         ss_client_init(&s->u.sc, user, pass, &(vless_dest_t){0});
+    } else if (proto == VL_PROTO_HYSTERIA2) {
+        hy2_tcp_response_init(&s->u.hy);
     }
     return SESS_OK;
 }
@@ -552,6 +554,14 @@ sess_status_t session_start_from_transparent_dest(session_t *s,
         push_remote(s, req, reqlen);
         if (s->state == SESS_ERROR) return SESS_ERR;
         s->state = SESS_RELAY;
+    } else if (s->proto == VL_PROTO_HYSTERIA2) {
+        uint8_t req[512];
+        size_t reqlen = 0;
+        if (hy2_tcp_request_build(dest, req, sizeof req, &reqlen) != HY2_OK)
+            goto fail;
+        push_remote(s, req, reqlen);
+        if (s->state == SESS_ERROR) return SESS_ERR;
+        s->state = SESS_VLESS_RESP;
     } else {
         goto fail;
     }
@@ -845,6 +855,20 @@ sess_status_t session_pump_remote(session_t *s) {
             } else if (s->proto == VL_PROTO_SOCKS5) {
                 if (feed_socks_response(s, tmp, (size_t)n) != SESS_OK)
                     return SESS_ERR;
+            } else if (s->proto == VL_PROTO_HYSTERIA2) {
+                size_t consumed = 0;
+                hy2_status_t hs = hy2_tcp_response_feed(&s->u.hy, tmp, (size_t)n, &consumed);
+                if (hs == HY2_NEED_MORE) return SESS_OK; /* retain a partial header */
+                if (hs != HY2_OK) {
+                    fprintf(stderr, "senkod: hysteria2 server refused the stream: %s\n",
+                            hs == HY2_REJECTED ? s->u.hy.message : "malformed response");
+                    s->state = SESS_ERROR;
+                    return SESS_ERR;
+                }
+                s->state = SESS_RELAY;
+                if (consumed < (size_t)n)
+                    deliver_client(s, tmp + consumed, (size_t)n - consumed);
+                if (s->state == SESS_ERROR) return SESS_ERR;
             } else if (s->proto == VL_PROTO_HTTP || s->proto == VL_PROTO_HTTPS) {
                 size_t consumed = 0;
                 int rs = hc_feed(&s->u.hc, tmp, (size_t)n, &consumed);

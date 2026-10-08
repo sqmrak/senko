@@ -18,7 +18,7 @@
 ## protocols
 
 - vless: tcp, tls, reality, websocket, xhttp, grpc
-- hysteria2
+- hysteria2: salamander, pinned certificate; below ios 12 tcp and dns only
 - amneziawg
 - socks5, http(s)
 
@@ -66,7 +66,7 @@ make -C tests test
 ./build_deb.sh
 ```
 
-needs `THEOS SENKO_SDK_V7 SENKO_SDK_V64 SENKO_SDK_VE SENKO_CRT_V7 SENKO_OSSL_V7 SENKO_OSSL_V64 SENKO_MBED SENKO_GO SENKO_CORE_SRC`, outputs `senko-v<version>.deb`.
+needs `THEOS SENKO_SDK_V7 SENKO_SDK_V64 SENKO_SDK_VE SENKO_CRT_V7 SENKO_OSSL_V7 SENKO_OSSL_V64 SENKO_MBED SENKO_GO SENKO_CORE_SRC SENKO_NGTCP2_SRC SENKO_NGHTTP3_SRC SENKO_QUIC`, outputs `senko-v<version>.deb`.
 
 ## license
 

@@ -243,23 +243,15 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
         case CTL_ACT_START: {
             const vl_server_t *s = &action->server;
 /* quic/udp only: no senko transport carries it, so there is nothing to hand
-   the local socks loop. senko-core dials it directly with its own bundled
-   hysteria client, which means this profile needs senko-core */
+   the local socks loop. senko-core runs it where it can, and the utun backend
+   has its own client (hy2_engine) for everything older. the connect hook
+   forwards through the socks loop, which cannot speak quic */
             int quic_only = (s->proto == VL_PROTO_HYSTERIA2);
-            if (quic_only) {
-                if (d->settings.force_backend == SENKO_BACKEND_APP_PROXY ||
-                    d->settings.force_backend == SENKO_BACKEND_UTUN) {
-                    fprintf(stderr, "senkod: hysteria2 requires senko-core, "
-                                    "but another backend is pinned in settings\n");
-                    status_set(0);
-                    return DCTL_ERR_TRANSPORT;
-                }
-                if (!senko_core_backend_supported()) {
-                    fprintf(stderr, "senkod: hysteria2 requires senko-core, "
-                                    "unsupported on this device\n");
-                    status_set(0);
-                    return DCTL_ERR_TRANSPORT;
-                }
+            if (quic_only && d->settings.force_backend == SENKO_BACKEND_APP_PROXY) {
+                fprintf(stderr, "senkod: hysteria2 needs the utun or senko-core backend, "
+                                "but the connect hook is pinned in settings\n");
+                status_set(0);
+                return DCTL_ERR_TRANSPORT;
             }
 
             const transport_vt_t *vt = quic_only ? NULL : transport_for_server(s);
@@ -326,7 +318,7 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
             int pin = d->settings.force_backend;
 /* a pin is respected even when it cannot work: the backend names the reason
    it will not run on this device, which is the answer the tester came for */
-            int core_attempted = quic_only || pin == SENKO_BACKEND_CORE ||
+            int core_attempted = pin == SENKO_BACKEND_CORE ||
                 (pin == SENKO_BACKEND_AUTO && senko_core_backend_supported());
             int hook_pinned = pin == SENKO_BACKEND_APP_PROXY;
             int routing_ok;
@@ -356,7 +348,8 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
                             backend_reason[0] ? backend_reason : "unknown error");
 /* hooked apps still get through when no tunnel opens, as the last rung of the
    old firewall ladder gave them; only auto may take it instead of the pin */
-                if (!routing_ok && pin == SENKO_BACKEND_AUTO && app_proxy_available()) {
+                if (!routing_ok && !quic_only && pin == SENKO_BACKEND_AUTO &&
+                    app_proxy_available()) {
                     char hook_reason[160];
                     if (app_proxy_start(&d->app_proxy, (int)loop_listen_port(d->loop),
                                         hook_reason, sizeof hook_reason) == 0) {

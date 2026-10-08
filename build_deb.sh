@@ -34,6 +34,10 @@ OSSL_V64="${SENKO_OSSL_V64:?set SENKO_OSSL_V64 to the arm64 openssl prefix}"
 # static mbedtls for the tlsfix hook (no device-side dylib)
 MBED="${SENKO_MBED:?set SENKO_MBED to the mbedtls output directory}"
 SENKO_CORE_SOURCE="${SENKO_CORE_SRC:?set SENKO_CORE_SRC to the pinned senko-core source}"
+# the hysteria2 client in senkod; build_quic.sh reads the same variables
+: "${SENKO_NGTCP2_SRC:?set SENKO_NGTCP2_SRC to the ngtcp2 source directory}"
+: "${SENKO_NGHTTP3_SRC:?set SENKO_NGHTTP3_SRC to the nghttp3 source directory}"
+QUIC_ROOT="${SENKO_QUIC:?set SENKO_QUIC to the quic output directory}"
 GO_BIN="${SENKO_GO:?set SENKO_GO to the Go 1.27.1 executable}"
 STAGE="${ROOT}/.package-stage"
 SLICE="${ROOT}/.build-slices"
@@ -103,6 +107,9 @@ bash "${ROOT}/scripts/build_openssl_armv7.sh"
 echo "==> openssl arm64"
 bash "${ROOT}/scripts/build_openssl_arm64.sh"
 
+echo "==> quic (ngtcp2, nghttp3)"
+bash "${ROOT}/scripts/build_quic.sh"
+
 if [[ ! -f "${MBED}/lib/libmbedtls-armv7.a" || \
       ! -f "${MBED}/lib/libmbedx509-armv7.a" || \
       ! -f "${MBED}/lib/libmbedcrypto-armv7.a" || \
@@ -128,11 +135,11 @@ make -C "${ROOT}/native" clean all \
 
 echo "==> daemon armv7"
 make -C "${ROOT}/daemon" -f Makefile.ios clean \
-  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" SDK="${SDK_V7}" OSSL="${OSSL_V7}"
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" SDK="${SDK_V7}" OSSL="${OSSL_V7}" QUIC="${QUIC_ROOT}/armv7"
 make -C "${ROOT}/daemon" -f Makefile.ios \
   THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
   TRIPLE=arm-apple-darwin11 SDK="${SDK_V7}" \
-  ARCH="-arch armv7 -miphoneos-version-min=5.0" OSSL="${OSSL_V7}" \
+  ARCH="-arch armv7 -miphoneos-version-min=5.0" OSSL="${OSSL_V7}" QUIC="${QUIC_ROOT}/armv7" \
   CRT="${CRT_V7}" \
   IOS_BINDIR=build/ios-armv7 all
 cp "${ROOT}/daemon/build/ios-armv7/senkod" "${SLICE}/armv7/senkod"
@@ -140,11 +147,11 @@ cp "${ROOT}/daemon/build/ios-armv7/senkoctl" "${SLICE}/armv7/senkoctl"
 
 echo "==> daemon arm64"
 make -C "${ROOT}/daemon" -f Makefile.ios clean \
-  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" SDK="${SDK_V64}" OSSL="${OSSL_V64}"
+  THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" SDK="${SDK_V64}" OSSL="${OSSL_V64}" QUIC="${QUIC_ROOT}/arm64"
 make -C "${ROOT}/daemon" -f Makefile.ios \
   THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
   TRIPLE=arm64-apple-darwin SDK="${SDK_V64}" \
-  ARCH="-arch arm64 -miphoneos-version-min=7.0" OSSL="${OSSL_V64}" \
+  ARCH="-arch arm64 -miphoneos-version-min=7.0" OSSL="${OSSL_V64}" QUIC="${QUIC_ROOT}/arm64" \
   EXTRA_CFLAGS="${ARM64_ROOT_FLAGS}" \
   IOS_BINDIR=build/ios-arm64 all
 cp "${ROOT}/daemon/build/ios-arm64/senkod" "${SLICE}/arm64/senkod"

@@ -5,6 +5,7 @@ THEOS   ?= $(error set THEOS=/path/to/theos)
 TC      ?= $(if $(SENKO_TC),$(SENKO_TC),$(THEOS)/toolchain/linux/iphone/bin)
 SDK     ?= $(if $(SENKO_SDK_V7),$(SENKO_SDK_V7),$(error set SDK=/path/to/iphoneos.sdk))
 OSSL    ?= $(if $(SENKO_OSSL_V7),$(SENKO_OSSL_V7),$(error set OSSL=/path/to/openssl-prefix))
+QUIC    ?= $(error set QUIC=/path/to/quic-prefix-for-this-slice, see scripts/build_quic.sh)
 LDID    ?= $(TC)/ldid
 SENKO_AR ?= $(TC)/llvm-ar
 CRT     ?=
@@ -16,11 +17,12 @@ CC      := $(TC)/clang -target $(TRIPLE) -B $(TC)
 ARCH    ?= -arch armv7 -miphoneos-version-min=5.0
 IOS_BINDIR ?= build/ios
 CFLAGS  := -std=c99 -Wall -Wextra -O2 -DSENKO_RELEASE $(EXTRA_CFLAGS) $(ARCH) -isysroot $(SDK) \
-           -Icore -Icore/third_party -I. -I$(OSSL)/include \
+           -Icore -Icore/third_party -I. -I$(OSSL)/include -I$(QUIC)/include \
            -Ilwip_port -Ithird_party/lwip/src/include
 # link archives directly because device openssl is not a supported dependency
 # discard unreachable archive code so static openssl does not inflate both slices
-LIBS    := $(OSSL)/lib/libssl.a $(OSSL)/lib/libcrypto.a -lz
+LIBS    := $(QUIC)/lib/libngtcp2.a $(QUIC)/lib/libnghttp3.a \
+           $(OSSL)/lib/libssl.a $(OSSL)/lib/libcrypto.a -lz
 LDFLAGS := $(ARCH) -isysroot $(SDK) \
            -Wl,-dead_strip \
            $(if $(CRT),-nostartfiles $(CRT),)
@@ -34,7 +36,7 @@ CORE_SRC = core/vless.c core/b64.c core/config.c core/share_link.c core/rules.c 
            core/tls13_kdf.c core/tls13_keysched.c core/tls13_record.c \
            core/tls13_transcript.c core/tls13_handshake.c core/reality_handshake.c \
            core/socks5_client.c core/http_client.c core/vision.c core/awg_config.c core/awg_handshake.c core/awg_tunnel.c \
-           core/trojan_client.c core/shadowsocks_client.c core/blake2b256.c \
+           core/trojan_client.c core/shadowsocks_client.c core/blake2b256.c core/hy2_proto.c \
            core/backend_state.c core/endpoint_pool.c core/probe_stats.c core/route_message.c \
            core/tun_flow.c core/tun_nat.c core/tun_plan.c core/utun_frame.c core/vless_udp.c core/dns_policy.c core/tun_policy.c
 # vendored PQClean ml-kem-768 "clean" backend, plus its shared fips202.c and a
@@ -50,7 +52,7 @@ DAEMON_SRC = dialer.c loop.c ctl_server.c daemon_ctl.c storefile.c settings.c st
              app_proxy.c egress.c senko_core_config.c senko_core_backend.c \
              awg_utun.c awg_route.c awg_pfroute.c legacy_ios.c proc_detach.c \
              route_socket.c tun_dialer.c tun_loop.c tun_opener.c tun_stack.c tun_tcp.c tun_udp.c \
-             utun_device.c utun_route.c utun_dns.c utun_backend.c direct_socket.c direct_dns.c helper_jobs.c senkod_helper.c awg_link.c awg_backend.c main.c
+             hy2_engine.c utun_device.c utun_route.c utun_dns.c utun_backend.c direct_socket.c direct_dns.c helper_jobs.c senkod_helper.c awg_link.c awg_backend.c main.c
 LWIP_DIR = third_party/lwip/src
 LWIP_SRC = $(wildcard $(LWIP_DIR)/core/*.c) $(wildcard $(LWIP_DIR)/core/ipv4/*.c) \
            $(wildcard $(LWIP_DIR)/core/ipv6/*.c) lwip_port/lwip_sys.c
