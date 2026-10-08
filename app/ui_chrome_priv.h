@@ -3,6 +3,7 @@
 
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import "material.h"
 
 /* bar and dome share size/color keys so recolor skips full rebuilds */
 extern char SenkoStyleSizeKey;

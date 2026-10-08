@@ -12,7 +12,8 @@ enum {
     SenkoThemeCapAero      = 1u << 4,
     SenkoThemeCapLightOnly = 1u << 5,
     SenkoThemeCapDarkOnly  = 1u << 6,
-    SenkoThemeCapIos26     = 1u << 7 /* glass; pairs with capios16 paths */
+    SenkoThemeCapIos26     = 1u << 7, /* glass; pairs with capios16 paths */
+    SenkoThemeCapMaterial  = 1u << 8  /* flat surfaces that rise on shadows, ripples */
 };
 
 /* picker folders; themesvc groups by this id */

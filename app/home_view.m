@@ -2,6 +2,7 @@
 #import "ui_theme.h"
 #import "app_common.h"
 #import "server_cell.h"
+#import "material.h"
 
 #include <math.h>
 
@@ -81,6 +82,12 @@ static CGPathRef SenkoCirclePath(CGPoint c, CGFloat r) {
         _glyph.lineCap = kCALineCapRound;
         [self.layer addSublayer:_glyph];
 
+        _spinner = [[CAShapeLayer alloc] init];
+        _spinner.fillColor = [UIColor clearColor].CGColor;
+        _spinner.lineCap = kCALineCapRound;
+        _spinner.opacity = 0.0f;
+        [self.layer addSublayer:_spinner];
+
         _orbit = [[CALayer alloc] init];
         [self.layer addSublayer:_orbit];
         _trail = [[CAShapeLayer alloc] init];
@@ -113,6 +120,7 @@ static CGPathRef SenkoCirclePath(CGPoint c, CGFloat r) {
     [_glyph release];
     [_trail release];
     [_dot release];
+    [_spinner release];
     [_orbit release];
     [_stateKey release];
     [super dealloc];
@@ -148,12 +156,19 @@ static CGPathRef SenkoCirclePath(CGPoint c, CGFloat r) {
     _orbit.bounds = b;
     _orbit.position = c;
     _trail.frame = b;
+    _spinner.frame = b;
 /* the dot is its own small layer so it can grow from its centre; frame is
    undefined under the scale it rests at */
     _dot.bounds = CGRectMake(0.0f, 0.0f, dotR * 2.0f, dotR * 2.0f);
     _dot.position = CGPointMake(c.x + trackR, c.y);
     _track.path = SenkoCirclePath(c, trackR);
     CGFloat faceR = ringR - 1.0f;
+    _faceRadius = faceR;
+/* material's ring sits in the gap between the disc and the edge of the control,
+   and in a stroke as thick as its own progress indicators */
+    CGFloat spinnerR = (ringR + trackR) * 0.5f;
+    _spinner.path = SenkoCirclePath(c, spinnerR);
+    _spinner.lineWidth = MAX(3.0f, side * 0.016f);
     CGRect faceRect = CGRectMake(c.x - faceR, c.y - faceR, faceR * 2.0f, faceR * 2.0f);
     _halo.path = SenkoCirclePath(c, ringR);
     _halo.shadowPath = _halo.path;
@@ -176,12 +191,56 @@ static CGPathRef SenkoCirclePath(CGPoint c, CGFloat r) {
 
 /* at rest the button is lit only by the theme. a tunnel that is up, dialing or
    failed gives it a dim halo in its state colour */
+/* a floating action button: one flat disc in the state colour that shifts to
+   the next colour instead of jumping, a glyph in whichever of white and black
+   reads on it, and elevation. the orbit, halo and sheen of the other themes are
+   hidden */
+- (void)applyMaterialTheme {
+    UIColor *tint = SenkoHomeStateTint(_stateKey);
+    UIColor *ink = SenkoPillLabelColor(tint);
+    CAShapeLayer *shown = (CAShapeLayer *)[_face presentationLayer];
+    CGColorRef before = CGColorRetain((shown ? shown : _face).fillColor);
+    SenkoBeginSilentLayers();
+    _track.hidden = YES;
+    _halo.hidden = YES;
+    _ring.hidden = YES;
+    _faceFill.hidden = YES;
+    _orbit.hidden = YES;
+    _face.hidden = NO;
+    _face.fillColor = tint.CGColor;
+    _face.strokeColor = [UIColor clearColor].CGColor;
+    SenkoMaterialElevate(_face, 6.0f);
+    _glyph.strokeColor = ink.CGColor;
+    _spinner.strokeColor = tint.CGColor;
+    SenkoEndSilentLayers();
+    if (before && self.window && !CGColorEqualToColor(before, tint.CGColor)) {
+        CABasicAnimation *fill = [CABasicAnimation animationWithKeyPath:@"fillColor"];
+        fill.fromValue = (id)before;
+        fill.toValue = (id)tint.CGColor;
+        fill.duration = 0.3;
+        fill.timingFunction = SenkoMaterialStandardCurve();
+        [_face addAnimation:fill forKey:@"senko.fab.fill"];
+    }
+    if (before) CGColorRelease(before);
+}
+
 - (void)applyTheme {
+    if (SenkoThemeIsMaterial()) {
+        [self applyMaterialTheme];
+        return;
+    }
     UIColor *tint = SenkoHomeStateTint(_stateKey);
     BOOL idle = [_stateKey isEqualToString:@"idle"];
     BOOL light = SenkoThemeIsLight();
     BOOL flat = SenkoThemeIsFlat() && !SenkoThemeIsIos16();
     SenkoBeginSilentLayers();
+/* a switch away from senko-material puts back what it hid and moved */
+    _track.hidden = NO;
+    _ring.hidden = NO;
+    _faceFill.hidden = NO;
+    _orbit.hidden = NO;
+    _face.shadowOffset = CGSizeMake(0.0f, 3.0f);
+    _face.shadowRadius = 5.0f;
     _track.strokeColor = [tint colorWithAlphaComponent:0.22f].CGColor;
     _halo.fillColor = tint.CGColor;
     _halo.shadowColor = tint.CGColor;
@@ -238,6 +297,7 @@ static CGPathRef SenkoCirclePath(CGPoint c, CGFloat r) {
 }
 
 - (BOOL)orbitWanted {
+    if (SenkoThemeIsMaterial()) return NO;
     return _running && ([_stateKey isEqualToString:@"connecting"] ||
                         [_stateKey isEqualToString:@"connected"]);
 }
@@ -335,6 +395,13 @@ static void SenkoOrbitTween(CALayer *layer, NSString *path, id from, id to, BOOL
     }
 }
 
+/* material's progress ring turns while the tunnel dials and nowhere else */
+- (void)syncSpinner {
+    BOOL want = SenkoThemeIsMaterial() && _running && [_stateKey isEqualToString:@"connecting"];
+    if (want) SenkoMaterialSpinnerStart(_spinner);
+    else SenkoMaterialSpinnerStop(_spinner);
+}
+
 - (void)syncPulse {
     BOOL want = _running && [_stateKey isEqualToString:@"connecting"];
     if (!want) {
@@ -363,6 +430,12 @@ static void SenkoOrbitTween(CALayer *layer, NSString *path, id from, id to, BOOL
     [self applyTheme];
     [self syncOrbitAnimated:changed restart:changed];
     [self syncPulse];
+    [self syncSpinner];
+    if (changed && SenkoThemeIsMaterial() && self.window &&
+        [_stateKey isEqualToString:@"connected"])
+        SenkoMaterialPulse(self.layer, CGPointMake(self.bounds.size.width * 0.5f,
+                                                   self.bounds.size.height * 0.5f),
+                           _faceRadius, SenkoHomeStateTint(_stateKey));
 }
 
 - (void)setRunning:(BOOL)running {
@@ -370,11 +443,31 @@ static void SenkoOrbitTween(CALayer *layer, NSString *path, id from, id to, BOOL
     _running = running;
     [self syncOrbitAnimated:NO restart:changed];
     [self syncPulse];
+    [self syncSpinner];
 }
 
+/* a button lifts under the finger in material and does not shrink */
 - (void)setHighlighted:(BOOL)highlighted {
     [super setHighlighted:highlighted];
-    SenkoPressPop(self, highlighted);
+    if (SenkoThemeIsMaterial())
+        SenkoMaterialSetElevation(_face, highlighted ? 12.0f : 6.0f, YES);
+    else
+        SenkoPressPop(self, highlighted);
+}
+
+/* the ripple spreads inside the disc, not across the square the control owns */
+- (CGRect)senkoRippleBounds {
+    CGFloat r = _faceRadius > 1.0f ? _faceRadius : MIN(self.bounds.size.width, self.bounds.size.height) * 0.38f;
+    return CGRectMake(self.bounds.size.width * 0.5f - r, self.bounds.size.height * 0.5f - r,
+                      r * 2.0f, r * 2.0f);
+}
+
+- (CGFloat)senkoRippleRadius {
+    return CGRectGetWidth([self senkoRippleBounds]) * 0.5f;
+}
+
+- (UIColor *)senkoRippleColor {
+    return [SenkoPillLabelColor(SenkoHomeStateTint(_stateKey)) colorWithAlphaComponent:0.30f];
 }
 
 @end
@@ -407,6 +500,22 @@ void SenkoStyleHomePlate(UIView *plate, CGFloat radius, UIColor *base) {
     BOOL flat = SenkoThemeIsFlat() && !SenkoThemeIsIos16();
     UIColor *top;
     UIColor *bottom;
+    if (SenkoThemeIsMaterial()) {
+/* a card is one opaque surface at 2dp: no rim, no sheen, no gradient. the
+   surface colour is the theme's card colour unless the caller brings its own */
+        top = bottom = base ? base : kCellHi;
+        plate.backgroundColor = [UIColor clearColor];
+        plate.layer.cornerRadius = radius;
+        plate.layer.masksToBounds = NO;
+        plate.layer.borderWidth = 0.0f;
+        CAGradientLayer *fill = SenkoPlateLayer(plate, kSenkoPlateFill, nil);
+        fill.colors = [NSArray arrayWithObjects:(id)top.CGColor, (id)bottom.CGColor, nil];
+        CAGradientLayer *sheen = SenkoPlateLayer(plate, kSenkoPlateSheen, fill);
+        sheen.hidden = YES;
+        SenkoMaterialElevate(plate.layer, 2.0f);
+        SenkoLayoutHomePlate(plate);
+        return;
+    }
     if (base) {
         top = SenkoShadeColor(base, 0.12f);
         bottom = SenkoShadeColor(base, -0.10f);

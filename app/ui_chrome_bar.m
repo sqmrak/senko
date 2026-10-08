@@ -43,9 +43,11 @@ void StyleNavBarClassic(UINavigationController *nav) {
     BOOL flat = SenkoThemeIsFlat();
     BOOL boy = SenkoThemeIsBoykisser();
     BOOL miside = SenkoThemeIsMiside();
+    BOOL material = SenkoThemeIsMaterial();
     UIImage *barBackground = nil;
-/* black chrome preserves contrast over the purple miside field on ios 6 */
-    BOOL barLight = light && !miside;
+/* black chrome preserves contrast over the purple miside field on ios 6, and
+   keeps the status bar text white over material's saturated app bar */
+    BOOL barLight = light && !miside && !material;
     bar.barStyle = barLight ? UIBarStyleDefault : UIBarStyleBlack;
 /* an opaque bar prevents old navigation controllers from covering the first section */
     bar.translucent = NO;
@@ -53,7 +55,12 @@ void StyleNavBarClassic(UINavigationController *nav) {
         CGSize sz = CGSizeMake(2, 44);
         UIGraphicsBeginImageContextWithOptions(sz, YES, 0);
         CGContextRef ctx = UIGraphicsGetCurrentContext();
-        if (miside) {
+        if (material) {
+/* the app bar is one flat colour: the primary on the light baseline, a
+   surface a step above the page on the dark one */
+            CGContextSetFillColorWithColor(ctx, kChromeHi.CGColor);
+            CGContextFillRect(ctx, CGRectMake(0, 0, 2, 44));
+        } else if (miside) {
             CGContextSetRGBFillColor(ctx, 0.12f, 0.04f, 0.14f, 1.0f);
             CGContextFillRect(ctx, CGRectMake(0, 0, 2, 44));
             CGContextSetRGBFillColor(ctx, 1.00f, 0.36f, 0.70f, 0.50f);
@@ -115,7 +122,9 @@ void StyleNavBarClassic(UINavigationController *nav) {
     UIColor *titleC;
 /* the boykisser dark ink is already a pink white, and plain white next to it
    reads as a second colour on the same bar */
-    if (miside)
+    if (material)
+        titleC = light ? [UIColor whiteColor] : kInk;
+    else if (miside)
         titleC = [UIColor whiteColor];
     else if (light || flat || boy)
         titleC = kInk;
@@ -145,7 +154,9 @@ void StyleNavBarClassic(UINavigationController *nav) {
         [bar setTitleTextAttributes:attrs];
     }
     if ([bar respondsToSelector:@selector(setTintColor:)]) {
-        if (miside)
+        if (material)
+            bar.tintColor = light ? [UIColor whiteColor] : kAccentBlue;
+        else if (miside)
             bar.tintColor = [UIColor colorWithRed:1.0 green:0.55 blue:0.80 alpha:1.0];
         else if (boy)
             bar.tintColor = [UIColor colorWithRed:1.0 green:0.38 blue:0.68 alpha:1.0];
@@ -160,13 +171,18 @@ void StyleNavBarClassic(UINavigationController *nav) {
         [bar setShadowImage:clear];
     }
     SenkoApplyBarAppearance(bar, barBackground, titleC, titleFont);
+/* the bar floats at 4dp over the page in material, and casts nothing elsewhere */
+    bar.layer.masksToBounds = NO;
+    if (material) SenkoMaterialElevate(bar.layer, 4.0f);
+    else bar.layer.shadowOpacity = 0.0f;
 }
 
 void StyleGlossyCapsuleLayout(UIButton *button) {
     if (!button) return;
     CGRect b = button.bounds;
     if (b.size.width < 1 || b.size.height < 1) return;
-    CGFloat cr = b.size.height / 2.0f;
+/* a contained button in material is a rectangle with 4 point corners */
+    CGFloat cr = SenkoThemeIsMaterial() ? 4.0f : b.size.height / 2.0f;
     CAGradientLayer *body = SenkoNamedGradientLayer(button.layer, @"body");
     CAGradientLayer *gloss = SenkoNamedGradientLayer(button.layer, @"gloss");
     UIColor *rememberedTop = objc_getAssociatedObject(button, &SenkoStyleTopKey);
@@ -190,7 +206,7 @@ void StyleGlossyCapsuleLayout(UIButton *button) {
     body.cornerRadius = cr;
     gloss.frame = CGRectMake(1, 1, b.size.width - 2, b.size.height * 0.48f);
     gloss.cornerRadius = cr * 0.9f;
-    if (SenkoThemeIsIos16() || !SenkoThemeIsFlat())
+    if (SenkoThemeIsIos16() || SenkoThemeIsMaterial() || !SenkoThemeIsFlat())
         SenkoApplyShadowPath(button.layer, cr);
     SenkoEndSilentLayers();
     SenkoStyleRemember(button, b.size,
@@ -213,7 +229,7 @@ void StyleGlossyCapsule(UIButton *button, UIColor *top, UIColor *bottom) {
         return;
     }
 
-    CGFloat cr = b.size.height / 2.0f;
+    CGFloat cr = SenkoThemeIsMaterial() ? 4.0f : b.size.height / 2.0f;
     BOOL flat = SenkoThemeIsFlat();
     BOOL light = SenkoThemeIsLight();
     SenkoBeginSilentLayers();
@@ -229,6 +245,11 @@ void StyleGlossyCapsule(UIButton *button, UIColor *top, UIColor *bottom) {
         button.layer.shadowOffset = CGSizeMake(0, 4);
         button.layer.shadowOpacity = light ? 0.12f : 0.36f;
         button.layer.shadowRadius = 8.0f;
+        SenkoApplyShadowPath(button.layer, cr);
+    } else if (SenkoThemeIsMaterial()) {
+        button.layer.borderWidth = 0;
+        button.layer.borderColor = [UIColor clearColor].CGColor;
+        SenkoMaterialElevate(button.layer, 2.0f);
         SenkoApplyShadowPath(button.layer, cr);
     } else if (flat) {
         button.layer.borderWidth = 0;
@@ -309,6 +330,13 @@ void StyleGlossyCapsule(UIButton *button, UIColor *top, UIColor *bottom) {
         button.titleLabel.font = SenkoFontBody(13, YES);
         [button setTitleColor:light ? kInk : [UIColor whiteColor]
                      forState:UIControlStateNormal];
+        button.titleLabel.shadowColor = nil;
+        button.titleLabel.shadowOffset = CGSizeZero;
+    } else if (SenkoThemeIsMaterial()) {
+/* medium weight, and whichever of white and black reads on the fill: the dark
+   baseline's pale purple would lose white text */
+        button.titleLabel.font = SenkoFontBody(14, YES);
+        [button setTitleColor:SenkoPillLabelColor(top) forState:UIControlStateNormal];
         button.titleLabel.shadowColor = nil;
         button.titleLabel.shadowOffset = CGSizeZero;
     } else {

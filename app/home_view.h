@@ -16,7 +16,9 @@
 @end
 
 /* the power control with a dot circling its rim. the dot turns on the render
-   server, so an armv7 cpu pays nothing per frame while it moves */
+   server, so an armv7 cpu pays nothing per frame while it moves. senko-material
+   draws it as a floating action button instead: a filled disc that changes
+   colour with the tunnel state and a progress ring that turns while it dials */
 @interface SenkoOrbitButton : UIControl {
     CAShapeLayer *_track;
     CAShapeLayer *_halo;
@@ -28,6 +30,8 @@
     CALayer      *_orbit;
     CAShapeLayer *_trail;
     CAShapeLayer *_dot;
+    CAShapeLayer *_spinner;
+    CGFloat       _faceRadius;
     NSString     *_stateKey;
     BOOL          _running;
     BOOL          _orbitShown;

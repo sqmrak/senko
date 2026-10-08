@@ -48,7 +48,8 @@ THEME_SRC := \
 	theme/theme_ios26.m \
 	theme/theme_boykisser.m \
 	theme/theme_miside.m \
-	theme/theme_aero.m
+	theme/theme_aero.m \
+	theme/theme_material.m
 
 # ui chrome/style + screens (main_vc / ui_chrome split into modules)
 APP_SRC := \
@@ -95,6 +96,7 @@ APP_SRC := \
 	dev_console_vc.m \
 	dev_tools_vc.m \
 	meow.m \
+	material.m \
 	../daemon/core/b64.c \
 	../daemon/core/control.c \
 	../daemon/core/amnezia_bundle.c \

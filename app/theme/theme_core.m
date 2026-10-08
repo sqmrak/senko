@@ -437,6 +437,10 @@ BOOL SenkoThemeIsFrutigeraero(void) {
     return (gCaps & SenkoThemeCapAero) != 0;
 }
 
+BOOL SenkoThemeIsMaterial(void) {
+    return (gCaps & SenkoThemeCapMaterial) != 0;
+}
+
 BOOL SenkoThemeAllowsDark(void) {
     return (gCaps & (SenkoThemeCapLightOnly | SenkoThemeCapDarkOnly)) == 0;
 }

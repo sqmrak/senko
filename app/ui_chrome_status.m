@@ -52,6 +52,10 @@ void SenkoApplyBackgroundGradientForState(CAGradientLayer *g, NSString *state, B
                          [NSNumber numberWithFloat:0.55f],
                          [NSNumber numberWithFloat:1.0f], nil];
         }
+    } else if (SenkoThemeIsMaterial()) {
+/* the page is one flat colour, with no ramp for a surface to be lit by */
+        colors = [NSArray arrayWithObjects:(id)kBG.CGColor, (id)kBG.CGColor, nil];
+        locations = nil;
     } else {
 /* the palettes pick kBG and kBGBot a step apart at most, which read as a flat
    fill on an ios 5 panel, so the ramp is widened from both ends */

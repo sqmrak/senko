@@ -66,6 +66,9 @@ BOOL SenkoThemeIsBoykisser(void);
 BOOL SenkoThemeIsMiside(void);
 /* 1 for senko-frutigeraero / senko-aero (sky gloss, light only) */
 BOOL SenkoThemeIsFrutigeraero(void);
+/* 1 for senko-material: flat surfaces, elevation shadows, touch ripples and a
+   circular progress ring on the power button (see material.h) */
+BOOL SenkoThemeIsMaterial(void);
 /* card corner; larger on ios16 */
 CGFloat SenkoThemeCardRadius(void);
 /* frost subview on host */

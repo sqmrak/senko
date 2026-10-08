@@ -553,6 +553,7 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"meeeeeow :3", @"самая фембойская тема");
     SenkoAddTranslation(@"hehehe mita hehehe miside", @"ыыыыы кепочка ыыыыы мисайд");
     SenkoAddTranslation(@"futuristic maximalism of the past", @"эстетика, опередившая свое время");
+    SenkoAddTranslation(@"google pixel aesthetic", @"ыыыы google");
     SenkoAddTranslation(@"modern theme", @"dopamine, palera1n, trollstore и вайб 2021 года");
     SenkoAddTranslation(@"liquid ass... nah, glass", @"нууу такое... tahoe!");
     SenkoAddTranslation(@"QR code not detected\nfill the frame with the code\nand hold the phone still", @"QR-код не обнаружен\nзаполните кадр кодом\nи держите телефон неподвижно");
@@ -1388,6 +1389,7 @@ static void SenkoBuildTranslations(void) {
     SenkoAddChineseTranslation(@"meeeeeow :3", @"喵喵喵 :3");
     SenkoAddChineseTranslation(@"hehehe mita hehehe miside", @"嘿嘿，米塔来了");
     SenkoAddChineseTranslation(@"futuristic maximalism of the past", @"复古未来的绚丽风格");
+    SenkoAddChineseTranslation(@"google pixel aesthetic", @"谷歌 Pixel 风格");
     SenkoAddChineseTranslation(@"made on this device", @"在此设备上创建");
 }
 

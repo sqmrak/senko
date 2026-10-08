@@ -82,6 +82,12 @@ static UIFont *SenkoSFSemibold(CGFloat size) {
 UIFont *SenkoFontTitle(CGFloat size) {
     if (SenkoThemeIsIos26())
         return SenkoSFBold(size);
+/* the thin face the other themes use is the opposite of material's medium
+   weight headings */
+    if (SenkoThemeIsMaterial()) {
+        UIFont *medium = [UIFont fontWithName:@"HelveticaNeue-Medium" size:size];
+        return medium ? medium : [UIFont boldSystemFontOfSize:size];
+    }
     UIFont *f = [UIFont fontWithName:@"HelveticaNeue-UltraLight" size:size];
     if (!f) f = [UIFont fontWithName:@"HelveticaNeue-Thin" size:size];
     if (!f) f = [UIFont fontWithName:@"HelveticaNeue-Light" size:size];
@@ -391,9 +397,15 @@ void SenkoFillSectionGradient(CAGradientLayer *g) {
         }
         g.opacity = 1.0f;
     } else if (SenkoThemeIsFrutigeraero()) {
-        g.colors = [NSArray arrayWithObjects:
-                    (id)[UIColor colorWithRed:0.55 green:0.88 blue:1.00 alpha:0.95].CGColor,
-                    (id)[UIColor colorWithRed:0.20 green:0.68 blue:0.92 alpha:0.95].CGColor, nil];
+        if (SenkoThemeIsLight()) {
+            g.colors = [NSArray arrayWithObjects:
+                        (id)[UIColor colorWithRed:0.55 green:0.88 blue:1.00 alpha:0.95].CGColor,
+                        (id)[UIColor colorWithRed:0.20 green:0.68 blue:0.92 alpha:0.95].CGColor, nil];
+        } else {
+            g.colors = [NSArray arrayWithObjects:
+                        (id)[UIColor colorWithRed:0.12 green:0.28 blue:0.58 alpha:0.94].CGColor,
+                        (id)[UIColor colorWithRed:0.05 green:0.14 blue:0.36 alpha:0.94].CGColor, nil];
+        }
         g.opacity = 1.0f;
     } else if (SenkoThemeIsIos26()) {
         if (SenkoThemeIsLight()) {
@@ -461,8 +473,9 @@ void SenkoStyleSectionPlate(UIView *plate) {
         SenkoRemoveFrost(plate);
         plate.backgroundColor = [UIColor clearColor];
         plate.layer.borderWidth = 0.5f;
-        plate.layer.borderColor =
-            [UIColor colorWithRed:0.20 green:0.75 blue:0.95 alpha:0.50].CGColor;
+        plate.layer.borderColor = SenkoThemeIsLight()
+            ? [UIColor colorWithRed:0.20 green:0.75 blue:0.95 alpha:0.50].CGColor
+            : [UIColor colorWithRed:0.34 green:0.64 blue:1.00 alpha:0.45].CGColor;
         plate.layer.shadowOpacity = 0.12f;
         plate.layer.shadowRadius = 3.0f;
         plate.layer.shadowOffset = CGSizeMake(0, 1);
@@ -794,15 +807,35 @@ void SenkoStyleSelectableCell(UITableViewCell *cell) {
     if (!cell) return;
     UIView *selected = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
     selected.backgroundColor = [kAccentBlue colorWithAlphaComponent:
-        SenkoThemeIsLight() ? 0.13f : 0.20f];
+        SenkoThemeIsMaterial() ? (SenkoThemeIsLight() ? 0.08f : 0.14f)
+                               : (SenkoThemeIsLight() ? 0.13f : 0.20f)];
     selected.opaque = NO;
     cell.selectedBackgroundView = selected;
     cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 }
 
+static void SenkoColorParts(UIColor *c, CGFloat *r, CGFloat *g, CGFloat *b, CGFloat *a);
+
+/* relative luminance of an sRGB channel, as the wcag contrast formula defines it */
+static double SenkoChannelLuminance(CGFloat c) {
+    double v = c;
+    return v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4);
+}
+
 /* a fixed accent prevents status color jumps while refresh changes state */
 UIColor *SenkoPillLabelColor(UIColor *fill) {
     CGFloat r = 0, g = 0, b = 0, a = 1;
+    if (SenkoThemeIsMaterial()) {
+/* material picks the label by contrast, not by a brightness cut. the teal
+   secondary is bright enough to pass a luma test and still gives white text
+   a contrast of 1.6, which is what made its buttons vanish. black takes over
+   below 3:1, the floor for large text and icons */
+        SenkoColorParts(fill, &r, &g, &b, &a);
+        double lum = 0.2126 * SenkoChannelLuminance(r) + 0.7152 * SenkoChannelLuminance(g) +
+                     0.0722 * SenkoChannelLuminance(b);
+        double white = 1.05 / (lum + 0.05);
+        return white >= 3.0 ? [UIColor whiteColor] : [UIColor colorWithWhite:0.08f alpha:1.0f];
+    }
 /* on a dark theme every filled control carries white, whatever its own fill
    does: a bright accent under dark text was the one thing on the screen reading
    as a light control, and the screen is not a light one */
@@ -923,6 +956,8 @@ static void RestoreRasterization(UIView *view) {
 
 void SenkoPressPop(UIView *view, BOOL pressed) {
     if (!view) return;
+/* material shows a press as a ripple, and a surface there never changes size */
+    if (SenkoThemeIsMaterial()) return;
     CGAffineTransform target = pressed
         ? CGAffineTransformMakeScale(0.965f, 0.965f)
         : CGAffineTransformIdentity;

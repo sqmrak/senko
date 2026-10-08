@@ -421,7 +421,9 @@ int main(int argc, char **argv) {
     SenkoCrashStage("sfx hooks");
     SenkoMeowInstallHooks();
     SenkoCrashStage("uikit");
-    int rc = UIApplicationMain(argc, argv, nil, @"AppDelegate");
+    /* the application subclass sees touches first, which is how senko-material
+       starts a ripple at the finger on any control */
+    int rc = UIApplicationMain(argc, argv, @"SenkoApplication", @"AppDelegate");
     [pool release];
     return rc;
 }

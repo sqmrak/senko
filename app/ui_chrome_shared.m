@@ -164,6 +164,17 @@ void SenkoApplyRelief(UIButton *button, CAGradientLayer *fill,
     if (!button || !fill || !top || !bottom) return;
     b = button.bounds;
     if (b.size.width < 2.0f || b.size.height < 2.0f) return;
+    if (SenkoThemeIsMaterial()) {
+/* a contained button is one flat fill at 2dp. the ramp and the sheen belong to
+   the lit themes, so both stay out */
+        fill.colors = [NSArray arrayWithObjects:(id)top.CGColor, (id)top.CGColor, nil];
+        sheen = SenkoNamedGradientLayer(button.layer, @"reliefSheen");
+        if (sheen) sheen.hidden = YES;
+        button.layer.masksToBounds = NO;
+        SenkoMaterialElevate(button.layer, 2.0f);
+        SenkoApplyShadowPath(button.layer, radius);
+        return;
+    }
     flat = SenkoThemeIsFlat();
     light = SenkoThemeIsLight();
     ios16 = SenkoThemeIsIos16();
