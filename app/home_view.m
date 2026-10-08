@@ -214,7 +214,9 @@ static CGPathRef SenkoCirclePath(CGPoint c, CGFloat r) {
     _dot.strokeColor = cased ? [UIColor whiteColor].CGColor : [UIColor clearColor].CGColor;
     _dot.lineWidth = cased ? 1.5f : 0.0f;
     if (cased) {
-        _dot.shadowColor = kInk.CGColor;
+/* navy ink shades the dot on the sky; on the night wallpaper ink is white,
+   so the shade has to be black to keep reading as a shadow */
+        _dot.shadowColor = (light ? kInk : [UIColor blackColor]).CGColor;
         _dot.shadowRadius = 3.0f;
         _dot.shadowOpacity = 0.6f;
         _trail.strokeColor = [tint colorWithAlphaComponent:0.9f].CGColor;

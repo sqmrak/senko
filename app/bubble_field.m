@@ -1,4 +1,5 @@
 #import "bubble_field.h"
+#import "ui_theme.h"
 
 #import <QuartzCore/QuartzCore.h>
 
@@ -33,6 +34,20 @@ typedef struct {
 
 static BOOL BubbleIsPad(void) {
     return [[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad;
+}
+
+/* day bubbles are pale cyan glass; at night the same glass is a deeper blue
+   with a thinner rim, the way the bubbles sit in the night wallpaper */
+static void BubbleColors(CALayer *body, CALayer *shine) {
+    BOOL light = SenkoThemeIsLight();
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    body.backgroundColor = (light
+        ? [UIColor colorWithRed:0.70 green:0.92 blue:1.00 alpha:0.78]
+        : [UIColor colorWithRed:0.22 green:0.46 blue:0.95 alpha:0.30]).CGColor;
+    body.borderColor = [UIColor colorWithWhite:1 alpha:light ? 0.88f : 0.55f].CGColor;
+    shine.backgroundColor = [UIColor colorWithWhite:1 alpha:light ? 0.92f : 0.70f].CGColor;
+    [CATransaction commit];
 }
 
 static CGFloat bub_randf(CGFloat a, CGFloat b) {
@@ -91,11 +106,7 @@ static CGFloat bub_randf(CGFloat a, CGFloat b) {
         memset(_bubbles, 0, sizeof _bubbles);
         for (int i = 0; i < _count; ++i) {
             CALayer *body = [CALayer layer];
-            body.backgroundColor =
-                [UIColor colorWithRed:0.70 green:0.92 blue:1.00 alpha:0.78].CGColor;
             body.borderWidth = 1.5f;
-            body.borderColor =
-                [UIColor colorWithWhite:1 alpha:0.88].CGColor;
             body.opaque = NO;
             body.actions = [NSDictionary dictionaryWithObjectsAndKeys:
                             [NSNull null], @"position",
@@ -105,12 +116,11 @@ static CGFloat bub_randf(CGFloat a, CGFloat b) {
             [self.layer addSublayer:body];
 
             CALayer *shine = [CALayer layer];
-            shine.backgroundColor =
-                [UIColor colorWithWhite:1 alpha:0.92].CGColor;
             shine.opaque = NO;
             shine.actions = body.actions;
             [body addSublayer:shine];
 
+            BubbleColors(body, shine);
             _bubbles[i].body = body;
             _bubbles[i].shine = shine;
             [self resetBubble:&_bubbles[i] scatter:YES];
@@ -170,6 +180,9 @@ static CGFloat bub_randf(CGFloat a, CGFloat b) {
 - (void)start {
     self.hidden = NO;
     _paused = NO;
+/* a theme or mode switch calls start again on a running field */
+    for (int i = 0; i < _count; ++i)
+        BubbleColors(_bubbles[i].body, _bubbles[i].shine);
     if (_running) return;
     _running = YES;
     _lastTs = 0;

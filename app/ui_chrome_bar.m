@@ -91,6 +91,10 @@ void StyleNavBarClassic(UINavigationController *nav) {
             } else if (boy) {
                 CGFloat p[] = { 0.30,0.115,0.20,1, 0.165,0.060,0.115,1, 0.095,0.032,0.068,1 };
                 memcpy(comps, p, sizeof p);
+            } else if (SenkoThemeIsFrutigeraero() && !light) {
+/* the night wallpaper is navy, and the grey bar read as a foreign strip */
+                CGFloat n[] = { 0.18,0.36,0.70,1, 0.07,0.16,0.42,1, 0.03,0.08,0.26,1 };
+                memcpy(comps, n, sizeof n);
             } else if (light) {
                 CGFloat l[] = { 0.96,0.95,0.92,1, 0.86,0.84,0.80,1, 0.76,0.74,0.70,1 };
                 memcpy(comps, l, sizeof l);

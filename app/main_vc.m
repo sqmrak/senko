@@ -21,6 +21,7 @@ static void SenkoDisableInjectedStatusBadge(void) {
     [_bubbleField release];
     [_misidePattern release];
     [_frutigerBg release];
+    [_frutigerBgName release];
     [_ios26Bg release];
     _actionSheet.delegate = nil;
     [_actionSheet release];

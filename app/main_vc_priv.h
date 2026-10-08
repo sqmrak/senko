@@ -100,6 +100,7 @@
     SenkoBubbleField  *_bubbleField;
     UIImageView       *_misidePattern;
     UIImageView       *_frutigerBg;
+    NSString          *_frutigerBgName; /* the photo on screen, to tell a swap */
     UIImageView       *_ios26Bg;
     BOOL               _ios26BgLight;
     NSMutableDictionary *_serverStatus;

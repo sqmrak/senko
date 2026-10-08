@@ -148,13 +148,29 @@ static void SenkoPlaceBehind(UIView *view, UIView *root) {
 
 - (void)syncFrutigerDecor {
     if (SenkoThemeIsFrutigeraero()) {
+        CGSize room = self.view.bounds.size;
+        if (room.width < 1.0f || room.height < 1.0f)
+            room = [[UIScreen mainScreen] bounds].size;
+/* the day sky and the night city are separate photos, and the night one comes
+   in a portrait and a wide cut so the planet stays on screen on a phone held
+   upright. a switch replaces the view instead of repainting it: the soft
+   overlay holds a blurred copy of the old photo */
+        NSString *name = SenkoThemeIsLight() ? @"frutiger-bg"
+            : (room.width > room.height ? @"frutiger-bg-dark-wide" : @"frutiger-bg-dark");
+        if (_frutigerBg && ![_frutigerBgName isEqualToString:name]) {
+            [_frutigerBg removeFromSuperview];
+            [_frutigerBg release];
+            _frutigerBg = nil;
+        }
         if (!_frutigerBg) {
-            UIImage *img = [UIImage imageNamed:@"frutiger-bg.jpg"];
+            UIImage *img = [UIImage imageNamed:[name stringByAppendingString:@".jpg"]];
             if (!img) {
-                NSString *p = [[NSBundle mainBundle] pathForResource:@"frutiger-bg" ofType:@"jpg"];
+                NSString *p = [[NSBundle mainBundle] pathForResource:name ofType:@"jpg"];
                 if (p) img = [UIImage imageWithContentsOfFile:p];
             }
             if (img) {
+                [_frutigerBgName release];
+                _frutigerBgName = [name copy];
                 _frutigerBg = [[UIImageView alloc] initWithImage:img];
                 _frutigerBg.tag = 9005;
                 _frutigerBg.contentMode = UIViewContentModeScaleAspectFill;
