@@ -17,9 +17,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>3.1.0-stable</string>
+    <string>3.1.1-stable</string>
 	<key>CFBundleVersion</key>
-	<string>48</string>
+	<string>49</string>
     <key>CFBundleIconFile</key>
     <string>Icon.png</string>
     <!-- one file per slot: springboard scales anything else into place and
