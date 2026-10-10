@@ -325,6 +325,48 @@ launchd_start() {
   return 2
 }
 
+# cydia reads finish requests from the descriptor named first in $CYDIA
+request_reboot() {
+  fd=${CYDIA%% *}
+  case "$fd" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  eval "printf 'finish:reboot\n' >&$fd" 2>/dev/null || true
+}
+
+# launchd still holds the job it loaded at boot, and KeepAlive starts the new
+# /usr/bin/senkod once the old process exits. a changed plist waits for the reboot
+launchd_restart_in_place() {
+  postinst_log "launchctl has no launchd socket, load and unload fail until reboot"
+  old_pid="$(launchd_job_pid)" || {
+    echo "senko: launchd cannot load senkod until the device reboots" >&2
+    postinst_log "senkod starts at the next boot"
+    request_reboot
+    return 3
+  }
+  case "$old_pid" in
+    *[!0-9]*|'') ;;
+    *) kill -TERM "$old_pid" 2>/dev/null || true ;;
+  esac
+  attempt=0
+  while [ "$attempt" -lt 15 ]; do
+    pid="$(launchd_job_pid)"
+    case "$pid" in
+      *[!0-9]*|''|"$old_pid") ;;
+      *) break ;;
+    esac
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  if [ "$attempt" -lt 15 ] && senkod_answers; then
+    postinst_log "KeepAlive restarted senkod as pid ${pid}, senkod answered STATUS"
+    return 0
+  fi
+  postinst_log "KeepAlive did not bring back an answering senkod after pid ${old_pid}"
+  diagnose_senkod
+  return 2
+}
+
 tlsfix_installed() {
   dpkg -s com.tlsfix >/dev/null 2>&1 && return 0
   [ -e "${SUBSTRATE_DIR}/tlsfix.dylib" ] && return 0
@@ -526,27 +568,35 @@ chmod 600 "$CFG" >/dev/null 2>&1 || true
 
 # senkod --update restarts the daemon itself once dpkg returns
 if [ "${SENKO_UPDATE:-0}" != "1" ]; then
-  # SIGTERM lets senkod remove routes before launchd starts the replacement
-  launchd_stop || {
-    postinst_log "cannot unload senkod before restarting it"
-    diagnose_launchd_load
-    exit 1
-  }
-  "$KILLALL" -TERM senkod >/dev/null 2>&1 || true
-  sleep 1
-  "$KILLALL" -TERM senkod >/dev/null 2>&1 || true
-  sleep 1
-  "$KILLALL" -9 senkod >/dev/null 2>&1 || true
-  rm -f /var/tmp/senkod.sock /var/tmp/senkod.token
+  if [ -x "$LAUNCHCTL" ] && select_launchctl_context && launchd_socket_lost; then
+    launchd_restart_in_place
+    start_rc=$?
+  else
+    # SIGTERM lets senkod remove routes before launchd starts the replacement
+    launchd_stop || {
+      postinst_log "cannot unload senkod before restarting it"
+      diagnose_launchd_load
+      exit 1
+    }
+    "$KILLALL" -TERM senkod >/dev/null 2>&1 || true
+    sleep 1
+    "$KILLALL" -TERM senkod >/dev/null 2>&1 || true
+    sleep 1
+    "$KILLALL" -9 senkod >/dev/null 2>&1 || true
+    rm -f /var/tmp/senkod.sock /var/tmp/senkod.token
 
-  # senkod brings a recorded amneziawg profile back by itself
+    # senkod brings a recorded amneziawg profile back by itself
+    launchd_start
+    start_rc=$?
+  fi
   # 2 is a job launchd holds that has not answered yet. KeepAlive starts it again, so
   # the package is installed and the app and the log say what is missing; failing here left
-  # dpkg half-configured on a taurine ios 14 install, which blocks every later install
-  launchd_start
-  case $? in
+  # dpkg half-configured on a taurine ios 14 install, which blocks every later install.
+  # 3 is a plist launchd will load at the next boot
+  case $start_rc in
     0) ;;
     2) echo "senko: senkod is loaded but did not answer yet; see /var/log/senko-system.log" >&2 ;;
+    3) echo "senko: reboot the device to start senkod" >&2 ;;
     *)
       echo "senko: senkod was not loaded by launchd; see /var/log/senko-system.log" >&2
       exit 1

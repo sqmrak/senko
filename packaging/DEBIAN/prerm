@@ -39,7 +39,16 @@ stop_tunnel() {
 . /var/jb/usr/lib/senko/launchd.sh || exit 1
 
 stop_daemon() {
-  launchd_stop || return 1
+  if [ -x "$LAUNCHCTL" ] && select_launchctl_context && launchd_socket_lost; then
+    # postinst restarts the job launchd still holds through KeepAlive
+    case "$1" in
+      upgrade|failed-upgrade) return 0 ;;
+    esac
+    # launchd keeps the job until reboot; postrm kills what it respawns before the binary is gone
+    echo "senko: launchd cannot unload senkod until the device reboots" >&2
+  else
+    launchd_stop || return 1
+  fi
   # SIGTERM lets senkod drop routes and rules before it exits
   "$KILLALL" -TERM senkod >/dev/null 2>&1 || true
   sleep 1
@@ -54,7 +63,7 @@ stop_daemon() {
 
 if [ "${SENKO_UPDATE:-0}" != "1" ]; then
   stop_tunnel "$1"
-  stop_daemon || exit 1
+  stop_daemon "$1" || exit 1
 fi
 
 printf '0\n' > "$STATUS_STATE" 2>/dev/null || true

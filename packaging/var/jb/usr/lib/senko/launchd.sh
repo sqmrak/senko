@@ -45,6 +45,27 @@ launchd_loaded() {
   )
 }
 
+# ios 6 launchctl lists jobs over mach but loads and unloads them through
+# /var/tmp/launchd/sock. an iphone 4s on 6.1.3 loses that file when /var/tmp is
+# emptied after boot, and every load and unload fails until the next boot while
+# jobs loaded at boot keep running under KeepAlive
+launchd_socket_lost() {
+  case "$(launchctl_cmd list com.senko.senkod 2>&1)" in
+    *'launch_msg(): Socket is not connected'*) return 0 ;;
+  esac
+  return 1
+}
+
+# prints "-" while launchd holds the job without a running process
+launchd_job_pid() {
+  launchctl_cmd list 2>/dev/null | (
+    while read -r pid status job extra; do
+      [ "$job" = com.senko.senkod ] && [ -z "$extra" ] && { echo "$pid"; exit 0; }
+    done
+    exit 1
+  )
+}
+
 # h3lix on ios 10 accepts bootout without unloading the job
 launchd_stop() {
   [ -x "$LAUNCHCTL" ] && select_launchctl_context || {

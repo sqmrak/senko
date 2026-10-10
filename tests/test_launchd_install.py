@@ -67,6 +67,10 @@ if not system:
     print('launch_msg(): Socket is not connected', file=sys.stderr)
     sys.exit(1)
 job = base / 'loaded'
+if cfg.get('socket_lost') and (cmd != 'list' or len(args) > 1):
+    # ios 6 launchctl load prints this and still exits 0
+    print('launch_msg(): Socket is not connected', file=sys.stderr)
+    sys.exit(1 if cmd == 'list' else 0)
 if cmd == 'list':
     if cfg.get('list_failure') or (cfg.get('list_failure_loaded') and job.exists()):
         print('launch_msg(): Socket is not connected', file=sys.stderr)
@@ -74,7 +78,8 @@ if cmd == 'list':
     print('PID\tStatus\tLabel')
     print('42\t0\tcom.senko.senkod.other')
     if job.exists():
-        print('43\t0\tcom.senko.senkod')
+        pid = base / 'pid'
+        print((pid.read_text().strip() if pid.exists() else '43') + '\t-\tcom.senko.senkod')
     sys.exit(0)
 if cmd in ('load', 'bootstrap'):
     expected = 'bootstrap' if cfg.get('modern') else 'load'
@@ -116,7 +121,8 @@ class LaunchdInstallTests(unittest.TestCase):
         (self.base / 'calls').write_text('')
         functions = ''.join(shell_function(POSTINST, name) for name in (
             'postinst_log_lines', 'launchd_attempt', 'diagnose_launchd_load',
-            'launchd_load_and_kick', 'launchd_start'))
+            'launchd_load_and_kick', 'launchd_start', 'request_reboot',
+            'launchd_restart_in_place'))
         functions += shell_function(ROOT / 'packaging/DEBIAN/prerm', 'stop_daemon')
         script = '. "$HELPER"\n' + functions + '''
 postinst_log() { printf '%s\\n' "$*" >> "$TEST_LOG"; }
@@ -237,6 +243,55 @@ sleep() { :; }
         result = self.run_shell('stop_daemon', {'system_context': 'unreachable'}, loaded=True)
         self.assertEqual(result.returncode, 1)
         self.assertFalse((self.base / 'kills').exists())
+
+    # kill stands in for launchd: the TERMed pid comes back as 44 through KeepAlive
+    RESPAWN = 'kill() { printf "kill %s\\n" "$*" >> "$TEST_KILLS"; echo 44 > "$LAUNCHCTL_FIXTURE/pid"; }\n'
+
+    def test_lost_socket_is_detected(self):
+        result = self.run_shell('select_launchctl_context && launchd_socket_lost',
+                                {'socket_lost': True}, loaded=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.run_shell('select_launchctl_context && launchd_socket_lost', loaded=True)
+        self.assertEqual(result.returncode, 1)
+
+    def test_lost_socket_restarts_through_keepalive(self):
+        result = self.run_shell(self.RESPAWN + 'select_launchctl_context && launchd_restart_in_place',
+                                {'socket_lost': True}, loaded=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.base / 'kills').read_text().splitlines(), ['kill -TERM 43'])
+        self.assertIn('pid 44, senkod answered STATUS', self.log)
+        self.assertFalse(any(call[1][0] in ('load', 'unload', 'remove', 'bootout') for call in self.calls))
+
+    def test_lost_socket_does_not_take_old_pid_as_restart(self):
+        result = self.run_shell('kill() { :; }\nselect_launchctl_context && launchd_restart_in_place',
+                                {'socket_lost': True}, loaded=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('did not bring back an answering senkod after pid 43', self.log)
+
+    def test_lost_socket_without_job_asks_cydia_to_reboot(self):
+        result = self.run_shell('exec 7>"$LAUNCHCTL_FIXTURE/cydia"\n'
+                                'CYDIA="7 1"\nselect_launchctl_context && launchd_restart_in_place',
+                                {'socket_lost': True})
+        self.assertEqual(result.returncode, 3)
+        self.assertIn('until the device reboots', result.stderr)
+        self.assertEqual((self.base / 'cydia').read_text(), 'finish:reboot\n')
+
+    def test_cydia_descriptor_must_be_numeric(self):
+        result = self.run_shell('CYDIA="1;touch $LAUNCHCTL_FIXTURE/ran 2"\nrequest_reboot')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.base / 'ran').exists())
+
+    def test_prerm_upgrade_keeps_job_with_lost_socket(self):
+        for action in ('upgrade', 'failed-upgrade'):
+            result = self.run_shell('stop_daemon ' + action, {'socket_lost': True}, loaded=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((self.base / 'kills').exists())
+
+    def test_prerm_remove_kills_with_lost_socket(self):
+        result = self.run_shell('stop_daemon remove', {'socket_lost': True}, loaded=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('until the device reboots', result.stderr)
+        self.assertEqual((self.base / 'kills').read_text().splitlines()[0], '-TERM senkod')
 
 
 if __name__ == '__main__':
