@@ -113,6 +113,7 @@ HOST_TESTS += test_proc_detach
 all: test
 
 test: $(HOST_TESTS)
+	python3 test_launchd_install.py
 	python3 check_emoji_assets.py
 	./test_blake2b256
 	./test_hy2_proto

@@ -13,6 +13,7 @@ daemon/vless4sd
 tests/test_*
 !tests/test_*.c
 !tests/test_*.h
+!tests/test_*.py
 tests/fuzz_*
 !tests/fuzz_*.c
 !tests/fuzz_*.h

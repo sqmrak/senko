@@ -36,23 +36,10 @@ stop_tunnel() {
   "$SENKOCTL" disconnect >/dev/null 2>&1 || true
 }
 
-# the launchctl of h3lix on ios 10 answers 0 to bootout without doing it, and
-# a job left loaded restarts senkod right after the kill below
-launchd_loaded() {
-  case "$("$LAUNCHCTL" list 2>/dev/null)" in
-    *com.senko.senkod*) return 0 ;;
-  esac
-  return 1
-}
+. /var/jb/usr/lib/senko/launchd.sh || exit 1
 
 stop_daemon() {
-  if [ -x "$LAUNCHCTL" ]; then
-    "$LAUNCHCTL" bootout "system/com.senko.senkod" >/dev/null 2>&1
-    launchd_loaded && "$LAUNCHCTL" bootout system "$PLIST" >/dev/null 2>&1
-    launchd_loaded && "$LAUNCHCTL" unload "$PLIST" >/dev/null 2>&1
-    launchd_loaded && "$LAUNCHCTL" remove com.senko.senkod >/dev/null 2>&1
-    launchd_loaded && echo "senko: launchd still holds com.senko.senkod" >&2
-  fi
+  launchd_stop || return 1
   # SIGTERM lets senkod drop routes and rules before it exits
   "$KILLALL" -TERM senkod >/dev/null 2>&1 || true
   sleep 1
@@ -67,7 +54,7 @@ stop_daemon() {
 
 if [ "${SENKO_UPDATE:-0}" != "1" ]; then
   stop_tunnel "$1"
-  stop_daemon
+  stop_daemon || exit 1
 fi
 
 printf '0\n' > "$STATUS_STATE" 2>/dev/null || true

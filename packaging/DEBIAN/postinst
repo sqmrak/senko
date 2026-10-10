@@ -204,28 +204,8 @@ install_core_link || {
   exit 1
 }
 
-# the launchctl of h3lix on ios 10 answers 0 to bootstrap and bootout without
-# doing either, so every step is judged by what launchd lists afterwards
-launchd_loaded() {
-  case "$("$LAUNCHCTL" list 2>/dev/null)" in
-    *com.senko.senkod*) return 0 ;;
-  esac
-  return 1
-}
-
-launchd_stop() {
-  [ -x "$LAUNCHCTL" ] || return 0
-  "$LAUNCHCTL" bootout "system/com.senko.senkod" >/dev/null 2>&1
-  launchd_loaded || return 0
-  "$LAUNCHCTL" bootout system "$PLIST" >/dev/null 2>&1
-  launchd_loaded || return 0
-  "$LAUNCHCTL" unload "$PLIST" >/dev/null 2>&1
-  launchd_loaded || return 0
-  "$LAUNCHCTL" remove com.senko.senkod >/dev/null 2>&1
-  launchd_loaded || return 0
-  echo "senko: launchd still holds com.senko.senkod" >&2
-  return 1
-}
+# installation and removal must reach the same system launchd
+. "${PAYLOAD_ROOT}/usr/lib/senko/launchd.sh" || exit 1
 
 postinst_log() {
   echo "postinst: $*" >> /var/log/senko-system.log 2>/dev/null
@@ -258,7 +238,7 @@ diagnose_senkod() {
   postinst_log "diag system: $(uname -a 2>/dev/null)"
   postinst_log "diag cpu: $(sysctl -n hw.machine 2>/dev/null) subtype $(sysctl -n hw.cpusubtype 2>/dev/null)"
   postinst_log "diag files: $(ls -ld /usr/bin/senkod "${PAYLOAD_ROOT}/usr/bin/senkod" 2>&1 | tr '\n' ';')"
-  "$LAUNCHCTL" list com.senko.senkod 2>&1 | postinst_log_lines launchctl
+  launchctl_cmd list com.senko.senkod 2>&1 | postinst_log_lines launchctl
   probe_senkod_exec "${PAYLOAD_ROOT}/usr/bin/senkod"
   [ -z "$JBROOT" ] && probe_senkod_exec /usr/bin/senkod
   count=0
@@ -285,14 +265,35 @@ senkod_answers() {
   return 1
 }
 
+# runs one launchctl form and keeps what it said when the job is still not listed,
+# because ios 6 launchctl refuses a plist with a one line reason that was thrown away
+launchd_attempt() {
+  out="$(launchctl_cmd "$@" 2>&1)"
+  status=$?
+  launchd_loaded && return 0
+  LAUNCHD_LAST_ERROR="$(printf '%s' "$out" | sed -n '1p')"
+  postinst_log "diag launchctl $1: exit $status, $LAUNCHD_LAST_ERROR"
+  return 1
+}
+
+# the session type a plist is judged against comes from the bootstrap launchctl runs in
+diagnose_launchd_load() {
+  postinst_log "diag session: uid $(id -ur 2>/dev/null), euid $(id -u 2>/dev/null), manager $(launchctl_cmd managername 2>&1 | sed -n '1p'), context ${LAUNCHCTL_CONTEXT}"
+  postinst_log "diag plist: $(ls -ln "$PLIST" 2>&1)"
+  postinst_log "diag env: LAUNCHD_SOCKET=${LAUNCHD_SOCKET:-unset} LaunchKeepContext=${LaunchKeepContext:-unset}"
+  launchctl_cmd list 2>&1 | postinst_log_lines launchctl
+}
+
 launchd_load_and_kick() {
-  "$LAUNCHCTL" bootstrap system "$PLIST" >/dev/null 2>&1
-  launchd_loaded || "$LAUNCHCTL" load -w "$PLIST" >/dev/null 2>&1
-  launchd_loaded || "$LAUNCHCTL" load "$PLIST" >/dev/null 2>&1
-  launchd_loaded || return 1
-  "$LAUNCHCTL" enable system/com.senko.senkod >/dev/null 2>&1 || true
-  "$LAUNCHCTL" kickstart -k system/com.senko.senkod >/dev/null 2>&1 || \
-    "$LAUNCHCTL" start com.senko.senkod >/dev/null 2>&1 || true
+  launchd_attempt bootstrap system "$PLIST" || \
+    launchd_attempt load -w "$PLIST" || \
+    launchd_attempt load "$PLIST" || {
+      diagnose_launchd_load
+      return 1
+    }
+  launchctl_cmd enable system/com.senko.senkod >/dev/null 2>&1 || true
+  launchctl_cmd kickstart -k system/com.senko.senkod >/dev/null 2>&1 || \
+    launchctl_cmd start com.senko.senkod >/dev/null 2>&1 || true
   return 0
 }
 
@@ -301,8 +302,14 @@ launchd_start() {
     echo "senko: no launchctl found, senkod was not started" >&2
     return 1
   fi
+  if ! select_launchctl_context; then
+    echo "senko: launchctl cannot reach system launchd from this installer" >&2
+    postinst_log "launchctl cannot reach system launchd"
+    diagnose_launchd_load
+    return 1
+  fi
   if ! launchd_load_and_kick; then
-    echo "senko: launchd did not load ${PLIST}, senkod is not running" >&2
+    echo "senko: launchd did not load ${PLIST}, senkod is not running (${LAUNCHD_LAST_ERROR:-no launchctl output})" >&2
     postinst_log "launchd did not load ${PLIST}"
     return 1
   fi
@@ -520,7 +527,11 @@ chmod 600 "$CFG" >/dev/null 2>&1 || true
 # senkod --update restarts the daemon itself once dpkg returns
 if [ "${SENKO_UPDATE:-0}" != "1" ]; then
   # SIGTERM lets senkod remove routes before launchd starts the replacement
-  launchd_stop
+  launchd_stop || {
+    postinst_log "cannot unload senkod before restarting it"
+    diagnose_launchd_load
+    exit 1
+  }
   "$KILLALL" -TERM senkod >/dev/null 2>&1 || true
   sleep 1
   "$KILLALL" -TERM senkod >/dev/null 2>&1 || true

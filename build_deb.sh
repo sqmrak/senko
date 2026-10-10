@@ -289,6 +289,7 @@ cp "${ROOT}/senkotlsfix/cacert.pem" "${PAYLOAD}/usr/lib/senko/cacert.pem"
 cp "${ROOT}/senkotlsfix/roots/"*.pem "${PAYLOAD}/usr/lib/senkotlsfix/roots/" 2>/dev/null || true
 cp "${SLICE}/senkod" "${PAYLOAD}/usr/bin/senkod"
 cp "${SLICE}/senkoctl" "${PAYLOAD}/usr/bin/senkoctl"
+cp "${ROOT}/packaging/var/jb/usr/lib/senko/launchd.sh" "${PAYLOAD}/usr/lib/senko/launchd.sh"
 # kept under a private path because /usr/bin/head belongs to coreutils, and a
 # package that claims it is refused outright by dpkg on any system that has it
 if [ -f "${ROOT}/packaging/var/jb/usr/lib/senko/head" ]; then
@@ -332,6 +333,7 @@ find "${PAYLOAD}/Applications/Senko.app/PlugIns/SenkoTunnel.appex" \
   -type f ! -name SenkoTunnel -exec chmod 644 {} +
 find "${PAYLOAD}/usr/lib/senkotlsfix" -type f -exec chmod 644 {} +
 chmod 644 "${PAYLOAD}/usr/lib/senko/cacert.pem"
+chmod 644 "${PAYLOAD}/usr/lib/senko/launchd.sh"
 chmod 644 "${PAYLOAD}/usr/lib/senkostatus.plist"
 chmod 644 "${PAYLOAD}/usr/share/doc/senko/"*
 chmod 644 "${PAYLOAD}/Library/LaunchDaemons/"*.plist

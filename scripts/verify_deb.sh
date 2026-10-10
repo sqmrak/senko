@@ -59,6 +59,16 @@ fi
 [ -s data/var/jb/usr/lib/senko/cacert.pem ] || {
   echo "daemon tls roots missing from the persistent path" >&2; exit 1;
 }
+[ -s data/var/jb/usr/lib/senko/launchd.sh ] || {
+  echo "launchd control script missing" >&2; exit 1;
+}
+sh -n data/var/jb/usr/lib/senko/launchd.sh
+for script in postinst prerm; do
+  sh -n "control/${script}"
+  grep -q '/usr/lib/senko/launchd.sh' "control/${script}" || {
+    echo "${script} does not use the launchd control script" >&2; exit 1;
+  }
+done
 [ -f data/var/jb/Library/LaunchDaemons/com.senko.senkod.plist ] || {
   echo "universal launchd plist missing" >&2; exit 1;
 }
