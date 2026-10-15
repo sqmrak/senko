@@ -108,8 +108,6 @@ static void SenkoBuildTranslations(void) {
     SenkoAddChineseTranslation(@"Lines: %d", @"行数：%d");
     SenkoAddTranslation(@"Share", @"Поделиться");
     SenkoAddChineseTranslation(@"Share", @"分享");
-    SenkoAddTranslation(@"Senko is a very jealous fox, and she does not like it when you use something else... ;(", @"Сенко очень ревнивая лиса, и она не любит, когда пользуются чем-то другим... ;(");
-    SenkoAddChineseTranslation(@"Senko is a very jealous fox, and she does not like it when you use something else... ;(", @"仙狐是一只非常爱吃醋的狐狸，她不喜欢你使用别的东西…… ;(");
     SenkoAddTranslation(@"Continue", @"Продолжить");
     SenkoAddChineseTranslation(@"Continue", @"继续");
     SenkoAddTranslation(@"Remove vless-core", @"Удалить vless-core");

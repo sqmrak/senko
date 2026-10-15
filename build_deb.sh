@@ -50,7 +50,7 @@ PAYLOAD="${STAGE}${JBROOT}"
 APP_RESOURCES=(
   Icon.png Icon@2x.png Icon-72.png Icon-72@2x.png
   Icon-60@2x.png Icon-60@3x.png Icon-76.png Icon-76@2x.png
-  Icon-83.5@2x.png sqmrak.jpg boykisser.png senko-fall.png senko-jealous.png
+  Icon-83.5@2x.png sqmrak.jpg boykisser.png senko-fall.png
   meow.caf meow.wav ouch.wav miside-bg.jpg frutiger-bg.jpg frutiger-bg-dark.jpg frutiger-bg-dark-wide.jpg
   server-placeholder.png ios26-bg-light.jpg ios26-bg-dark.jpg
   Default.png Default@2x.png Default-568h@2x.png Default-667h@2x.png
