@@ -4,6 +4,7 @@
 #import "ui_theme.h"
 #import "app_common.h"
 #import "crash_report.h"
+#import "text_prompt.h"
 
 #include <objc/message.h>
 
@@ -26,6 +27,10 @@ static NSString *RuleActionTitle(NSString *action) {
 static NSString *RuleTypeTitle(NSString *type) {
     if ([type isEqualToString:@"domain-keyword"]) return SenkoLocalizedText(@"Keyword");
     if ([type isEqualToString:@"ip-cidr"]) return SenkoLocalizedText(@"IP range");
+    if ([type isEqualToString:@"domain-full"]) return SenkoLocalizedText(@"Exact domain");
+    if ([type isEqualToString:@"app"]) return SenkoLocalizedText(@"App");
+    if ([type isEqualToString:@"geosite"]) return SenkoLocalizedText(@"Geosite list");
+    if ([type isEqualToString:@"geoip"]) return SenkoLocalizedText(@"Geoip list");
     return SenkoLocalizedText(@"Domain and subdomains");
 }
 
@@ -167,13 +172,25 @@ static NSString *RuleTypeTitle(NSString *type) {
 }
 
 /* a plain text alert is the only input control that behaves the same from
-   ios 5 to ios 15 */
+   ios 5 to ios 15; ios 4.3 has no text alert and gets a small screen */
 - (void)askForValue {
     NSString *hint = [_pendingType isEqualToString:@"ip-cidr"]
         ? SenkoLocalizedText(@"For example 10.0.0.0/8")
         : [_pendingType isEqualToString:@"domain-keyword"]
             ? SenkoLocalizedText(@"For example googlevideo")
             : SenkoLocalizedText(@"For example example.com");
+    UIKeyboardType keyboard = [_pendingType isEqualToString:@"ip-cidr"]
+        ? UIKeyboardTypeNumbersAndPunctuation : UIKeyboardTypeURL;
+    if (![UIAlertView instancesRespondToSelector:@selector(setAlertViewStyle:)]) {
+        [SenkoTextPromptVC presentFrom:self
+                                 title:RuleActionTitle(_pendingAction)
+                               message:hint
+                                  text:nil
+                              keyboard:keyboard
+                               confirm:SenkoLocalizedText(@"Add")
+                               handler:^(NSString *text) { [self addRuleValue:text]; }];
+        return;
+    }
     UIAlertView *a = [[UIAlertView alloc]
         initWithTitle:RuleActionTitle(_pendingAction)
               message:hint
@@ -181,15 +198,12 @@ static NSString *RuleTypeTitle(NSString *type) {
     cancelButtonTitle:SenkoLocalizedText(@"Cancel")
     otherButtonTitles:SenkoLocalizedText(@"Add"), nil];
     a.tag = RULES_ALERT_VALUE;
-    if ([a respondsToSelector:@selector(setAlertViewStyle:)]) {
-        a.alertViewStyle = UIAlertViewStylePlainTextInput;
-        UITextField *field = [a textFieldAtIndex:0];
-        field.autocapitalizationType = UITextAutocapitalizationTypeNone;
-        field.autocorrectionType = UITextAutocorrectionTypeNo;
-        field.keyboardType = [_pendingType isEqualToString:@"ip-cidr"]
-            ? UIKeyboardTypeNumbersAndPunctuation : UIKeyboardTypeURL;
-        field.placeholder = SenkoLocalizedText(@"Value");
-    }
+    a.alertViewStyle = UIAlertViewStylePlainTextInput;
+    UITextField *field = [a textFieldAtIndex:0];
+    field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    field.autocorrectionType = UITextAutocorrectionTypeNo;
+    field.keyboardType = keyboard;
+    field.placeholder = SenkoLocalizedText(@"Value");
     [a show];
     [a release];
 }
@@ -212,7 +226,11 @@ static NSString *RuleTypeTitle(NSString *type) {
 
 - (void)alertView:(UIAlertView *)alert clickedButtonAtIndex:(NSInteger)index {
     if (alert.tag != RULES_ALERT_VALUE || index == alert.cancelButtonIndex) return;
-    NSString *value = [[[alert textFieldAtIndex:0] text]
+    [self addRuleValue:[[alert textFieldAtIndex:0] text]];
+}
+
+- (void)addRuleValue:(NSString *)text {
+    NSString *value = [text
         stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (![value length]) return;
 /* the daemon is the one that validates: it owns the rule grammar, and a second
