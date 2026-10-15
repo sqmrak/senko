@@ -15,7 +15,7 @@ static NSString * const kAboutAction = @"a";
 
 static NSString * const kAboutThanks =
     @"@CookieValerka, @inraxx, @not_a_modder, @s3dativee, @Lineysom, @shizotoaster, "
-    @"@fly1ngangel, @anazerka, @fr0n1k, @vladosik228, @kfrom7, @ningmeng";
+    @"@fly1ngangel, @anazerka, @fr0n1k, @vladosik228, @kfrom7, @ningmeng, @Vladus324";
 static NSString * const kAboutSponsors = @"@s3dativee, @shizotoaster, @not_a_modder";
 static NSString * const kAboutTesters =
     @"@inraxx, @s3dativee, @rafal_official, @QuaIcomm, @belo4kaFLUNI, "
