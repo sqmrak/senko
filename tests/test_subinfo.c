@@ -8,6 +8,22 @@
 
 static int failed;
 
+static char got[256];
+static size_t got_len;
+
+static int collect_sink(void *ctx, const uint8_t *data, size_t len) {
+    (void)ctx;
+    if (got_len + len > sizeof got) return -1;
+    memcpy(got + got_len, data, len);
+    got_len += len;
+    return 0;
+}
+
+static int failing_sink(void *ctx, const uint8_t *data, size_t len) {
+    (void)ctx; (void)data; (void)len;
+    return -1;
+}
+
 static void expect(const char *what, unsigned long long got, unsigned long long want) {
     if (got == want) return;
     fprintf(stderr, "FAIL %s: got %llu want %llu\n", what, got, want);
@@ -139,6 +155,100 @@ int main(void) {
                strcmp(info.title, "My Plan") == 0 ? 1 : 0, 1);
         expect("subscription-description stays a separate field",
                strcmp(info.description, "a longer blurb about the plan") == 0 ? 1 : 0, 1);
+    }
+
+/* a happ panel delivers its routing profile in a header of several kilobytes; one
+   past the buffer is dropped, because a cut base64 profile decodes to a wrong one */
+    {
+        static char response[40 * 1024];
+        static char value[HTTP_ROUTING_MAX];
+        uint8_t body[16];
+        http_parser_t hp;
+        subfetch_info_t info;
+        int n;
+        memset(value, 'A', sizeof value - 1);
+        value[sizeof value - 1] = '\0';
+        n = snprintf(response, sizeof response,
+                     "HTTP/1.1 200 OK\r\ncontent-length: 2\r\nRouting: happ://routing/onadd/%s\r\n\r\nok",
+                     value);
+        http_parser_init(&hp, body, sizeof body);
+        expect("oversized routing header still parses",
+               http_parser_feed(&hp, (const uint8_t *)response, (size_t)n) == HTTP_DONE, 1);
+        memset(&info, 0, sizeof info);
+        subfetch_parser_info_for_test(&hp, &info);
+        expect("oversized routing header is dropped, not cut", info.routing[0] ? 1 : 0, 0);
+        expect("oversized routing header is flagged", info.routing_too_long, 1);
+
+        n = snprintf(response, sizeof response,
+                     "HTTP/1.1 200 OK\r\ncontent-length: 2\r\nRouting: happ://routing/onadd/e30=\r\n\r\nok");
+        http_parser_init(&hp, body, sizeof body);
+        expect("routing response parses",
+               http_parser_feed(&hp, (const uint8_t *)response, (size_t)n) == HTTP_DONE, 1);
+        memset(&info, 0, sizeof info);
+        subfetch_parser_info_for_test(&hp, &info);
+        expect("routing header is kept",
+               strcmp(info.routing, "happ://routing/onadd/e30=") == 0 ? 1 : 0, 1);
+        expect("routing header was not too long", info.routing_too_long, 0);
+
+        memset(value, 'B', 12 * 1024);
+        value[12 * 1024] = '\0';
+        n = snprintf(response, sizeof response,
+                     "HTTP/1.1 200 OK\r\ncontent-length: 2\r\nrouting: %s\r\n\r\nok", value);
+        http_parser_init(&hp, body, sizeof body);
+        expect("a 12 KB routing header parses",
+               http_parser_feed(&hp, (const uint8_t *)response, (size_t)n) == HTTP_DONE, 1);
+        memset(&info, 0, sizeof info);
+        subfetch_parser_info_for_test(&hp, &info);
+        expect("a 12 KB routing header is kept whole", strlen(info.routing) == 12 * 1024 ? 1 : 0, 1);
+    }
+
+/* a large download goes to a sink in pieces, in either framing, and the limit on
+   its total is enforced before the bytes that pass it are written */
+    {
+        static const char fixed[] =
+            "HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\n0123456789";
+        static const char chunked[] =
+            "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n"
+            "4\r\nabcd\r\n3\r\nefg\r\n0\r\n\r\n";
+        static const char redirect[] =
+            "HTTP/1.1 302 Found\r\nlocation: https://x.test/y\r\ncontent-length: 5\r\n\r\nhello";
+        http_parser_t hp;
+        size_t i;
+        got_len = 0;
+        http_parser_init(&hp, NULL, 64);
+        http_parser_set_sink(&hp, collect_sink, NULL);
+        for (i = 0; i < sizeof fixed - 1; i += 7) {
+            size_t n = sizeof fixed - 1 - i < 7 ? sizeof fixed - 1 - i : 7;
+            http_parser_feed(&hp, (const uint8_t *)fixed + i, n);
+        }
+        expect("sink gets a fixed length body", got_len == 10 && memcmp(got, "0123456789", 10) == 0, 1);
+        expect("sink counts the body", hp.body_len, 10);
+
+        got_len = 0;
+        http_parser_init(&hp, NULL, 64);
+        http_parser_set_sink(&hp, collect_sink, NULL);
+        expect("sink chunked parse", http_parser_feed(&hp, (const uint8_t *)chunked, sizeof chunked - 1) == HTTP_DONE, 1);
+        expect("sink gets a chunked body", got_len == 7 && memcmp(got, "abcdefg", 7) == 0, 1);
+
+        got_len = 0;
+        http_parser_init(&hp, NULL, 9);
+        http_parser_set_sink(&hp, collect_sink, NULL);
+        expect("sink limit refuses a longer body",
+               http_parser_feed(&hp, (const uint8_t *)fixed, sizeof fixed - 1) == HTTP_ERR_TOOBIG, 1);
+        expect("sink limit marks the cut", hp.body_cut, 1);
+        expect("sink limit writes nothing past it", got_len <= 9, 1);
+
+        got_len = 0;
+        http_parser_init(&hp, NULL, 64);
+        http_parser_set_sink(&hp, collect_sink, NULL);
+        expect("a redirect body never reaches the sink",
+               http_parser_feed(&hp, (const uint8_t *)redirect, sizeof redirect - 1) == HTTP_DONE && got_len == 0, 1);
+
+        got_len = 0;
+        http_parser_init(&hp, NULL, 64);
+        http_parser_set_sink(&hp, failing_sink, NULL);
+        expect("a failing sink stops the parse",
+               http_parser_feed(&hp, (const uint8_t *)fixed, sizeof fixed - 1) == HTTP_ERR_PARSE, 1);
     }
 
     if (failed) {

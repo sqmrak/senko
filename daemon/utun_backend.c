@@ -10,6 +10,7 @@
 #include "legacy_ios.h"
 #include "route_socket.h"
 #include "utun_route.h"
+#include "vpn_conflict.h"
 
 #include <arpa/inet.h>
 #include <net/if.h>
@@ -89,7 +90,10 @@ int utun_plan_prepare(const char *resolved_ipv4, tun_plan_input_t *input,
         return -1;
     }
     utun_route_path_t path;
-    if (physical_path(input, &path, reason, reason_cap) != 0) return -1;
+    if (physical_path(input, &path, reason, reason_cap) != 0) {
+        vpn_conflict_explain(reason, reason_cap, NULL);
+        return -1;
+    }
     snprintf(input->physical_ifname, sizeof input->physical_ifname, "%s", path.ifname);
     input->have_gateway4 = path.via_gateway;
     input->route_ipv4 = 1;
@@ -467,6 +471,12 @@ static int hysteria_engine_start(utun_backend_t *backend, const vl_server_t *ser
     return backend->hy2 ? 0 : -1;
 }
 
+void utun_backend_set_app_owner(utun_backend_t *backend, tun_policy_app_fn fn, void *ctx) {
+    if (!backend) return;
+    backend->app_of = fn;
+    backend->app_ctx = ctx;
+}
+
 int utun_backend_start(utun_backend_t *backend, const vl_server_t *server,
                        const char *resolved_ipv4, ruleset_t *rules,
                        const char *dns_upstream, dns_block_response_t block_response,
@@ -486,8 +496,8 @@ int utun_backend_start(utun_backend_t *backend, const vl_server_t *server,
     int vless = server->proto == VL_PROTO_VLESS;
     uint8_t uuid[VLESS_UUID_LEN];
     memset(uuid, 0, sizeof uuid);
-    if (vless && vless_uuid_parse(server->uuid, uuid) != VLESS_OK) {
-        reason_set(reason, reason_cap, "the VLESS UUID in this profile is invalid");
+    if (cfg_proto_uses_uuid(server->proto) && vless_uuid_parse(server->uuid, uuid) != VLESS_OK) {
+        reason_set(reason, reason_cap, "the UUID in this profile is invalid");
         return -1;
     }
     uint8_t dns[16] = {0};
@@ -561,6 +571,8 @@ int utun_backend_start(utun_backend_t *backend, const vl_server_t *server,
         goto failed;
     }
     backend->policy_ready = 1;
+    backend->policy.app_of = backend->app_of;
+    backend->policy.app_ctx = backend->app_ctx;
     backend->loop = calloc(1, tun_loop_size());
     backend->tcp = calloc(1, tun_tcp_size());
     backend->udp = calloc(1, tun_udp_size());
@@ -686,6 +698,7 @@ int utun_backend_start(utun_backend_t *backend, const vl_server_t *server,
         snprintf(backend->error, sizeof backend->error, "%.255s",
                  result.failed_message[0] ? result.failed_message
                                           : "utun route installation failed");
+        vpn_conflict_explain(backend->error, sizeof backend->error, input.ifname);
         goto failed;
     }
     utun_leftovers_save(&backend->plan);

@@ -3,6 +3,9 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+
+#include "core/geo.h"
 
 typedef struct {
     char *out;
@@ -93,7 +96,15 @@ static void append_grpc_service(json_out_t *j, const char *path) {
     append_string(j, service);
 }
 
-static int append_stream(json_out_t *j, const vl_server_t *s) {
+/* go on darwin verifies through Security unless the config names its own roots */
+static void append_roots(json_out_t *j, const char *ca_file) {
+    if (!ca_file) return;
+    append_raw(j, ",\"disableSystemRoot\":true,\"certificates\":[{\"usage\":\"verify\",\"certificateFile\":");
+    append_string(j, ca_file);
+    append_raw(j, "}]");
+}
+
+static int append_stream(json_out_t *j, const vl_server_t *s, const char *ca_file) {
     const char *network = network_name(s->net);
     if (!network) return -1;
     append_raw(j, ",\"streamSettings\":{\"network\":");
@@ -116,6 +127,7 @@ static int append_stream(json_out_t *j, const vl_server_t *s) {
         append_string(j, s->sni[0] ? s->sni : s->host);
         append_raw(j, ",\"fingerprint\":");
         append_string(j, s->fp[0] ? s->fp : "chrome");
+        append_roots(j, ca_file);
         append_raw(j, "}");
     }
 
@@ -143,7 +155,7 @@ static int append_stream(json_out_t *j, const vl_server_t *s) {
 }
 
 static int append_outbound(json_out_t *j, const vl_server_t *s,
-                           const char *endpoint_ip) {
+                           const char *endpoint_ip, const char *ca_file) {
     const char *protocol;
     if (s->proto == VL_PROTO_VLESS) {
         append_raw(j, "{\"tag\":\"senko-out\",\"protocol\":\"vless\",\"settings\":{\"address\":");
@@ -155,7 +167,7 @@ static int append_outbound(json_out_t *j, const vl_server_t *s,
         append_raw(j, ",\"flow\":");
         append_string(j, s->flow);
         append_raw(j, "}");
-        if (append_stream(j, s) != 0) return -1;
+        if (append_stream(j, s, ca_file) != 0) return -1;
         append_raw(j, "}");
         return j->failed ? -1 : 0;
     }
@@ -176,6 +188,7 @@ static int append_outbound(json_out_t *j, const vl_server_t *s,
             append_raw(j, ",\"pinnedPeerCertSha256\":");
             append_string(j, s->pin_sha256);
         }
+        append_roots(j, ca_file);
         append_raw(j, "},\"hysteriaSettings\":{\"version\":2,\"auth\":");
         append_string(j, s->pass);
         append_raw(j, "}");
@@ -202,13 +215,28 @@ static int append_outbound(json_out_t *j, const vl_server_t *s,
         return j->failed ? -1 : 0;
     }
 
+    if (s->proto == VL_PROTO_VMESS) {
+/* the flat form infra/conf/vmess.go reads when settings carries an address;
+   a cipher name it does not know runs as auto there */
+        append_raw(j, "{\"tag\":\"senko-out\",\"protocol\":\"vmess\",\"settings\":{\"address\":");
+        append_string(j, endpoint_ip);
+        append_format(j, ",\"port\":%u,\"id\":", (unsigned)s->port);
+        append_string(j, s->uuid);
+        append_raw(j, ",\"security\":");
+        append_string(j, s->encryption[0] ? s->encryption : "auto");
+        append_raw(j, "}");
+        if (append_stream(j, s, ca_file) != 0) return -1;
+        append_raw(j, "}");
+        return j->failed ? -1 : 0;
+    }
+
     if (s->proto == VL_PROTO_TROJAN) {
         append_raw(j, "{\"tag\":\"senko-out\",\"protocol\":\"trojan\",\"settings\":{\"servers\":[{\"address\":");
         append_string(j, endpoint_ip);
         append_format(j, ",\"port\":%u,\"password\":", (unsigned)s->port);
         append_string(j, s->pass);
         append_raw(j, "}]}");
-        if (append_stream(j, s) != 0) return -1;
+        if (append_stream(j, s, ca_file) != 0) return -1;
         append_raw(j, "}");
         return j->failed ? -1 : 0;
     }
@@ -242,11 +270,55 @@ static int append_outbound(json_out_t *j, const vl_server_t *s,
     if (s->proto == VL_PROTO_HTTPS) {
         append_raw(j, ",\"streamSettings\":{\"security\":\"tls\",\"tlsSettings\":{\"serverName\":");
         append_string(j, s->host);
+        append_roots(j, ca_file);
         append_raw(j, "}}");
     }
     append_raw(j, "}");
     return j->failed ? -1 : 0;
 }
+
+/* xray can name a domain or address set from a dat in its asset directory, but
+   not an app. a geo rule is written when its dat is there, is inert when its
+   set is empty or was never downloaded (the utun backend matches nothing for
+   it too), and is lost when senko-core has no directory to read it from */
+typedef enum { CORE_RULE_WRITE, CORE_RULE_INERT, CORE_RULE_LOST } core_rule_state_t;
+
+static int geo_dat_present(const char *geo_dir, rule_type_t type) {
+    char path[320];
+    int n = snprintf(path, sizeof path, "%s/%s", geo_dir,
+                     type == RULE_TYPE_GEOSITE ? "geosite.dat" : "geoip.dat");
+    return n > 0 && (size_t)n < sizeof path && access(path, R_OK) == 0;
+}
+
+static core_rule_state_t core_rule_state(const rule_t *rule, const char *geo_dir) {
+    if (rule->type == RULE_TYPE_APP) return CORE_RULE_LOST;
+    if (rule->type != RULE_TYPE_GEOSITE && rule->type != RULE_TYPE_GEOIP)
+        return CORE_RULE_WRITE;
+    if (rule->type == RULE_TYPE_GEOIP && strcmp(rule->value, "private") == 0)
+        return CORE_RULE_WRITE;
+    if (!geo_dir || !geo_dir[0]) return CORE_RULE_LOST;
+    size_t count = !rule->geo ? 0 : rule->type == RULE_TYPE_GEOSITE
+        ? geo_site_count((const geo_site_t *)rule->geo)
+        : geo_ip_count((const geo_ip_t *)rule->geo);
+    if (count == 0) return CORE_RULE_INERT;
+    return geo_dat_present(geo_dir, rule->type) ? CORE_RULE_WRITE : CORE_RULE_LOST;
+}
+
+size_t senko_core_config_unsupported(const ruleset_t *rules, const char *geo_dir) {
+    size_t n = 0;
+    for (size_t i = 0; rules && i < rules->count; ++i)
+        if (core_rule_state(&rules->entries[i], geo_dir) == CORE_RULE_LOST) ++n;
+    return n;
+}
+
+/* the ranges geoip:private names, spelled out because the dat is not trusted to
+   carry that code */
+static const char *const PRIVATE_RANGES[] = {
+    "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+    "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24",
+    "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24",
+    "224.0.0.0/4", "240.0.0.0/4", "::1/128", "fc00::/7", "fe80::/10"
+};
 
 static void append_routing_rule(json_out_t *j, const rule_t *rule, int *first) {
     if (!*first) append_raw(j, ",");
@@ -258,10 +330,27 @@ static void append_routing_rule(json_out_t *j, const rule_t *rule, int *first) {
     if (rule->type == RULE_TYPE_IP_CIDR) {
         append_raw(j, ",\"ip\":[");
         append_string(j, rule->value);
+    } else if (rule->type == RULE_TYPE_GEOIP && strcmp(rule->value, "private") == 0) {
+        append_raw(j, ",\"ip\":[");
+        for (size_t i = 0; i < sizeof PRIVATE_RANGES / sizeof PRIVATE_RANGES[0]; ++i) {
+            if (i) append_raw(j, ",");
+            append_string(j, PRIVATE_RANGES[i]);
+        }
+    } else if (rule->type == RULE_TYPE_GEOSITE || rule->type == RULE_TYPE_GEOIP) {
+        char tag[RULE_VALUE_MAX + 16];
+        int n = snprintf(tag, sizeof tag, "%s:%s",
+                         rule->type == RULE_TYPE_GEOSITE ? "geosite" : "geoip", rule->value);
+        if (n < 0 || (size_t)n >= sizeof tag) {
+            j->failed = 1;
+            return;
+        }
+        append_raw(j, rule->type == RULE_TYPE_GEOSITE ? ",\"domain\":[" : ",\"ip\":[");
+        append_string(j, tag);
     } else {
         char domain[RULE_VALUE_MAX + 16];
         int n = snprintf(domain, sizeof domain, "%s%s",
-                         rule->type == RULE_TYPE_DOMAIN_SUFFIX ? "domain:" : "keyword:",
+                         rule->type == RULE_TYPE_DOMAIN_SUFFIX ? "domain:"
+                         : rule->type == RULE_TYPE_DOMAIN_FULL ? "full:" : "keyword:",
                          rule->value);
         if (n < 0 || (size_t)n >= sizeof domain) {
             j->failed = 1;
@@ -273,7 +362,7 @@ static void append_routing_rule(json_out_t *j, const rule_t *rule, int *first) {
     append_raw(j, "]}");
 }
 
-static void append_routing(json_out_t *j, const ruleset_t *rules) {
+static void append_routing(json_out_t *j, const ruleset_t *rules, const char *geo_dir) {
     append_raw(j, ",\"routing\":{\"domainStrategy\":\"IPIfNonMatch\",\"rules\":[");
     int first = 1;
     if (rules) {
@@ -282,15 +371,24 @@ static void append_routing(json_out_t *j, const ruleset_t *rules) {
         };
         for (size_t rank = 0; rank < sizeof order / sizeof order[0]; ++rank)
             for (size_t i = 0; i < rules->count; ++i)
-                if (rules->entries[i].action == order[rank])
+                if (rules->entries[i].action == order[rank] &&
+                    core_rule_state(&rules->entries[i], geo_dir) == CORE_RULE_WRITE)
                     append_routing_rule(j, &rules->entries[i], &first);
+        /* a profile that sends unnamed traffic straight out is only safe when every
+           rule that names the exceptions could be written; a skipped geo rule would
+           leave its sites direct, so then the default stays the tunnel */
+        if (rules->fallback == RULE_ACTION_DIRECT && senko_core_config_unsupported(rules, geo_dir) == 0) {
+            if (!first) append_raw(j, ",");
+            first = 0;
+            append_raw(j, "{\"type\":\"field\",\"network\":\"tcp,udp\",\"outboundTag\":\"direct\"}");
+        }
     }
     append_raw(j, "]}");
 }
 
 int senko_core_config_render_rules(const vl_server_t *server, const char *endpoint_ip,
-                           const char *ifname, const ruleset_t *rules,
-                           char *out, size_t out_cap) {
+                           const char *ifname, const ruleset_t *rules, const char *geo_dir,
+                           const char *ca_file, char *out, size_t out_cap) {
     json_out_t j;
     char reason[128];
     if (!server || !endpoint_ip || !endpoint_ip[0] ||
@@ -305,10 +403,10 @@ int senko_core_config_render_rules(const vl_server_t *server, const char *endpoi
     append_raw(&j, "{\"log\":{\"loglevel\":\"warning\"},\"inbounds\":[{\"tag\":\"senko-tun\",\"protocol\":\"tun\",\"settings\":{\"name\":");
     append_string(&j, ifname);
     append_raw(&j, ",\"mtu\":1500},\"sniffing\":{\"enabled\":true,\"destOverride\":[\"http\",\"tls\",\"quic\"],\"routeOnly\":true}}],\"outbounds\":[");
-    if (append_outbound(&j, server, endpoint_ip) != 0) return -1;
+    if (append_outbound(&j, server, endpoint_ip, ca_file) != 0) return -1;
     append_raw(&j, ",{\"tag\":\"direct\",\"protocol\":\"freedom\"},"
                    "{\"tag\":\"block\",\"protocol\":\"blackhole\"}]");
-    append_routing(&j, rules);
+    append_routing(&j, rules, geo_dir);
     append_raw(&j, "}");
     return j.failed ? -1 : 0;
 }
@@ -316,5 +414,5 @@ int senko_core_config_render_rules(const vl_server_t *server, const char *endpoi
 int senko_core_config_render(const vl_server_t *server, const char *endpoint_ip,
                      const char *ifname,
                      char *out, size_t out_cap) {
-    return senko_core_config_render_rules(server, endpoint_ip, ifname, NULL, out, out_cap);
+    return senko_core_config_render_rules(server, endpoint_ip, ifname, NULL, NULL, NULL, out, out_cap);
 }

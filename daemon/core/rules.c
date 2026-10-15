@@ -1,5 +1,7 @@
 #include "rules.h"
 
+#include "geo.h"
+
 #include <stddef.h>
 
 #include <arpa/inet.h>
@@ -17,6 +19,10 @@ const char *rule_type_name(rule_type_t type) {
     if (type == RULE_TYPE_DOMAIN_SUFFIX) return "domain-suffix";
     if (type == RULE_TYPE_DOMAIN_KEYWORD) return "domain-keyword";
     if (type == RULE_TYPE_IP_CIDR) return "ip-cidr";
+    if (type == RULE_TYPE_DOMAIN_FULL) return "domain-full";
+    if (type == RULE_TYPE_GEOSITE) return "geosite";
+    if (type == RULE_TYPE_GEOIP) return "geoip";
+    if (type == RULE_TYPE_APP) return "app";
     return NULL;
 }
 
@@ -54,6 +60,14 @@ static int parse_type(const char *text, size_t len, rule_type_t *out) {
         *out = RULE_TYPE_DOMAIN_KEYWORD;
     else if (len == 7 && memcmp(text, "ip-cidr", 7) == 0)
         *out = RULE_TYPE_IP_CIDR;
+    else if (len == 11 && memcmp(text, "domain-full", 11) == 0)
+        *out = RULE_TYPE_DOMAIN_FULL;
+    else if (len == 7 && memcmp(text, "geosite", 7) == 0)
+        *out = RULE_TYPE_GEOSITE;
+    else if (len == 5 && memcmp(text, "geoip", 5) == 0)
+        *out = RULE_TYPE_GEOIP;
+    else if (len == 3 && memcmp(text, "app", 3) == 0)
+        *out = RULE_TYPE_APP;
     else return -1;
     return 0;
 }
@@ -79,6 +93,27 @@ static int normalize_domain(const char *text, size_t len, char *out, size_t cap)
         ++label;
     }
     if (label == 0 || label > 63) return -1;
+    out[len] = '\0';
+    return 0;
+}
+
+/* a geo tag is the name inside a geosite or geoip rule, lower case */
+static int normalize_geo_tag(const char *text, size_t len, char *out, size_t cap) {
+    if (len == 0 || len >= cap || len >= GEO_TAG_MAX) return -1;
+    for (size_t i = 0; i < len; ++i) out[i] = (char)tolower((unsigned char)text[i]);
+    out[len] = '\0';
+    return geo_tag_valid(out) ? 0 : -1;
+}
+
+/* a bundle identifier is reverse dns text; anything else could never name an app
+   and would only reach logs and the control socket */
+static int normalize_bundle_id(const char *text, size_t len, char *out, size_t cap) {
+    if (len == 0 || len >= cap || len > 200) return -1;
+    for (size_t i = 0; i < len; ++i) {
+        unsigned char c = (unsigned char)text[i];
+        if (!(isalnum(c) || c == '.' || c == '-' || c == '_')) return -1;
+        out[i] = (char)c;
+    }
     out[len] = '\0';
     return 0;
 }
@@ -140,6 +175,12 @@ rules_status_t rules_parse(const char *text, size_t len, rule_t *out) {
     if (value_len == 0 || memchr(value, ' ', value_len)) return RULES_ERR_VALUE;
     if (out->type == RULE_TYPE_IP_CIDR) {
         if (parse_cidr(out, value, value_len) != 0) return RULES_ERR_VALUE;
+    } else if (out->type == RULE_TYPE_GEOSITE || out->type == RULE_TYPE_GEOIP) {
+        if (normalize_geo_tag(value, value_len, out->value, sizeof out->value) != 0)
+            return RULES_ERR_VALUE;
+    } else if (out->type == RULE_TYPE_APP) {
+        if (normalize_bundle_id(value, value_len, out->value, sizeof out->value) != 0)
+            return RULES_ERR_VALUE;
     } else if (normalize_domain(value, value_len, out->value,
                                 sizeof out->value) != 0) {
         return RULES_ERR_VALUE;
@@ -152,7 +193,8 @@ rules_status_t ruleset_add(ruleset_t *rules, const rule_t *rule, size_t *out_ind
         !rule_action_name(rule->action) || !rule->value[0]) return RULES_ERR_ARG;
     for (size_t i = 0; i < rules->count; ++i) {
         rule_t *old = &rules->entries[i];
-        if (old->type != rule->type || strcmp(old->value, rule->value) != 0) continue;
+        if (old->type != rule->type || old->source != rule->source ||
+            strcmp(old->value, rule->value) != 0) continue;
         old->action = rule->action;
         old->hits = 0;
         if (out_index) *out_index = i;
@@ -161,6 +203,7 @@ rules_status_t ruleset_add(ruleset_t *rules, const rule_t *rule, size_t *out_ind
     if (rules->count >= RULESET_MAX_RULES) return RULES_ERR_FULL;
     rules->entries[rules->count] = *rule;
     rules->entries[rules->count].hits = 0;
+    rules->entries[rules->count].geo = NULL;
     if (out_index) *out_index = rules->count;
     ++rules->count;
     return RULES_OK;
@@ -185,6 +228,20 @@ rules_status_t ruleset_remove(ruleset_t *rules, size_t index) {
     return RULES_OK;
 }
 
+size_t ruleset_remove_source(ruleset_t *rules, uint8_t source) {
+    size_t kept = 0;
+    if (!rules) return 0;
+    for (size_t i = 0; i < rules->count; ++i) {
+        if (rules->entries[i].source == source) continue;
+        if (kept != i) rules->entries[kept] = rules->entries[i];
+        ++kept;
+    }
+    size_t removed = rules->count - kept;
+    if (removed) memset(&rules->entries[kept], 0, removed * sizeof rules->entries[0]);
+    rules->count = kept;
+    return removed;
+}
+
 static int suffix_matches(const char *domain, const char *suffix) {
     size_t dl = strlen(domain);
     size_t sl = strlen(suffix);
@@ -203,10 +260,14 @@ rule_action_t ruleset_match_domain(ruleset_t *rules, const char *domain,
         return RULE_ACTION_PROXY;
     for (size_t i = 0; i < rules->count; ++i) {
         rule_t *rule = &rules->entries[i];
-        int match = rule->type == RULE_TYPE_DOMAIN_SUFFIX
-            ? suffix_matches(normalized, rule->value)
-            : rule->type == RULE_TYPE_DOMAIN_KEYWORD
-                ? strstr(normalized, rule->value) != NULL : 0;
+        int match = 0;
+        switch (rule->type) {
+            case RULE_TYPE_DOMAIN_SUFFIX: match = suffix_matches(normalized, rule->value); break;
+            case RULE_TYPE_DOMAIN_KEYWORD: match = strstr(normalized, rule->value) != NULL; break;
+            case RULE_TYPE_DOMAIN_FULL: match = strcmp(normalized, rule->value) == 0; break;
+            case RULE_TYPE_GEOSITE: match = geo_site_match((const geo_site_t *)rule->geo, normalized); break;
+            default: break;
+        }
         int rank = action_rank(rule->action);
         if (match && rank > best_rank) {
             best_rank = rank;
@@ -241,8 +302,12 @@ rule_action_t ruleset_match_ip(ruleset_t *rules, const char *ip,
     else return RULE_ACTION_PROXY;
     for (size_t i = 0; i < rules->count; ++i) {
         rule_t *rule = &rules->entries[i];
-        if (rule->type != RULE_TYPE_IP_CIDR || rule->address_len != address_len ||
-            !cidr_matches(address, rule)) continue;
+        if (rule->type == RULE_TYPE_GEOIP) {
+            if (!geo_ip_match((const geo_ip_t *)rule->geo, address, address_len)) continue;
+        } else if (rule->type != RULE_TYPE_IP_CIDR || rule->address_len != address_len ||
+                   !cidr_matches(address, rule)) {
+            continue;
+        }
         int rank = action_rank(rule->action);
         if (rank > best_rank) {
             best_rank = rank;
@@ -253,4 +318,86 @@ rule_action_t ruleset_match_ip(ruleset_t *rules, const char *ip,
     (void)__sync_fetch_and_add(&rules->entries[best].hits, 1);
     if (matched_index) *matched_index = best;
     return rules->entries[best].action;
+}
+
+int ruleset_match_app(ruleset_t *rules, const char *bundle_id,
+                      rule_action_t *action, size_t *matched_index) {
+    int best_rank = 0;
+    size_t best = SIZE_MAX;
+    if (matched_index) *matched_index = SIZE_MAX;
+    if (!rules || !bundle_id || !bundle_id[0]) return 0;
+    for (size_t i = 0; i < rules->count; ++i) {
+        rule_t *rule = &rules->entries[i];
+        if (rule->type != RULE_TYPE_APP || strcmp(rule->value, bundle_id) != 0) continue;
+        int rank = action_rank(rule->action);
+        if (rank > best_rank) {
+            best_rank = rank;
+            best = i;
+        }
+    }
+    if (best == SIZE_MAX) return 0;
+    (void)__sync_fetch_and_add(&rules->entries[best].hits, 1);
+    if (matched_index) *matched_index = best;
+    if (action) *action = rules->entries[best].action;
+    return 1;
+}
+
+int ruleset_has_type(const ruleset_t *rules, rule_type_t type) {
+    for (size_t i = 0; rules && i < rules->count; ++i)
+        if (rules->entries[i].type == type) return 1;
+    return 0;
+}
+
+void ruleset_release_geo(ruleset_t *rules) {
+    if (!rules) return;
+    for (size_t i = 0; i < rules->count; ++i) {
+        rule_t *rule = &rules->entries[i];
+        if (!rule->geo) continue;
+        if (rule->type == RULE_TYPE_GEOSITE) geo_site_free((geo_site_t *)rule->geo);
+        else if (rule->type == RULE_TYPE_GEOIP) geo_ip_free((geo_ip_t *)rule->geo);
+        rule->geo = NULL;
+    }
+}
+
+rules_status_t ruleset_bind_geo(ruleset_t *rules, const char *dir, size_t *missing) {
+    size_t lost = 0;
+    if (missing) *missing = 0;
+    if (!rules || !dir) return RULES_ERR_ARG;
+    for (size_t i = 0; i < rules->count; ++i) {
+        rule_t *rule = &rules->entries[i];
+        char path[512];
+        if (rule->type != RULE_TYPE_GEOSITE && rule->type != RULE_TYPE_GEOIP) continue;
+        if (rule->geo) continue;
+        if (rule->type == RULE_TYPE_GEOIP && strcmp(rule->value, "private") == 0) {
+            /* the private ranges are fixed, so no dat has to supply them */
+            rule->geo = geo_ip_private();
+            if (!rule->geo) {
+                ruleset_release_geo(rules);
+                return RULES_ERR_ARG;
+            }
+            continue;
+        }
+        geo_status_t status;
+        if (geo_tag_path(dir, rule->type == RULE_TYPE_GEOSITE ? GEO_KIND_SITE : GEO_KIND_IP,
+                         rule->value, path, sizeof path) != 0) {
+            ++lost;
+            continue;
+        }
+        if (rule->type == RULE_TYPE_GEOSITE) {
+            geo_site_t *set = NULL;
+            status = geo_site_load(path, &set);
+            rule->geo = set;
+        } else {
+            geo_ip_t *set = NULL;
+            status = geo_ip_load(path, &set);
+            rule->geo = set;
+        }
+        if (status == GEO_ERR_MEMORY) {
+            ruleset_release_geo(rules);
+            return RULES_ERR_FULL;
+        }
+        if (status != GEO_OK) ++lost;
+    }
+    if (missing) *missing = lost;
+    return RULES_OK;
 }

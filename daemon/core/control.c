@@ -133,6 +133,41 @@ ctl_status_t ctl_parse_cmd(const char *line, size_t len, ctl_cmd_t *out) {
         out->kind = CTL_CMD_RULES;
         return CTL_OK;
     }
+    if (verb_is(line, len, "ROUTING", &rest, &rl) && rl == 0) {
+        out->kind = CTL_CMD_ROUTING;
+        return CTL_OK;
+    }
+    if (verb_is(line, len, "ROUTINGSET", &rest, &rl)) {
+        int idx;
+        if (rl == 3 && memcmp(rest, "off", 3) == 0) {
+            idx = -1;
+        } else if (parse_int_span(rest, rl, &idx) != 0 || idx < 0) {
+            return CTL_ERR_PARSE;
+        }
+        out->kind = CTL_CMD_ROUTING_SET;
+        out->server_index = idx;
+        return CTL_OK;
+    }
+    if (verb_is(line, len, "ROUTINGENTRIES", &rest, &rl)) {
+        int idx;
+        if (parse_int_span(rest, rl, &idx) != 0 || idx < 0) return CTL_ERR_PARSE;
+        out->kind = CTL_CMD_ROUTING_ENTRIES;
+        out->server_index = idx;
+        return CTL_OK;
+    }
+    if (verb_is(line, len, "GEO", &rest, &rl) && rl == 0) {
+        out->kind = CTL_CMD_GEO;
+        return CTL_OK;
+    }
+    if (verb_is(line, len, "GEOUPDATE", &rest, &rl) && rl == 0) {
+        out->kind = CTL_CMD_GEO_UPDATE;
+        return CTL_OK;
+    }
+    if (verb_is(line, len, "VLESSCORE", &rest, &rl)) {
+        if (rl != 6 || memcmp(rest, "REMOVE", 6) != 0) return CTL_ERR_PARSE;
+        out->kind = CTL_CMD_RIVAL_REMOVE;
+        return CTL_OK;
+    }
     if (verb_is(line, len, "DELRULE", &rest, &rl)) {
         int idx;
         if (parse_int_span(rest, rl, &idx) != 0 || idx < 0) return CTL_ERR_PARSE;
@@ -463,6 +498,44 @@ ctl_status_t ctl_build_rule(size_t index, const char *action, const char *type,
 ctl_status_t ctl_build_ruleend(size_t count, char *buf, size_t cap, size_t *n) {
     if (!buf) return CTL_ERR_ARG;
     return finish(snprintf(buf, cap, "RULEEND %zu\n", count), cap, n);
+}
+
+ctl_status_t ctl_build_routing(int sub_index, int active, int global_proxy,
+                               size_t rules, size_t unsupported, size_t geo_tags,
+                               uint64_t last_updated, const char *name,
+                               char *buf, size_t cap, size_t *n) {
+    if (!buf || !name) return CTL_ERR_ARG;
+    return finish(snprintf(buf, cap, "ROUTING %d %d %d %zu %zu %zu %llu %s\n",
+                           sub_index, active ? 1 : 0, global_proxy ? 1 : 0, rules,
+                           unsupported, geo_tags, (unsigned long long)last_updated, name),
+                  cap, n);
+}
+
+ctl_status_t ctl_build_routingend(int active_index, char *buf, size_t cap, size_t *n) {
+    if (!buf) return CTL_ERR_ARG;
+    return finish(snprintf(buf, cap, "ROUTINGEND %d\n", active_index), cap, n);
+}
+
+ctl_status_t ctl_build_rentry(const char *action, int is_ip, int supported,
+                              const char *entry, char *buf, size_t cap, size_t *n) {
+    if (!buf || !action || !entry) return CTL_ERR_ARG;
+    return finish(snprintf(buf, cap, "RENTRY %s %s %d %s\n", action,
+                           is_ip ? "ip" : "site", supported ? 1 : 0, entry),
+                  cap, n);
+}
+
+ctl_status_t ctl_build_rentryend(size_t count, char *buf, size_t cap, size_t *n) {
+    if (!buf) return CTL_ERR_ARG;
+    return finish(snprintf(buf, cap, "RENTRYEND %zu\n", count), cap, n);
+}
+
+ctl_status_t ctl_build_geo(int busy, uint64_t stamp, size_t missing, int result,
+                           const char *message, char *buf, size_t cap, size_t *n) {
+    if (!buf) return CTL_ERR_ARG;
+    return finish(snprintf(buf, cap, "GEO %d %llu %zu %d %s\n", busy ? 1 : 0,
+                           (unsigned long long)stamp, missing, result,
+                           message ? message : ""),
+                  cap, n);
 }
 
 ctl_status_t ctl_build_state(ctl_state_t st, long uptime,

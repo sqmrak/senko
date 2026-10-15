@@ -45,7 +45,13 @@ typedef enum {
     CTL_CMD_HWID_RESET, /* issue a new device id for the subscription panels */
     CTL_CMD_NATIVE_CONFIG, /* render a provider configuration for iOS 12+ */
     CTL_CMD_AWG,    /* amneziawg start/stop/status/probe/validate; name is the helper flag */
-    CTL_CMD_UPDATE  /* install the staged package at text */
+    CTL_CMD_UPDATE, /* install the staged package at text */
+    CTL_CMD_ROUTING,         /* list the routing profiles the subscriptions delivered */
+    CTL_CMD_ROUTING_SET,     /* switch one profile on, or routing off (server_index -1) */
+    CTL_CMD_ROUTING_ENTRIES, /* the entries of one subscription's profile */
+    CTL_CMD_GEO,             /* the state of the geo data the profile needs */
+    CTL_CMD_GEO_UPDATE,      /* download it again now */
+    CTL_CMD_RIVAL_REMOVE     /* remove vless-core, which the user was asked about */
 } ctl_cmd_kind_t;
 
 typedef struct {
@@ -112,6 +118,28 @@ ctl_status_t ctl_build_rule(size_t index, const char *action, const char *type,
                             uint64_t hits, const char *value,
                             char *buf, size_t cap, size_t *n);
 ctl_status_t ctl_build_ruleend(size_t count, char *buf, size_t cap, size_t *n);
+
+/* one subscription's routing profile: its index, whether it is the active one,
+   whether unmatched traffic goes through the tunnel, how many rules it compiled
+   to, how many entries senko cannot match, how many geo tags it names, the
+   profile's own timestamp, and its name last because it may hold spaces */
+ctl_status_t ctl_build_routing(int sub_index, int active, int global_proxy,
+                               size_t rules, size_t unsupported, size_t geo_tags,
+                               uint64_t last_updated, const char *name,
+                               char *buf, size_t cap, size_t *n);
+ctl_status_t ctl_build_routingend(int active_index, char *buf, size_t cap, size_t *n);
+
+/* one entry of a profile: its action, whether it matches addresses ("ip") or
+   names ("site"), whether senko can match it at all, and the entry as written */
+ctl_status_t ctl_build_rentry(const char *action, int is_ip, int supported,
+                              const char *entry, char *buf, size_t cap, size_t *n);
+ctl_status_t ctl_build_rentryend(size_t count, char *buf, size_t cap, size_t *n);
+
+/* the geo data state: whether a download is running, when the files were last
+   completed (0 never), how many tags of the active profile still have no file,
+   how the last download ended (0 none yet, 1 ok, 2 failed) and its message */
+ctl_status_t ctl_build_geo(int busy, uint64_t stamp, size_t missing, int result,
+                           const char *message, char *buf, size_t cap, size_t *n);
 
 /* connected carries an explicit zero so a new session is distinguishable from
    an older daemon that never reported session age */

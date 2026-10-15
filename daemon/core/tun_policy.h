@@ -8,6 +8,7 @@
 #include "dns_msg.h"
 #include "dns_policy.h"
 #include "rules.h"
+#include "tun_flow.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,8 +35,17 @@ typedef struct {
     uint64_t flows_blocked;
 } tun_policy_stats_t;
 
+/* the bundle identifier of the app that owns a flow, found from the flow's
+   protocol and the address and port it leaves from. 1 with the identifier in
+   bundle, 0 when the owner is not known (a system daemon, a socket already
+   gone). it may block briefly and runs on the tunnel's owning thread */
+typedef int (*tun_policy_app_fn)(void *ctx, const tun_flow_key_t *key,
+                                 char *bundle, size_t bundle_cap);
+
 typedef struct {
     ruleset_t     *rules;  /* NULL or empty: everything goes through the server */
+    tun_policy_app_fn app_of; /* NULL when no app rule can be decided */
+    void          *app_ctx;
     dns_cache_t   *cache;  /* heap, only while the tunnel runs */
     dns_policy_t  *map;    /* heap, only when some rule sends a domain direct */
     uint8_t        logged[RULESET_MAX_RULES / 8];
@@ -56,10 +66,17 @@ void tun_policy_free(tun_policy_t *policy);
 rule_action_t tun_policy_domain(tun_policy_t *policy, const char *name);
 
 /* the verdict for a captured flow: an ip rule first, then what dns answers
-   said about the address. why gets a short reason for the flow log */
+   said about the address, then the ruleset's fallback. why gets a short reason
+   for the flow log */
 rule_action_t tun_policy_flow(tun_policy_t *policy, const uint8_t *address,
                               uint8_t address_len, uint64_t now,
                               char *why, size_t why_cap);
+
+/* the same, with the owner of the flow asked first: an app rule decides the
+   flow by itself, ahead of every name and address rule. an owner that cannot be
+   found leaves the decision to the rules above */
+rule_action_t tun_policy_flow_from(tun_policy_t *policy, const tun_flow_key_t *key,
+                                   uint64_t now, char *why, size_t why_cap);
 
 /* a fresh cached answer for this query, with the query's id; 1 when found */
 int tun_policy_cached(tun_policy_t *policy, const uint8_t *query, size_t query_len,

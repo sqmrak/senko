@@ -4,6 +4,7 @@
 #include "senko_core_config.h"
 #include "awg_utun.h"
 #include "awg_pfroute.h"
+#include "vpn_conflict.h"
 #include "legacy_ios.h"
 #include "../common/senko_paths.h"
 #include "core/net_safe.h"
@@ -22,6 +23,7 @@
 #include <unistd.h>
 
 #ifdef __APPLE__
+#include <dlfcn.h>
 #include <sys/socket.h>
 #include <ifaddrs.h>
 #include <net/if.h>
@@ -30,6 +32,9 @@
 extern char **environ;
 
 #define SENKO_CORE_BIN SENKO_USR_LIB "/senko-core"
+/* postinst puts a real copy here when rootful ios 12 kills the payload
+   binary at exec with status 137 */
+#define SENKO_CORE_ROOTFUL_COPY "/usr/lib/senko-core"
 #define SENKO_CORE_CONFIG_PATH "/var/run/senko-core.json"
 #define SENKO_CORE_CONFIG_MAX (2 * 1024 * 1024)
 
@@ -43,6 +48,28 @@ int senko_core_backend_supported(void) {
 #else
     return 0;
 #endif
+}
+
+static const char *core_binary(void) {
+    if (strcmp(SENKO_JBROOT, "") != 0 && access(SENKO_CORE_ROOTFUL_COPY, X_OK) == 0)
+        return SENKO_CORE_ROOTFUL_COPY;
+    return SENKO_CORE_BIN;
+}
+
+/* ios 12 to 14 lack SecTrustCopyCertificateChain, which go's system verifier
+   binds lazily, so the first server certificate check kills senko-core with a
+   dyld symbol error. those systems verify against the bundled roots instead */
+static int core_roots_file(const char **file) {
+    *file = NULL;
+#ifdef __APPLE__
+    static const char bundle[] = SENKO_USR_LIB "/senko/cacert.pem";
+    static const char security_path[] = "/System/Library/Frameworks/Security.framework/Security";
+    void *security = dlopen(security_path, RTLD_LAZY);
+    if (security && dlsym(security, "SecTrustCopyCertificateChain")) return 0;
+    if (access(bundle, R_OK) != 0) return -1;
+    *file = bundle;
+#endif
+    return 0;
 }
 
 static int write_config(const char *contents) {
@@ -70,9 +97,10 @@ static int write_config(const char *contents) {
     return 0;
 }
 
-static int spawn_core(senko_core_backend_t *backend) {
+static int spawn_core(senko_core_backend_t *backend, const char *geo_dir) {
     char fd_text[24];
-    char *argv[] = { (char *)SENKO_CORE_BIN, (char *)"run", (char *)"-c",
+    const char *binary = core_binary();
+    char *argv[] = { (char *)binary, (char *)"run", (char *)"-c",
                      (char *)SENKO_CORE_CONFIG_PATH, NULL };
     int old_flags = fcntl(backend->tun_fd, F_GETFD, 0);
     if (old_flags < 0 || fcntl(backend->tun_fd, F_SETFD, old_flags & ~FD_CLOEXEC) != 0)
@@ -82,8 +110,11 @@ static int spawn_core(senko_core_backend_t *backend) {
         (void)fcntl(backend->tun_fd, F_SETFD, old_flags);
         return -1;
     }
-    int rc = posix_spawn(&backend->child, SENKO_CORE_BIN, NULL, NULL, argv, environ);
+    /* xray finds geosite.dat and geoip.dat in its asset directory */
+    int geo = geo_dir && geo_dir[0] && setenv("XRAY_LOCATION_ASSET", geo_dir, 1) == 0;
+    int rc = posix_spawn(&backend->child, binary, NULL, NULL, argv, environ);
     unsetenv("XRAY_TUN_FD");
+    if (geo) unsetenv("XRAY_LOCATION_ASSET");
     /* only the core inherits the tunnel; later children must not */
     (void)fcntl(backend->tun_fd, F_SETFD, old_flags);
     return rc == 0 ? 0 : -1;
@@ -91,11 +122,12 @@ static int spawn_core(senko_core_backend_t *backend) {
 
 int senko_core_backend_start(senko_core_backend_t *backend, const vl_server_t *server,
                      const char *endpoint_ip, const char *dns_server,
-                     const ruleset_t *rules,
+                     const ruleset_t *rules, const char *geo_dir,
                      char *reason, size_t reason_cap) {
     char ifname[32];
     char gateway[64];
     char *config = NULL;
+    const char *roots = NULL;
     awg_config_t route_config;
     if (!backend || !server || !endpoint_ip || !dns_server) return -1;
     senko_core_backend_stop(backend);
@@ -106,12 +138,18 @@ int senko_core_backend_start(senko_core_backend_t *backend, const vl_server_t *s
         set_reason(reason, reason_cap, "senko-core requires ios 12 or newer on arm64");
         return -1;
     }
-    if (access(SENKO_CORE_BIN, X_OK) != 0) {
+    if (access(core_binary(), X_OK) != 0) {
         set_reason(reason, reason_cap, "the bundled senko-core is missing or not executable");
         return -1;
     }
+    if (core_roots_file(&roots) != 0) {
+        set_reason(reason, reason_cap, "the bundled TLS roots are missing, senko-core cannot verify servers on this ios");
+        return -1;
+    }
     if (awg_route_gateway_for_endpoint(endpoint_ip, gateway, sizeof gateway) != 0) {
-        set_reason(reason, reason_cap, "physical network gateway could not be determined");
+        set_reason(reason, reason_cap,
+                   "no route to the server, check that wifi or cellular is connected");
+        if (reason && reason_cap) vpn_conflict_explain(reason, reason_cap, NULL);
         return -1;
     }
     backend->tun_fd = awg_utun_open(ifname, sizeof ifname);
@@ -131,8 +169,8 @@ int senko_core_backend_start(senko_core_backend_t *backend, const vl_server_t *s
     }
     if (awg_route_plan_build(&route_config, ifname, endpoint_ip, gateway,
                              &backend->route) != 0 ||
-        senko_core_config_render_rules(server, endpoint_ip, ifname, rules,
-                               config, SENKO_CORE_CONFIG_MAX) != 0) {
+        senko_core_config_render_rules(server, endpoint_ip, ifname, rules, geo_dir,
+                               roots, config, SENKO_CORE_CONFIG_MAX) != 0) {
         set_reason(reason, reason_cap, "selected profile could not be converted for the TUN core");
         goto fail;
     }
@@ -142,12 +180,13 @@ int senko_core_backend_start(senko_core_backend_t *backend, const vl_server_t *s
     }
     free(config);
     config = NULL;
-    if (spawn_core(backend) != 0) {
+    if (spawn_core(backend, geo_dir) != 0) {
         set_reason(reason, reason_cap, "senko-core could not be started");
         goto fail;
     }
     if (awg_route_plan_up(&backend->route) != 0) {
         set_reason(reason, reason_cap, "utun routes could not be installed");
+        if (reason && reason_cap) vpn_conflict_explain(reason, reason_cap, ifname);
         goto fail;
     }
     backend->active = 1;
@@ -223,6 +262,14 @@ int senko_core_backend_running(senko_core_backend_t *backend) {
     /* forgetting the pid on eintr would orphan a core that still holds the tunnel */
     while ((waited = waitpid(backend->child, &status, WNOHANG)) < 0 && errno == EINTR) {}
     if (waited == 0) return 1;
+    /* a binary the kernel kills at exec still spawns, so the exit status is
+       the only trace of why the tunnel is gone */
+    if (waited == backend->child) {
+        if (WIFSIGNALED(status))
+            fprintf(stderr, "senkod: senko-core killed by signal %d\n", WTERMSIG(status));
+        else if (WIFEXITED(status))
+            fprintf(stderr, "senkod: senko-core exited with status %d\n", WEXITSTATUS(status));
+    }
     backend->child = 0;
     return 0;
 }

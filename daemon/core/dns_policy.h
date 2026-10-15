@@ -54,6 +54,14 @@ void dns_policy_record(dns_policy_t *policy, const char *domain, rule_action_t a
 int dns_policy_is_direct(dns_policy_t *policy, const uint8_t address[4], uint64_t now,
                          char *domain_out, size_t domain_cap);
 
+/* what the answers seen so far say about an address: RULE_ACTION_DIRECT only
+   while a direct domain resolved to it and no proxied one did, RULE_ACTION_PROXY
+   while a proxied domain resolved to it, and -1 when no live answer names it. a
+   profile that sends unnamed traffic straight out needs the third case apart
+   from the second */
+int dns_policy_verdict(dns_policy_t *policy, const uint8_t address[4], uint64_t now,
+                       char *domain_out, size_t domain_cap);
+
 void dns_policy_counts(const dns_policy_t *policy, uint64_t now,
                        dns_policy_counts_t *out);
 

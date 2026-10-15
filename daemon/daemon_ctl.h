@@ -10,6 +10,8 @@
 #include "senko_core_backend.h"
 #include "utun_backend.h"
 #include "settings.h"
+#include "app_owner.h"
+#include "core/geo_update.h"
 
 #include <pthread.h>
 
@@ -33,6 +35,11 @@ typedef struct {
     dialer_ctx_t   dialer; /* point to the active server */
     char           config_path[1024];
     ruleset_t      *rules;
+    /* the catalog the rules belong to: a connect rebuilds the routing profile's
+       share of them from it, while no tunnel reads them */
+    store_t        *store;
+    char           geo_dir[GEO_UPDATE_DIR_MAX]; /* per tag geo files of the active profile */
+    app_owner_t    *owner; /* names the app behind a flow, only while app rules exist */
 
     daemon_settings_t settings;
     /* resolved before the rules go up, because the routing probe cannot rely
@@ -45,6 +52,10 @@ typedef struct {
     /* what the backend actually complained about. the control protocol only
        carries a layer name, and on ios 5 the missing piece is never obvious */
     char           last_reason[192];
+/* the server the last start brought up, so a failed tunnel check can probe it
+   directly and say why */
+    vl_server_t    started;
+    int            started_set;
 /* wall clock second the daemon came up, so the diagnostics can report an age
    without asking the kernel for process start times it cannot read on ios 5 */
     long           started_at;
@@ -58,6 +69,7 @@ void daemon_ctl_init(daemon_ctl_t *d, loop_t *loop, const char *config_path);
 
 void daemon_ctl_set_settings(daemon_ctl_t *d, const daemon_settings_t *s);
 void daemon_ctl_set_rules(daemon_ctl_t *d, ruleset_t *rules);
+void daemon_ctl_set_store(daemon_ctl_t *d, store_t *store, const char *geo_dir);
 
 void daemon_ctl_shutdown(daemon_ctl_t *d);
 
@@ -86,6 +98,10 @@ int daemon_ctl_fetch(void *ctx, const char *url,
                      const char *request_header,
                      unsigned char *buf, size_t cap, size_t *len,
                      ctl_fetch_meta_t *meta);
+
+/* a download for the geo update job, over the same dialer a subscription uses */
+int daemon_ctl_geo_fetch(void *ctx, const char *url, FILE *out, size_t max_bytes,
+                         size_t *written, char *error, size_t error_cap);
 
 int daemon_ctl_probe(void *ctx, const char *host, uint16_t port);
 int daemon_ctl_probe_server(void *ctx, const vl_server_t *server);

@@ -61,6 +61,28 @@ int main(void) {
     ok("clear forgets addresses but keeps the eviction count",
        policy.evicted == 3 && !dns_policy_is_direct(&policy, newest, 1001, NULL, 0));
 
+    {
+        /* the verdict tells an address nothing resolved to from one a proxied name did */
+        const uint8_t seen[4] = { 10, 9, 9, 1 }, unseen[4] = { 10, 9, 9, 2 };
+        uint32_t proxied = 0x0a090901u, direct = 0x0a090903u;
+        const uint8_t direct_bytes[4] = { 10, 9, 9, 3 };
+        char domain[DNS_POLICY_DOMAIN_MAX];
+        dns_policy_clear(&policy);
+        dns_policy_record(&policy, "via.example", RULE_ACTION_PROXY, &proxied, 1, 100, 60);
+        dns_policy_record(&policy, "go.example", RULE_ACTION_DIRECT, &direct, 1, 100, 60);
+        ok("verdict proxy", dns_policy_verdict(&policy, seen, 110, NULL, 0) == RULE_ACTION_PROXY);
+        ok("verdict unknown", dns_policy_verdict(&policy, unseen, 110, NULL, 0) == -1);
+        ok("verdict direct names the domain",
+           dns_policy_verdict(&policy, direct_bytes, 110, domain, sizeof domain) == RULE_ACTION_DIRECT &&
+           strcmp(domain, "go.example") == 0);
+        ok("verdict expires", dns_policy_verdict(&policy, seen, 161, NULL, 0) == -1 &&
+           dns_policy_verdict(&policy, direct_bytes, 161, NULL, 0) == -1);
+        dns_policy_record(&policy, "go.example", RULE_ACTION_DIRECT, &proxied, 1, 100, 60);
+        ok("a proxied answer wins over a direct one",
+           dns_policy_verdict(&policy, seen, 110, NULL, 0) == RULE_ACTION_PROXY);
+        ok("verdict with no table", dns_policy_verdict(NULL, seen, 1, NULL, 0) == -1);
+    }
+
     if (failures) {
         fprintf(stderr, "%d dns policy check(s) failed\n", failures);
         return 1;

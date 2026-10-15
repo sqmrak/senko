@@ -405,7 +405,7 @@ int main(void) {
        server.last_dns_port == 53 && server.dns_queries == queries_before + 1);
     got = exchange(&socks, PROXIED4, 50102, 9999, ping, sizeof ping, answer, 500);
     ok("other udp through a tcp-only server is refused with the reason",
-       got == 0 && strstr(tun_udp_stats(socks.udp)->last_error, "only a VLESS server"));
+       got == 0 && strstr(tun_udp_stats(socks.udp)->last_error, "only a VLESS or VMess server"));
     tunnel_stop(&socks);
 
     tun_policy_free(&policy);

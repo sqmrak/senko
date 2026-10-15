@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 #include "config.h"
+#include "routing_profile.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +29,8 @@ typedef struct {
        the scheduled refresh compares against it, so it has to survive a
        restart the same way the node list does */
     uint64_t last_refresh;
+    /* the happ routing profile this subscription delivered, as json, or empty */
+    char routing[ROUTING_JSON_MAX];
     int  used;
 } store_sub_t;
 
@@ -42,6 +45,10 @@ typedef struct {
 
     int         selected;
     ruleset_t   rules;
+    /* the subscription whose routing profile is switched on, -1 for none. a
+       profile never applies by itself: the owner picks one, or a link that says
+       onadd does */
+    int         routing_active;
 } store_t;
 
 typedef enum {
@@ -125,6 +132,22 @@ store_status_t store_select(store_t *st, int index);
 
 const vl_server_t *store_selected(const store_t *st);
 int store_link_at(const store_t *st, size_t index, char *buf, size_t cap);
+
+/* keeps the profile json a subscription delivered. a blank profile clears it.
+   the json is checked here, so what is stored always compiles. the active
+   profile of a cleared subscription goes off */
+store_status_t store_set_sub_routing(store_t *st, size_t sub_index,
+                                     const char *json, size_t len);
+const char *store_sub_routing(const store_t *st, size_t sub_index);
+
+/* -1 switches routing off; otherwise the subscription must hold a profile */
+store_status_t store_set_routing_active(store_t *st, int sub_index);
+
+/* rebuilds the profile's share of the ruleset: drops every rule that came from
+   a profile, then compiles the active one and sets the fallback action.
+   called with the tunnel down, because the running tunnel reads the ruleset.
+   info may be NULL; it stays zeroed when no profile is active */
+store_status_t store_apply_routing(store_t *st, routing_info_t *info);
 
 store_status_t store_add_rule(store_t *st, const char *text, size_t len,
                               size_t *out_index);

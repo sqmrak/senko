@@ -24,7 +24,7 @@ int senko_core_backend_supported(void);
 
 int senko_core_backend_start(senko_core_backend_t *backend, const vl_server_t *server,
                      const char *endpoint_ip, const char *dns_server,
-                     const ruleset_t *rules,
+                     const ruleset_t *rules, const char *geo_dir,
                      char *reason, size_t reason_cap);
 void senko_core_backend_stop(senko_core_backend_t *backend);
 int senko_core_backend_running(senko_core_backend_t *backend);

@@ -409,10 +409,12 @@ static void notify_loop(void *ctx) {
 
 /* every protocol reaches the dns upstream over a tcp stream: vless with its
    udp command, the others with a plain connect to port 53, whose dns-over-tcp
-   framing is the same two byte length the udp codec writes */
+   framing is the same two byte length the udp codec writes. a vmess proxy
+   association uses the udp command too, one chunk per datagram */
 static int start_session(tun_udp_t *udp, association_t *assoc, session_t *session) {
     const tun_udp_config_t *c = &udp->config;
     int vless = c->proto == VL_PROTO_VLESS;
+    int udp_command = vless || (c->proto == VL_PROTO_VMESS && assoc->kind == ASSOC_PROXY);
     if (session_init(session, c->vt, assoc->th, c->proto, c->uuid,
                      vless ? c->flow : NULL, c->user, c->pass) != SESS_OK)
         return -1;
@@ -422,7 +424,7 @@ static int start_session(tun_udp_t *udp, association_t *assoc, session_t *sessio
                          assoc->tx, sizeof assoc->tx, &assoc->tx_len) != VLESS_UDP_OK)
         return -1;
     size_t used = 0;
-    sess_status_t started = vless
+    sess_status_t started = udp_command
         ? session_start_from_transparent_udp(session, &assoc->remote,
                                              assoc->tx, assoc->tx_len, &used)
         : session_start_from_transparent_dest(session, &assoc->remote,
@@ -562,8 +564,7 @@ static int on_udp(void *ctx, const tun_flow_key_t *key,
         memcpy(remote.host_addr, udp->config.dns_upstream, udp->config.dns_upstream_len);
     } else {
         char why[96];
-        rule_action_t action = tun_policy_flow(policy, key->destination, key->address_len,
-                                               now_seconds(), why, sizeof why);
+        rule_action_t action = tun_policy_flow_from(policy, key, now_seconds(), why, sizeof why);
         if (action == RULE_ACTION_BLOCK) {
             ++udp->stats.blocked;
             trace_verdict(key, "blocked", why);
@@ -571,9 +572,10 @@ static int on_udp(void *ctx, const tun_flow_key_t *key,
         }
         if (action == RULE_ACTION_DIRECT) {
             kind = ASSOC_DIRECT;
-        } else if (udp->config.proto != VL_PROTO_VLESS) {
-            return refuse(udp, "only a VLESS server carries UDP; this server carries TCP"
-                               " and DNS");
+        } else if (udp->config.proto != VL_PROTO_VLESS &&
+                   udp->config.proto != VL_PROTO_VMESS) {
+            return refuse(udp, "only a VLESS or VMess server carries UDP; this server"
+                               " carries TCP and DNS");
         } else {
             kind = ASSOC_PROXY;
         }

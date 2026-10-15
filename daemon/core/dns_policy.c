@@ -82,6 +82,24 @@ int dns_policy_is_direct(dns_policy_t *policy, const uint8_t address[4], uint64_
     return 1;
 }
 
+int dns_policy_verdict(dns_policy_t *policy, const uint8_t address[4], uint64_t now,
+                       char *domain_out, size_t domain_cap) {
+    if (domain_out && domain_cap) domain_out[0] = '\0';
+    if (!policy || !address) return -1;
+    dns_policy_entry_t *entry = find(policy, address);
+    if (!entry) return -1;
+    if (entry->proxy_until > now) {
+        entry->last_used = ++policy->use_clock;
+        return RULE_ACTION_PROXY;
+    }
+    if (entry->direct_until > now) {
+        entry->last_used = ++policy->use_clock;
+        if (domain_out && domain_cap) snprintf(domain_out, domain_cap, "%s", entry->domain);
+        return RULE_ACTION_DIRECT;
+    }
+    return -1;
+}
+
 void dns_policy_counts(const dns_policy_t *policy, uint64_t now,
                        dns_policy_counts_t *out) {
     if (!out) return;

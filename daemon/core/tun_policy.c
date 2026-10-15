@@ -6,23 +6,27 @@
 #include <string.h>
 #include <sys/socket.h>
 
-static int rules_send_domain_direct(const ruleset_t *rules) {
-    for (size_t i = 0; rules && i < rules->count; ++i)
+/* the address table only matters when a name can decide a flow: a domain rule
+   that sends it direct, or a fallback that does. ip and app rules never use it */
+static int names_decide_flows(const ruleset_t *rules) {
+    if (rules && rules->fallback == RULE_ACTION_DIRECT) return 1;
+    for (size_t i = 0; rules && i < rules->count; ++i) {
+        rule_type_t type = rules->entries[i].type;
         if (rules->entries[i].action == RULE_ACTION_DIRECT &&
-            rules->entries[i].type != RULE_TYPE_IP_CIDR)
+            type != RULE_TYPE_IP_CIDR && type != RULE_TYPE_GEOIP && type != RULE_TYPE_APP)
             return 1;
+    }
     return 0;
 }
 
 tun_policy_status_t tun_policy_init(tun_policy_t *policy, ruleset_t *rules) {
     if (!policy) return TUN_POLICY_ERR_ARG;
     memset(policy, 0, sizeof *policy);
-    policy->rules = rules && rules->count ? rules : NULL;
+    policy->rules = rules && (rules->count || rules->fallback != RULE_ACTION_PROXY) ? rules : NULL;
     policy->cache = malloc(sizeof *policy->cache);
     if (!policy->cache) return TUN_POLICY_ERR_MEMORY;
     dns_cache_init(policy->cache);
-    /* the address table only matters when a domain can send a flow direct */
-    if (rules_send_domain_direct(policy->rules)) {
+    if (names_decide_flows(policy->rules)) {
         policy->map = malloc(sizeof *policy->map);
         if (!policy->map) {
             tun_policy_free(policy);
@@ -54,7 +58,8 @@ rule_action_t tun_policy_domain(tun_policy_t *policy, const char *name) {
     if (!policy || !name || !policy->rules) return RULE_ACTION_PROXY;
     size_t index = SIZE_MAX;
     rule_action_t action = ruleset_match_domain(policy->rules, name, &index);
-    if (index != SIZE_MAX) log_first(policy, index, action, name);
+    if (index == SIZE_MAX) return policy->rules->fallback;
+    log_first(policy, index, action, name);
     return action;
 }
 
@@ -65,6 +70,7 @@ rule_action_t tun_policy_flow(tun_policy_t *policy, const uint8_t *address,
     if (!policy || !address || (address_len != 4 && address_len != 16))
         return RULE_ACTION_PROXY;
     rule_action_t action = RULE_ACTION_PROXY;
+    int decided = 0;
     if (policy->rules) {
         char text[INET6_ADDRSTRLEN];
         if (inet_ntop(address_len == 4 ? AF_INET : AF_INET6, address,
@@ -72,6 +78,7 @@ rule_action_t tun_policy_flow(tun_policy_t *policy, const uint8_t *address,
             size_t index = SIZE_MAX;
             action = ruleset_match_ip(policy->rules, text, &index);
             if (index != SIZE_MAX) {
+                decided = 1;
                 log_first(policy, index, action, text);
                 if (why && why_cap)
                     snprintf(why, why_cap, "ip rule %s",
@@ -80,18 +87,47 @@ rule_action_t tun_policy_flow(tun_policy_t *policy, const uint8_t *address,
         }
     }
     /* an ip rule decides on its own; dns only speaks for unruled addresses */
-    if (action == RULE_ACTION_PROXY && policy->map && address_len == 4 &&
-        (!why || !why[0])) {
+    if (!decided && policy->map && address_len == 4) {
         char domain[DNS_POLICY_DOMAIN_MAX];
-        if (dns_policy_is_direct(policy->map, address, now, domain, sizeof domain)) {
-            action = RULE_ACTION_DIRECT;
-            if (why && why_cap) snprintf(why, why_cap, "resolved from %s", domain);
+        int verdict = dns_policy_verdict(policy->map, address, now, domain, sizeof domain);
+        if (verdict >= 0) {
+            decided = 1;
+            action = (rule_action_t)verdict;
+            if (why && why_cap && action == RULE_ACTION_DIRECT)
+                snprintf(why, why_cap, "resolved from %s", domain);
         }
+    }
+    if (!decided && policy->rules) {
+        action = policy->rules->fallback;
+        if (why && why_cap && action != RULE_ACTION_PROXY)
+            snprintf(why, why_cap, "no rule names it");
     }
     if (action == RULE_ACTION_BLOCK) ++policy->stats.flows_blocked;
     else if (action == RULE_ACTION_DIRECT) ++policy->stats.flows_direct;
     else ++policy->stats.flows_proxy;
     return action;
+}
+
+rule_action_t tun_policy_flow_from(tun_policy_t *policy, const tun_flow_key_t *key,
+                                   uint64_t now, char *why, size_t why_cap) {
+    if (!key) return RULE_ACTION_PROXY;
+    if (policy && policy->rules && policy->app_of &&
+        ruleset_has_type(policy->rules, RULE_TYPE_APP)) {
+        char bundle[RULE_VALUE_MAX];
+        rule_action_t action;
+        size_t index = SIZE_MAX;
+        bundle[0] = '\0';
+        if (policy->app_of(policy->app_ctx, key, bundle, sizeof bundle) &&
+            ruleset_match_app(policy->rules, bundle, &action, &index)) {
+            if (why && why_cap) snprintf(why, why_cap, "app %s", bundle);
+            log_first(policy, index, action, bundle);
+            if (action == RULE_ACTION_BLOCK) ++policy->stats.flows_blocked;
+            else if (action == RULE_ACTION_DIRECT) ++policy->stats.flows_direct;
+            else ++policy->stats.flows_proxy;
+            return action;
+        }
+    }
+    return tun_policy_flow(policy, key->destination, key->address_len, now, why, why_cap);
 }
 
 int tun_policy_cached(tun_policy_t *policy, const uint8_t *query, size_t query_len,

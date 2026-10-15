@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 /* the dialer used to keep a budget of its own, so a stalling tunnel spent the
    whole fetch timeout before the request even started and the app gave up on
    REFRESH/ADDSUB first. subfetch now hands the dialer what is left instead */
@@ -5,6 +7,7 @@
 #include "transport.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -152,6 +155,56 @@ int main(void) {
     r = subfetch_get(&cfg, "http://sub.example.com/feed", small, sizeof small, &blen, 2000);
     close(g_peer);
     ok("without info a cut body still fails", r == SUBFETCH_ERR_TOOBIG);
+
+/* a geo dat goes to a file as it arrives: the bytes written are the bytes sent,
+   a body past the limit is refused, and an error page writes nothing */
+    {
+        char path[] = "/tmp/senko-subfile-XXXXXX";
+        int fd = mkstemp(path);
+        size_t written = 0;
+        char back[64];
+        FILE *out;
+        ok("temp file", fd >= 0);
+        out = fdopen(fd, "w+b");
+        g_response = "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n0123456789";
+        r = subfetch_get_file(&cfg, "http://sub.example.com/geo.dat", out, 100, &written, 2000, &info);
+        close(g_peer);
+        fflush(out);
+        rewind(out);
+        memset(back, 0, sizeof back);
+        ok("a download is written to the file", r == SUBFETCH_OK && written == 10 &&
+           fread(back, 1, sizeof back, out) == 10 && memcmp(back, "0123456789", 10) == 0);
+
+        g_response = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nabcd\r\n3\r\nefg\r\n0\r\n\r\n";
+        rewind(out);
+        r = subfetch_get_file(&cfg, "http://sub.example.com/geo.dat", out, 100, &written, 2000, &info);
+        close(g_peer);
+        ok("a chunked download is written", r == SUBFETCH_OK && written == 7);
+
+        g_response = "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n0123456789";
+        r = subfetch_get_file(&cfg, "http://sub.example.com/geo.dat", out, 6, &written, 2000, &info);
+        close(g_peer);
+        ok("a download past the limit is refused", r == SUBFETCH_ERR_TOOBIG);
+
+        g_response = "HTTP/1.1 404 Not Found\r\nContent-Length: 5\r\n\r\nnope!";
+        r = subfetch_get_file(&cfg, "http://sub.example.com/geo.dat", out, 100, &written, 2000, &info);
+        close(g_peer);
+        ok("an error page is an http error", r == SUBFETCH_ERR_HTTP && info.http_status == 404 && written == 0);
+
+        ok("no file", subfetch_get_file(&cfg, "http://sub.example.com/geo.dat", NULL, 100, &written, 2000, &info) ==
+           SUBFETCH_ERR_ARG);
+        ok("no limit", subfetch_get_file(&cfg, "http://sub.example.com/geo.dat", out, 0, &written, 2000, &info) ==
+           SUBFETCH_ERR_ARG);
+        fclose(out);
+        unlink(path);
+    }
+
+    /* the routing header of a happ panel comes back with the body */
+    g_response = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nRouting: happ://routing/onadd/e30=\r\n\r\nabcd";
+    r = subfetch_get_info(&cfg, "http://sub.example.com/feed", body, sizeof body, &blen, 2000, &info);
+    close(g_peer);
+    ok("the routing header is returned", r == SUBFETCH_OK &&
+       strcmp(info.routing, "happ://routing/onadd/e30=") == 0 && !info.routing_too_long);
 
     if (failed) {
         printf("%d subfetch budget checks failed\n", failed);

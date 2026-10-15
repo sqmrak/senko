@@ -18,11 +18,18 @@
    value and a jailbreak change does not hand the panel a new device */
 #define SENKO_HWID_PATH "/var/mobile/Library/Preferences/com.senko.hwid"
 
+/* the per tag geo sets a routing profile names. beside the daemon's own
+   config, root owned: the app never reads them */
+#define SENKO_GEO_DIR "/var/root/Library/Preferences/senko-geo"
+
 /* launchd redirects both daemon streams here, and the ui reads the same file */
 #define SENKO_SYSTEM_LOG "/var/log/senko-system.log"
 
 /* package update progress, written by senkod --update and read by the app */
 #define SENKO_UPDATE_LOG "/tmp/senko-update.log"
+
+/* progress of senkod --remove-vlesscore, read by nobody but a person over ssh */
+#define SENKO_RIVAL_LOG "/tmp/senko-remove.log"
 
 /* the ui stages pasted or picked content here and the daemon consumes it. a
    fixed path keeps the privileged reader free of any caller supplied path */

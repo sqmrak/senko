@@ -3,7 +3,9 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
+#include "http.h"
 #include "transport.h"
 
 #ifdef __cplusplus
@@ -35,6 +37,9 @@ typedef struct {
     const transport_vt_t *tls;
     const char *request_header; /* only for the subscription HTTP request */
     int max_redirects; /* zero uses five hops */
+/* set by subfetch_get_file only: the body goes to the sink and body_cap is its limit */
+    http_body_sink_fn sink;
+    void *sink_ctx;
 } subfetch_cfg_t;
 
 typedef struct {
@@ -51,6 +56,10 @@ typedef struct {
    of the real node list; gate_reason carries the panel's own wording */
     int  gated;
     char gate_reason[256];
+/* the routing response header of a happ panel, empty when there was none.
+   routing_too_long means the header did not fit and was dropped */
+    char routing[20 * 1024];
+    int  routing_too_long;
 /* the non-2xx status that ended the fetch, 0 when there was none */
     int  http_status;
 /* the body did not fit body_cap: the buffer holds its first body_cap bytes
@@ -67,6 +76,13 @@ subfetch_status_t subfetch_get_info(const subfetch_cfg_t *cfg, const char *url,
                                     uint8_t *body_buf, size_t body_cap,
                                     size_t *body_len, int timeout_ms,
                                     subfetch_info_t *info);
+
+/* the body of a large download goes to out as it arrives, at most max_bytes of it.
+   nothing is unpacked: the bytes written are the bytes the server sent. a
+   failure leaves a partial file, which is the caller's to remove */
+subfetch_status_t subfetch_get_file(const subfetch_cfg_t *cfg, const char *url,
+                                    FILE *out, size_t max_bytes, size_t *written,
+                                    int timeout_ms, subfetch_info_t *info);
 
 #ifdef __cplusplus
 }

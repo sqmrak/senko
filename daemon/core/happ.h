@@ -14,6 +14,10 @@ int happ_unwrap(const char *uri, char *out, size_t out_cap);
    its own byte shuffles, and a keytable of its own, so it lives apart */
 int happ_crypt5_unwrap(const char *payload, char *out, size_t out_cap);
 
+/* base64 in either alphabet, with or without padding or line breaks */
+int happ_b64_decode_ex(const char *in, size_t in_len,
+                       unsigned char *out, size_t cap, size_t *out_len);
+
 #ifdef __cplusplus
 }
 #endif

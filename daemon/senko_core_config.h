@@ -11,7 +11,15 @@ int senko_core_config_render(const vl_server_t *server, const char *endpoint_ip,
                      char *out, size_t out_cap);
 
 int senko_core_config_render_rules(const vl_server_t *server, const char *endpoint_ip,
-                           const char *ifname, const ruleset_t *rules,
-                           char *out, size_t out_cap);
+                           const char *ifname, const ruleset_t *rules, const char *geo_dir,
+                           const char *ca_file, char *out, size_t out_cap);
+
+/* geo_dir holds the geosite.dat and geoip.dat xray reads, NULL when the caller
+   cannot give senko-core one (the packet tunnel extension has no such path) */
+
+/* how many rules senko-core cannot take: app rules always, geo rules when it has
+   no dat to read. the utun backend decides those itself, so a profile that uses
+   them prefers it */
+size_t senko_core_config_unsupported(const ruleset_t *rules, const char *geo_dir);
 
 #endif

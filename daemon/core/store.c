@@ -9,6 +9,7 @@ void store_init(store_t *st) {
     if (!st) return;
     memset(st, 0, sizeof *st);
     st->selected = -1;
+    st->routing_active = -1;
     for (size_t i = 0; i < STORE_MAX_SERVERS; ++i) st->group[i] = STORE_GROUP_MANUAL;
 }
 
@@ -449,6 +450,7 @@ store_status_t store_remove_sub(store_t *st, size_t sub_index) {
 
     drop_group(st, (int)sub_index);
     memset(&st->subs[sub_index], 0, sizeof st->subs[sub_index]);
+    if (st->routing_active == (int)sub_index) st->routing_active = -1;
     for (size_t i = 0; i < st->section_n; ++i) {
         if (st->section_order[i] != (int)sub_index) continue;
         memmove(&st->section_order[i], &st->section_order[i + 1],
@@ -541,6 +543,61 @@ const vl_server_t *store_selected(const store_t *st) {
     return &st->servers[st->selected];
 }
 
+store_status_t store_set_sub_routing(store_t *st, size_t sub_index,
+                                     const char *json, size_t len) {
+    routing_info_t info;
+    if (!st || !json) return STORE_ERR_ARG;
+    if (sub_index >= STORE_MAX_SUBS || !st->subs[sub_index].used)
+        return STORE_ERR_RANGE;
+    store_sub_t *sub = &st->subs[sub_index];
+    if (len == 0) {
+        sub->routing[0] = '\0';
+        if (st->routing_active == (int)sub_index) st->routing_active = -1;
+        return STORE_OK;
+    }
+    if (len >= sizeof sub->routing) return STORE_ERR_TOO_LONG;
+    if (routing_inspect(json, len, &info) != ROUTING_OK) return STORE_ERR_PARSE;
+    memcpy(sub->routing, json, len);
+    sub->routing[len] = '\0';
+    return STORE_OK;
+}
+
+const char *store_sub_routing(const store_t *st, size_t sub_index) {
+    if (!st || sub_index >= STORE_MAX_SUBS || !st->subs[sub_index].used) return "";
+    return st->subs[sub_index].routing;
+}
+
+store_status_t store_set_routing_active(store_t *st, int sub_index) {
+    if (!st) return STORE_ERR_ARG;
+    if (sub_index < 0) {
+        st->routing_active = -1;
+        return STORE_OK;
+    }
+    if (sub_index >= STORE_MAX_SUBS || !st->subs[sub_index].used ||
+        !st->subs[sub_index].routing[0])
+        return STORE_ERR_RANGE;
+    st->routing_active = sub_index;
+    return STORE_OK;
+}
+
+store_status_t store_apply_routing(store_t *st, routing_info_t *info) {
+    routing_info_t local;
+    if (!st) return STORE_ERR_ARG;
+    if (!info) info = &local;
+    memset(info, 0, sizeof *info);
+    for (size_t i = 0; i < STORE_MAX_SUBS; ++i)
+        (void)ruleset_remove_source(&st->rules, (uint8_t)(i + 1));
+    st->rules.fallback = RULE_ACTION_PROXY;
+    if (st->routing_active < 0) return STORE_OK;
+    const store_sub_t *sub = &st->subs[st->routing_active];
+    if (!sub->used || !sub->routing[0]) return STORE_ERR_RANGE;
+    if (routing_compile(sub->routing, strlen(sub->routing),
+                        (uint8_t)(st->routing_active + 1), &st->rules, info) != ROUTING_OK)
+        return STORE_ERR_PARSE;
+    st->rules.fallback = info->global_proxy ? RULE_ACTION_PROXY : RULE_ACTION_DIRECT;
+    return STORE_OK;
+}
+
 store_status_t store_add_rule(store_t *st, const char *text, size_t len,
                               size_t *out_index) {
     if (!st || !text) return STORE_ERR_ARG;
@@ -554,6 +611,9 @@ store_status_t store_add_rule(store_t *st, const char *text, size_t len,
 
 store_status_t store_remove_rule(store_t *st, size_t index) {
     if (!st) return STORE_ERR_ARG;
+    /* a profile's rule is rebuilt at the next connect, so removing it by hand would
+       only look like it worked */
+    if (index < st->rules.count && st->rules.entries[index].source) return STORE_ERR_RANGE;
     rules_status_t removed = ruleset_remove(&st->rules, index);
     return removed == RULES_OK ? STORE_OK : STORE_ERR_RANGE;
 }
@@ -766,10 +826,13 @@ static int build_link(const vl_server_t *s, char *buf, size_t cap) {
         return (int)off;
     }
 
+    /* vmess is stored in the xtls share link form: the vless layout with the
+       body cipher in encryption= */
+    int vmess = s->proto == VL_PROTO_VMESS;
     char enc_id[3 * sizeof s->uuid];
     if (pct_encode_user(s->uuid, enc_id, sizeof enc_id) < 0) return -1;
-    int n = snprintf(buf, cap, "vless://%s@%s:%u?security=%s&type=%s",
-                     enc_id, s->host, s->port,
+    int n = snprintf(buf, cap, "%s://%s@%s:%u?security=%s&type=%s",
+                     vmess ? "vmess" : "vless", enc_id, s->host, s->port,
                      security_name(s->security), net_name(s->net));
     if (n < 0 || (size_t)n >= cap) return -1;
     size_t off = (size_t)n;
@@ -783,6 +846,7 @@ static int build_link(const vl_server_t *s, char *buf, size_t cap) {
         { "sid",  s->sid  },
         { "path", s->path },
         { "mode", s->mode },
+        { "encryption", vmess ? s->encryption : "" },
     };
     for (size_t i = 0; i < sizeof opt / sizeof opt[0]; ++i) {
         if (!opt[i].val[0]) continue;
@@ -821,6 +885,8 @@ store_status_t store_serialize(const store_t *st, char *buf, size_t cap, size_t 
 
     for (size_t i = 0; i < st->rules.count; ++i) {
         const rule_t *rule = &st->rules.entries[i];
+        /* a profile's rules are rebuilt from its json at every connect */
+        if (rule->source) continue;
         n = snprintf(buf + off, cap - off, "SET rule %s %s %s\n",
                      rule_action_name(rule->action), rule_type_name(rule->type),
                      rule->value);
@@ -863,7 +929,23 @@ store_status_t store_serialize(const store_t *st, char *buf, size_t cap, size_t 
         n = snprintf(buf + off, cap - off, "SUBHDR %zu %s\n", i, header);
         if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
         off += (size_t)n;
+        if (st->subs[i].routing[0]) {
+            /* base64, because the json holds spaces and quotes, and one line each
+               is all the loader reads */
+            char b64[ROUTING_JSON_MAX / 3 * 4 + 8];
+            size_t b64_len = 0;
+            if (b64_encode((const unsigned char *)st->subs[i].routing,
+                           strlen(st->subs[i].routing), b64, sizeof b64, &b64_len) != 0)
+                return STORE_ERR_FULL;
+            b64[b64_len] = '\0';
+            n = snprintf(buf + off, cap - off, "SUBROUTING %zu %s\n", i, b64);
+            if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
+            off += (size_t)n;
+        }
     }
+    n = snprintf(buf + off, cap - off, "ROUTINGACTIVE %d\n", st->routing_active);
+    if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
+    off += (size_t)n;
 
     n = snprintf(buf + off, cap - off, "ORDER");
     if (n < 0 || (size_t)n >= cap - off) return STORE_ERR_FULL;
@@ -979,6 +1061,7 @@ store_status_t store_deserialize(store_t *st, const char *buf, size_t len) {
     store_init(st);
 
     int want_sel = -1;
+    int want_routing = -1;
     uint64_t want_expire[STORE_MAX_SUBS];
     int expire_seen[STORE_MAX_SUBS];
     memset(want_expire, 0, sizeof want_expire);
@@ -1110,6 +1193,20 @@ store_status_t store_deserialize(store_t *st, const char *buf, size_t len) {
                         memcpy(st->subs[idx].header, decoded, strlen(decoded) + 1);
                 }
             }
+        } else if (llen >= 11 && memcmp(p, "SUBROUTING ", 11) == 0) {
+            const char *rest = p + 11;
+            const char *sp = memchr(rest, ' ', (size_t)(le - rest));
+            int idx = -1;
+            if (sp && parse_int(rest, sp, &idx) == 0 && idx >= 0 && idx < STORE_MAX_SUBS &&
+                st->subs[idx].used) {
+                unsigned char json[ROUTING_JSON_MAX];
+                size_t json_len = 0;
+                if (b64_decode(sp + 1, (size_t)(le - sp - 1), json, sizeof json - 1,
+                               &json_len) == 0)
+                    (void)store_set_sub_routing(st, (size_t)idx, (const char *)json, json_len);
+            }
+        } else if (llen >= 15 && memcmp(p, "ROUTINGACTIVE ", 14) == 0) {
+            parse_int(p + 14, le, &want_routing);
         } else if (llen >= 6 && memcmp(p, "ORDER ", 6) == 0) {
             const char *q = p + 6;
             st->section_n = 0;
@@ -1158,5 +1255,8 @@ store_status_t store_deserialize(store_t *st, const char *buf, size_t len) {
 
     if (want_sel >= 0 && (size_t)want_sel < st->n) st->selected = want_sel;
     else st->selected = -1;
+    /* a subscription that lost its profile cannot keep it switched on */
+    if (want_routing >= 0)
+        (void)store_set_routing_active(st, want_routing);
     return STORE_OK;
 }

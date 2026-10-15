@@ -24,6 +24,10 @@ typedef enum {
     HTTP_ERR_STATUS= -4 /* reject bad status */
 } http_status_t;
 
+/* takes the body as it arrives instead of the parser keeping it; non-zero
+   aborts the parse. a body that does not fit memory goes straight to a file */
+typedef int (*http_body_sink_fn)(void *ctx, const uint8_t *data, size_t len);
+
 typedef enum {
     HP_STATUS_LINE = 0, /* read the status */
     HP_HEADERS, /* read the headers */
@@ -36,7 +40,11 @@ typedef enum {
     HP_ERROR
 } http_parse_state_t;
 
-#define HTTP_MAX_HEADER   (8 * 1024) /* cap header buffering */
+/* a happ routing profile rides in one response header, and its base64 form runs
+   to a few kilobytes, so a header line may be this long. a panel's other headers
+   stay far below it */
+#define HTTP_MAX_HEADER   (24 * 1024) /* cap header buffering */
+#define HTTP_ROUTING_MAX  (20 * 1024)
 #define HTTP_MAX_LOCATION 1024
 
 typedef struct {
@@ -73,6 +81,11 @@ typedef struct {
     int     have_subscription_description;
     char    subscription_support_url[512];
     int     have_subscription_support_url;
+/* the routing header, whole or not at all: a cut base64 profile would decode to
+   a different, wrong profile */
+    char    routing[HTTP_ROUTING_MAX];
+    int     have_routing;
+    int     routing_too_long;
 
 /* remnawave device gating: instead of an http error the panel answers with a
    one entry placeholder profile, so the reason has to come from the headers */
@@ -83,12 +96,19 @@ typedef struct {
     uint8_t *body;
     size_t   body_cap;
     size_t   body_len;
+/* when set, body bytes go to the sink and body_cap is the most it may take */
+    http_body_sink_fn sink;
+    void    *sink_ctx;
 /* set with HTTP_ERR_TOOBIG once the body filled body_cap; the buffer then
    holds the first body_cap bytes */
     int      body_cut;
 } http_parser_t;
 
 void http_parser_init(http_parser_t *p, uint8_t *body_buf, size_t body_cap);
+
+/* bytes of a 2xx body go to fn; body_cap of http_parser_init is then the limit
+   on their total, and the body buffer is not used */
+void http_parser_set_sink(http_parser_t *p, http_body_sink_fn fn, void *ctx);
 
 http_status_t http_parser_feed(http_parser_t *p, const uint8_t *in, size_t len);
 

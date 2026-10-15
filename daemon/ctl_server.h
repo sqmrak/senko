@@ -2,9 +2,12 @@
 #define CTL_SERVER_H
 
 #include <poll.h>
+#include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
+#include "core/geo_update.h"
 #include "ctl_engine.h"
 #include "helper_jobs.h"
 #include "settings.h"
@@ -40,12 +43,27 @@ typedef struct {
     char error[160];
 /* the body ran past the buffer and only its first part was kept */
     int  body_cut;
+/* the routing response header of a happ panel, empty when there was none */
+    char routing[20 * 1024];
+    int  routing_too_long;
 } ctl_fetch_meta_t;
 
 typedef int (*ctl_fetch_fn)(void *ctx, const char *url,
                             const char *request_header,
                             unsigned char *buf, size_t cap, size_t *len,
                             ctl_fetch_meta_t *meta);
+
+/* downloads a geo dat into out, as subscription fetches do. 0 on success; on
+   failure -1 with a reason for the user in error */
+typedef int (*ctl_geo_fetch_fn)(void *ctx, const char *url, FILE *out, size_t max_bytes,
+                                size_t *written, char *error, size_t error_cap);
+
+typedef struct {
+    pthread_mutex_t lock;
+    int  busy;        /* a download thread is running */
+    int  result;      /* 0 none yet, 1 the last download finished, 2 it failed */
+    char message[200];
+} ctl_geo_state_t;
 
 typedef int (*ctl_probe_fn)(void *ctx, const char *host, uint16_t port);
 typedef int (*ctl_server_probe_fn)(void *ctx, const vl_server_t *server);
@@ -141,6 +159,9 @@ typedef struct {
     ctl_awg_fn    awg;
     ctl_awg_busy_fn awg_busy;
     ctl_stats_fn stats;
+    ctl_geo_fetch_fn geo_fetch;
+    char geo_dir[GEO_UPDATE_DIR_MAX];
+    ctl_geo_state_t geo;
     uint64_t stat_at_ms;
     int stat_failed;
     void         *apply_ctx;
@@ -192,6 +213,13 @@ ctls_status_t ctl_server_init(ctl_server_t *s, const char *path,
                               ctl_apply_fn apply, void *apply_ctx);
 
 void ctl_server_set_persist(ctl_server_t *s, ctl_persist_fn persist);
+
+/* where the per tag geo files live and how a dat is downloaded. without them the
+   server keeps routing profiles but cannot load the geo data they name */
+void ctl_server_set_geo(ctl_server_t *s, ctl_geo_fetch_fn fetch, const char *dir);
+
+/* the state of the last geo download, for tests and the GEO verb */
+int ctl_server_geo_busy(ctl_server_t *s);
 
 void ctl_server_set_fetch(ctl_server_t *s, ctl_fetch_fn fetch);
 

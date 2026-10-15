@@ -176,6 +176,15 @@ static http_status_t consume_line(http_parser_t *p) {
         memcpy(p->announce, v, n);
         p->announce[n] = '\0';
         p->have_announce = 1;
+    } else if (hdr_is(p->line, "routing:")) {
+        const char *v = skip_ws(p->line + 8);
+        size_t n = strlen(v);
+        if (n >= sizeof p->routing) {
+            p->routing_too_long = 1;
+        } else {
+            memcpy(p->routing, v, n + 1);
+            p->have_routing = 1;
+        }
     } else if (hdr_is(p->line, "profile-web-page-url:") ||
                hdr_is(p->line, "subscription-support-url:")) {
         const char *v = strchr(p->line, ':');
@@ -207,7 +216,23 @@ static http_status_t line_push(http_parser_t *p, char c) {
     return HTTP_NEED_MORE;
 }
 
+void http_parser_set_sink(http_parser_t *p, http_body_sink_fn fn, void *ctx) {
+    if (!p) return;
+    p->sink = fn;
+    p->sink_ctx = ctx;
+}
+
 static http_status_t body_push(http_parser_t *p, const uint8_t *b, size_t n) {
+    if (p->sink) {
+        if (p->body_got + n > p->body_cap) {
+            p->body_cut = 1;
+            return HTTP_ERR_TOOBIG;
+        }
+        if (n && p->sink(p->sink_ctx, b, n) != 0) return HTTP_ERR_PARSE;
+        p->body_got += n;
+        p->body_len = p->body_got;
+        return HTTP_NEED_MORE;
+    }
     if (p->body_len + n > p->body_cap) {
         if (p->body_cap > p->body_len)
             memcpy(p->body + p->body_len, b, p->body_cap - p->body_len);

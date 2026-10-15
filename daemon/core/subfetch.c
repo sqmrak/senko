@@ -159,6 +159,9 @@ static void parser_info(const http_parser_t *hp, subfetch_info_t *info) {
     if (hp->have_subscription_support_url)
         snprintf(info->support_url, sizeof info->support_url, "%s",
                  hp->subscription_support_url);
+    if (hp->have_routing)
+        snprintf(info->routing, sizeof info->routing, "%s", hp->routing);
+    info->routing_too_long = hp->routing_too_long;
     if (hp->hwid_rejected) {
         info->gated = 1;
         if (hp->have_announce)
@@ -264,6 +267,7 @@ static subfetch_status_t fetch_once(const subfetch_cfg_t *cfg, const url_t *u,
 
         http_parser_t hp;
         http_parser_init(&hp, body, body_cap);
+        if (cfg->sink) http_parser_set_sink(&hp, cfg->sink, cfg->sink_ctx);
         uint8_t rb[8192];
         for (;;) {
             int n = vt->read(th, rb, sizeof rb);
@@ -380,6 +384,10 @@ subfetch_status_t subfetch_get_info(const subfetch_cfg_t *cfg, const char *url,
         subfetch_status_t r = fetch_once(&hop_cfg, &u, body_buf, body_cap, body_len,
                                          redir, sizeof redir, deadline,
                                          cookie_jar, sizeof cookie_jar, info);
+        if (r == SUBFETCH_OK && cfg->sink) {
+            if (info && info->body_cut) return SUBFETCH_ERR_TOOBIG;
+            return SUBFETCH_OK;
+        }
         if (r == SUBFETCH_OK) {
             int cut = info ? info->body_cut : 0;
             if (maybe_gunzip_body(body_buf, body_len, body_cap, &cut) != 0)
@@ -408,4 +416,20 @@ subfetch_status_t subfetch_get_info(const subfetch_cfg_t *cfg, const char *url,
         memcpy(current, redir, rl + 1);
     }
     return SUBFETCH_ERR_REDIRECT; /* redirect limit reached */
+}
+
+static int file_sink(void *ctx, const uint8_t *data, size_t len) {
+    return fwrite(data, 1, len, (FILE *)ctx) == len ? 0 : -1;
+}
+
+subfetch_status_t subfetch_get_file(const subfetch_cfg_t *cfg, const char *url,
+                                    FILE *out, size_t max_bytes, size_t *written,
+                                    int timeout_ms, subfetch_info_t *info) {
+    static uint8_t unused;
+    subfetch_cfg_t sink_cfg;
+    if (!cfg || !out || !written || max_bytes == 0) return SUBFETCH_ERR_ARG;
+    sink_cfg = *cfg;
+    sink_cfg.sink = file_sink;
+    sink_cfg.sink_ctx = out;
+    return subfetch_get_info(&sink_cfg, url, &unused, max_bytes, written, timeout_ms, info);
 }

@@ -7,6 +7,8 @@
 #include "core/config.h"
 #include "core/happ.h"
 #include "core/store.h"
+#include "core/geo_update.h"
+#include "core/routing_sync.h"
 #include "daemon_ctl.h"
 #include "egress.h"
 #include "settings.h"
@@ -153,6 +155,7 @@ ctls_status_t ctl_server_init(ctl_server_t *s, const char *path,
     s->ping_pipe[1] = -1;
     for (size_t i = 0; i < CTL_SERVER_MAX_CLIENTS; ++i) s->clients[i].fd = -1;
     helper_jobs_init(&s->helpers);
+    pthread_mutex_init(&s->geo.lock, NULL);
     s->apply = apply;
     s->apply_ctx = apply_ctx;
     for (size_t i = 0; i < STORE_MAX_SERVERS; ++i) s->ping_ms[i] = -1;
@@ -230,6 +233,21 @@ ctls_status_t ctl_server_init(ctl_server_t *s, const char *path,
 void ctl_server_set_persist(ctl_server_t *s, ctl_persist_fn persist) {
     if (!s) return;
     s->persist = persist;
+}
+
+void ctl_server_set_geo(ctl_server_t *s, ctl_geo_fetch_fn fetch, const char *dir) {
+    if (!s) return;
+    s->geo_fetch = fetch;
+    snprintf(s->geo_dir, sizeof s->geo_dir, "%s", dir ? dir : "");
+}
+
+int ctl_server_geo_busy(ctl_server_t *s) {
+    int busy;
+    if (!s) return 0;
+    pthread_mutex_lock(&s->geo.lock);
+    busy = s->geo.busy;
+    pthread_mutex_unlock(&s->geo.lock);
+    return busy;
 }
 
 void ctl_server_set_fetch(ctl_server_t *s, ctl_fetch_fn fetch) {
@@ -636,13 +654,15 @@ static const char *server_proto_name(const vl_server_t *sv) {
     if (sv->proto == VL_PROTO_TROJAN) return "trojan";
     if (sv->proto == VL_PROTO_SHADOWSOCKS) return "shadowsocks";
     if (sv->proto == VL_PROTO_HYSTERIA2) return "hysteria2";
+    if (sv->proto == VL_PROTO_VMESS) return "vmess";
     if (sv->proto == VL_PROTO_UNSUPPORTED) return "unsupported";
     return "vless";
 }
 
 static const char *server_net_name(const vl_server_t *sv) {
     if (sv->proto == VL_PROTO_HYSTERIA2) return "quic";
-    if (sv->proto != VL_PROTO_VLESS && sv->proto != VL_PROTO_TROJAN) return "tcp";
+    if (sv->proto != VL_PROTO_VLESS && sv->proto != VL_PROTO_VMESS &&
+        sv->proto != VL_PROTO_TROJAN) return "tcp";
     switch (sv->net) {
         case VL_NET_TCP:   return "tcp";
         case VL_NET_WS:    return "ws";
@@ -820,6 +840,110 @@ static void import_subscription_url(ctl_server_t *s, ctl_client_t *c,
         client_write(c, reply, rn);
 }
 
+/* ---- routing profiles and the geo data they name ---------------------- */
+
+/* a profile's text goes into one protocol line, so a name or an entry with a line
+   break in it would end the line early and start a forged one */
+static void clean_text(const char *in, char *out, size_t cap) {
+    size_t n = 0;
+    if (!cap) return;
+    for (; in && *in && n + 1 < cap; ++in)
+        out[n++] = (unsigned char)*in < 0x20 || *in == 0x7f ? ' ' : *in;
+    out[n] = '\0';
+}
+
+typedef struct {
+    ctl_server_t *server;
+    geo_update_job_t job;
+} geo_job_t;
+
+static void *run_geo_job(void *arg) {
+    geo_job_t *g = (geo_job_t *)arg;
+    ctl_server_t *s = g->server;
+    geo_update_result_t result;
+    geo_update_run(&g->job, s->geo_fetch, s->apply_ctx, (uint64_t)time(NULL), &result);
+    pthread_mutex_lock(&s->geo.lock);
+    s->geo.busy = 0;
+    s->geo.result = result.ok ? 1 : 2;
+    clean_text(result.error, s->geo.message, sizeof s->geo.message);
+    pthread_mutex_unlock(&s->geo.lock);
+    fprintf(stderr, "senkod: geo update %s: %zu tag(s) written, %zu missing%s%s\n",
+            result.ok ? "finished" : "failed", result.written, result.missing,
+            result.error[0] ? ", " : "", result.error);
+    free(g);
+    return NULL;
+}
+
+/* downloads the geo data the active profile needs. 1 when a download started, 0
+   when nothing is due (msg says why), -1 when it cannot run. it never blocks:
+   the dats are tens of megabytes and the download takes its own thread */
+static int start_geo_job(ctl_server_t *s, int force, char *msg, size_t cap) {
+    const char *why = NULL;
+    geo_job_t *g = NULL;
+    int rc = -1;
+    if (msg && cap) msg[0] = '\0';
+    int active = s->engine.store.routing_active;
+    if (!s->geo_fetch || !s->geo_dir[0]) {
+        why = "geo data is not available on this daemon";
+    } else if (active < 0) {
+        why = "no routing profile is switched on";
+        rc = 0;
+    } else {
+        const char *json = store_sub_routing(&s->engine.store, (size_t)active);
+        g = (geo_job_t *)calloc(1, sizeof *g);
+        if (!g) {
+            why = "out of memory";
+        } else if (!geo_update_plan(s->geo_dir, json, strlen(json), (uint64_t)time(NULL),
+                                    force, &g->job)) {
+            why = "the geo data is up to date";
+            rc = 0;
+        } else {
+            pthread_mutex_lock(&s->geo.lock);
+            if (s->geo.busy) {
+                why = "a geo download is already running";
+                rc = 0;
+            } else {
+                s->geo.busy = 1;
+                s->geo.message[0] = '\0';
+            }
+            pthread_mutex_unlock(&s->geo.lock);
+            if (!why) {
+                pthread_t thread;
+                g->server = s;
+                if (pthread_create(&thread, NULL, run_geo_job, g) == 0) {
+                    pthread_detach(thread);
+                    return 1;
+                }
+                pthread_mutex_lock(&s->geo.lock);
+                s->geo.busy = 0;
+                pthread_mutex_unlock(&s->geo.lock);
+                why = "the geo download thread could not start";
+            }
+        }
+    }
+    free(g);
+    if (msg && cap && why) snprintf(msg, cap, "%s", why);
+    return rc;
+}
+
+/* what a refreshed subscription said about routing, into the catalog. runs
+   before the store is saved, so one save covers the nodes and the profile */
+static void routing_after_refresh(ctl_server_t *s, size_t si, const ctl_fetch_meta_t *meta,
+                                  const unsigned char *blob, size_t blen,
+                                  char *msg, size_t cap) {
+    routing_sync_t sync;
+    size_t used = strlen(msg);
+    routing_sync_apply(&s->engine.store, si, meta->routing, meta->routing_too_long,
+                       (const char *)blob, blen, &sync);
+    if (sync.kind == ROUTING_SYNC_SET && !sync.message[0])
+        snprintf(sync.message, sizeof sync.message, "routing profile %s",
+                 sync.activated ? "added and switched on" : "added");
+    if (sync.message[0] && used + 3 < cap)
+        snprintf(msg + used, cap - used, ", %s", sync.message);
+    if (sync.activated && (sync.kind == ROUTING_SYNC_SET || sync.kind == ROUTING_SYNC_UNCHANGED))
+        (void)start_geo_job(s, 0, NULL, 0);
+}
+
 /* the answer to an import once its feed came back (rc is the fetch result) */
 static void import_result(ctl_server_t *s, size_t si, int rc,
                           const unsigned char *blob, size_t blen,
@@ -851,11 +975,12 @@ static void import_result(ctl_server_t *s, size_t si, int rc,
     if (meta->expire) store_set_sub_expire(&s->engine.store, si, meta->expire);
     store_set_sub_meta(&s->engine.store, si, meta->upload, meta->download,
                        meta->total, meta->description, meta->support_url);
-    if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
     cfg_import_stats_text(&stats, skipped, sizeof skipped);
     snprintf(msg, cap, "subscription added, %zu server(s)%s%s%s", added,
              meta->body_cut ? " from the first 512 KB" : "",
              skipped[0] ? ", " : "", skipped);
+    routing_after_refresh(s, si, meta, blob, blen, msg, cap);
+    if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
 }
 
 /* read a staged import file whole; the cap is what the parser is allowed to see */
@@ -934,7 +1059,7 @@ static int refresh_start(ctl_server_t *s, ctl_client_t *c, fetch_purpose_t purpo
 
 typedef struct {
     char layer[24];
-    char reason[120];
+    char reason[320];
 } connect_failure_t;
 
 static void connect_failure_set(connect_failure_t *f,
@@ -942,11 +1067,16 @@ static void connect_failure_set(connect_failure_t *f,
                                 const char *reason) {
     if (!f) return;
     snprintf(f->layer, sizeof f->layer, "%s", layer ? layer : "server");
+    if (reason && strncmp(reason, f->layer, strlen(f->layer)) == 0 &&
+        strncmp(reason + strlen(f->layer), ": ", 2) == 0)
+        reason += strlen(f->layer) + 2;
     snprintf(f->reason, sizeof f->reason, "%s", reason ? reason : "unknown error");
 }
 
 static const char *connect_verify_layer(const char *reason) {
-    return reason && strncmp(reason, "routing ", 8) == 0 ? "routing" : "socks";
+    if (reason && strncmp(reason, "server: ", 8) == 0) return "server";
+    return reason && (strncmp(reason, "routing ", 8) == 0 ||
+                      strncmp(reason, "routing: ", 9) == 0) ? "routing" : "socks";
 }
 
 static void connect_failure_from_apply(ctl_server_t *s, connect_failure_t *f, int r) {
@@ -976,9 +1106,9 @@ static void connect_failure_from_apply(ctl_server_t *s, connect_failure_t *f, in
 
 static void connect_failure_write(ctl_client_t *c, const connect_failure_t *f) {
     if (!c || !f || !f->reason[0]) return;
-    char msg[160];
+    char msg[352];
     snprintf(msg, sizeof msg, "%s: %s", f->layer[0] ? f->layer : "server", f->reason);
-    char errbuf[192]; size_t errn = 0;
+    char errbuf[384]; size_t errn = 0;
     if (ctl_build_err(msg, errbuf, sizeof errbuf, &errn) == CTL_OK)
         client_write(c, errbuf, errn);
 }
@@ -1123,7 +1253,7 @@ static int connect_with_tunnel_pick(ctl_server_t *s, ctl_client_t *c, int start_
         }
 
         if (s->verify) {
-            char vreason[120];
+            char vreason[320];
             vreason[0] = '\0';
             if (s->verify(s->apply_ctx, vreason, sizeof vreason) != 0) {
                 connect_failure_set(&last_fail, connect_verify_layer(vreason),
@@ -1189,7 +1319,7 @@ static int apply_connect_action(ctl_server_t *s, ctl_client_t *c, ctl_action_t *
     int r = s->apply(s->apply_ctx, action);
     if (r == 0 && action->kind == CTL_ACT_START) {
         if (s->verify) {
-            char vreason[120];
+            char vreason[320];
             vreason[0] = '\0';
             if (s->verify(s->apply_ctx, vreason, sizeof vreason) != 0) {
                 ctl_action_t stop = { .kind = CTL_ACT_STOP };
@@ -1506,11 +1636,12 @@ static int refresh_result(ctl_server_t *s, int si, int rc,
 /* a refresh renumbers the catalog; each measurement follows its server to the
    new index, so failover keeps its latency order across a refresh */
     remap_pings(s, moved);
-    if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
     snprintf(msg, cap, "refreshed %zu server(s)%s%s%s%s", added,
              meta->body_cut ? " from the first 512 KB" : "",
              s->engine.store.n >= STORE_MAX_SERVERS ? " (list full)" : "",
              skipped[0] ? ", " : "", skipped);
+    routing_after_refresh(s, (size_t)si, meta, blob, blen, msg, cap);
+    if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
     return 0;
 }
 
@@ -1639,6 +1770,15 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
     if (cmd.kind == CTL_CMD_EXPORT || cmd.kind == CTL_CMD_RESTORE) {
         char reply[128]; size_t rn = 0;
         int restore = cmd.kind == CTL_CMD_RESTORE;
+/* a restore replaces the whole catalog, ruleset included, and the running tunnel
+   reads that ruleset (and the geo sets bound into it) on its own thread */
+        if (restore && (s->engine.state == CTL_STATE_CONNECTED ||
+                        s->engine.state == CTL_STATE_CONNECTING)) {
+            if (ctl_build_err("disconnect before restoring a backup", reply, sizeof reply,
+                              &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
         int ok = s->backup && s->backup(s->apply_ctx, restore,
                                         &s->engine.store) == 0;
         if (ok && restore) forget_pings(s);
@@ -1701,15 +1841,152 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         size_t line_len = 0;
         for (size_t i = 0; i < s->engine.store.rules.count; ++i) {
             const rule_t *rule = &s->engine.store.rules.entries[i];
+            /* a profile's rules are shown with the profile, not as the user's own */
+            if (rule->source) continue;
             if (ctl_build_rule(i, rule_action_name(rule->action),
                                rule_type_name(rule->type),
                                rule_hit_count(rule), rule->value,
                                line, sizeof line, &line_len) == CTL_OK)
                 client_write(c, line, line_len);
         }
-        if (ctl_build_ruleend(s->engine.store.rules.count, line, sizeof line,
-                              &line_len) == CTL_OK)
+        size_t user_rules = 0;
+        for (size_t i = 0; i < s->engine.store.rules.count; ++i)
+            if (!s->engine.store.rules.entries[i].source) ++user_rules;
+        if (ctl_build_ruleend(user_rules, line, sizeof line, &line_len) == CTL_OK)
             client_write(c, line, line_len);
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_ROUTING) {
+        store_t *st = &s->engine.store;
+        char line[640];
+        size_t line_len = 0;
+        for (size_t i = 0; i < STORE_MAX_SUBS; ++i) {
+            routing_info_t info;
+            routing_counts_t counts;
+            char name[ROUTING_NAME_MAX + 8];
+            const char *json = st->subs[i].routing;
+            if (!st->subs[i].used || !json[0]) continue;
+            if (routing_inspect(json, strlen(json), &info) != ROUTING_OK ||
+                routing_count(json, strlen(json), &counts) != ROUTING_OK)
+                continue;
+            clean_text(info.name[0] ? info.name : st->subs[i].name, name, sizeof name);
+            if (ctl_build_routing((int)i, st->routing_active == (int)i, info.global_proxy,
+                                  counts.supported, counts.unsupported, counts.geo_tags,
+                                  info.last_updated, name, line, sizeof line,
+                                  &line_len) == CTL_OK)
+                client_write(c, line, line_len);
+        }
+        if (ctl_build_routingend(st->routing_active, line, sizeof line, &line_len) == CTL_OK)
+            client_write(c, line, line_len);
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_ROUTING_SET) {
+        char reply[160], note[96];
+        size_t rn = 0;
+        int sub = cmd.server_index;
+        if (store_set_routing_active(&s->engine.store, sub) != STORE_OK) {
+            if (ctl_build_err("that subscription has no routing profile", reply, sizeof reply,
+                              &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
+        if (sub >= 0) (void)start_geo_job(s, 0, note, sizeof note);
+        /* the running tunnel keeps the rules it started with, as happ's profile
+           switch waits for a reconnect */
+        const char *text = sub < 0 ? "routing is off" : "routing profile switched on";
+        char message[128];
+        snprintf(message, sizeof message, "%s%s", text,
+                 s->engine.state == CTL_STATE_CONNECTED || s->engine.state == CTL_STATE_CONNECTING
+                     ? ", it applies after the next connect" : "");
+        if (ctl_build_ok(message, reply, sizeof reply, &rn) == CTL_OK)
+            client_write(c, reply, rn);
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_ROUTING_ENTRIES) {
+        enum { ENTRY_LIMIT = 400 };
+        char reply[160];
+        char line[RULE_VALUE_MAX + 64];
+        size_t rn = 0, ln = 0;
+        size_t sub = (size_t)cmd.server_index;
+        const char *json = store_sub_routing(&s->engine.store, sub);
+        routing_entry_t *entries = NULL;
+        size_t total = 0;
+        if (!json[0] || !(entries = (routing_entry_t *)calloc(ENTRY_LIMIT, sizeof *entries))) {
+            if (ctl_build_err(json[0] ? "out of memory" : "that subscription has no routing profile",
+                              reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        total = routing_entries(json, strlen(json), entries, ENTRY_LIMIT);
+        for (size_t i = 0; i < total && i < ENTRY_LIMIT; ++i) {
+            char text[RULE_VALUE_MAX + 16];
+            clean_text(entries[i].entry, text, sizeof text);
+            if (ctl_build_rentry(rule_action_name(entries[i].action), entries[i].is_ip,
+                                 entries[i].supported, text, line, sizeof line, &ln) == CTL_OK)
+                client_write(c, line, ln);
+        }
+        free(entries);
+        if (ctl_build_rentryend(total, line, sizeof line, &ln) == CTL_OK)
+            client_write(c, line, ln);
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_GEO) {
+        store_t *st = &s->engine.store;
+        char line[320];
+        size_t ln = 0;
+        int busy, result;
+        char message[sizeof s->geo.message];
+        size_t missing = 0;
+        uint64_t stamp = 0;
+        pthread_mutex_lock(&s->geo.lock);
+        busy = s->geo.busy;
+        result = s->geo.result;
+        memcpy(message, s->geo.message, sizeof message);
+        pthread_mutex_unlock(&s->geo.lock);
+        if (s->geo_dir[0]) {
+            stamp = geo_update_stamp(s->geo_dir);
+            if (st->routing_active >= 0) {
+                const char *json = store_sub_routing(st, (size_t)st->routing_active);
+                missing = geo_update_missing(s->geo_dir, json, strlen(json));
+            }
+        }
+        if (ctl_build_geo(busy, stamp, missing, result, message, line, sizeof line, &ln) == CTL_OK)
+            client_write(c, line, ln);
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_RIVAL_REMOVE) {
+        char reason[192], reply[256]; size_t rn = 0;
+/* dpkg can take a while and the package scripts run uicache, so it runs in a
+   helper of its own and the app watches for the files to go */
+        char *argv[] = { (char *)senkod_binary_path(), (char *)"--remove-vlesscore", NULL };
+        if (helper_detached_start(argv, SENKO_RIVAL_LOG, reason, sizeof reason) == 0) {
+            if (ctl_build_ok("removal started", reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
+        fprintf(stderr, "senkod: vless-core removal failed to start: %s\n", reason);
+        if (ctl_build_err(reason, reply, sizeof reply, &rn) == CTL_OK)
+            client_write(c, reply, rn);
+        return;
+    }
+
+    if (cmd.kind == CTL_CMD_GEO_UPDATE) {
+        char reply[160], why[96];
+        size_t rn = 0;
+        int started = start_geo_job(s, 1, why, sizeof why);
+        if (started == 1) {
+            if (ctl_build_ok("geo download started", reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+        } else if (ctl_build_err(why[0] ? why : "the geo download did not start", reply,
+                                 sizeof reply, &rn) == CTL_OK) {
+            client_write(c, reply, rn);
+        }
         return;
     }
 
@@ -1872,7 +2149,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
     }
 
     if (cmd.kind == CTL_CMD_CHECK) {
-        char reply[160]; size_t rn = 0;
+        char reply[384]; size_t rn = 0;
         if (!s->check || cmd.server_index < 0 ||
             (size_t)cmd.server_index >= s->engine.store.n) {
             if (ctl_build_err("check unavailable", reply, sizeof reply, &rn) == CTL_OK)
@@ -1887,7 +2164,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
                 client_write(c, reply, rn);
             return;
         }
-        char reason[96];
+        char reason[320];
         reason[0] = '\0';
         ctl_check_trace_t trace;
         memset(&trace, 0, sizeof trace);
@@ -2250,7 +2527,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
             int sel = (st->selected >= 0 && (size_t)st->selected == i) ? 1 : 0;
             const char *proto = server_proto_name(sv);
             char kind[32];
-/* a placeholder names what it is ("vmess", "shadowsocks-plugin-obfs") in the
+/* a placeholder names what it is ("tuic", "shadowsocks-plugin-obfs") in the
    protocol field, which the list splits on spaces */
             if (sv->proto == VL_PROTO_UNSUPPORTED && sv->unsupported[0]) {
                 size_t k = 0;

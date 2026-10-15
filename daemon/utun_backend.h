@@ -58,6 +58,8 @@ typedef struct {
     char dns_state[192]; /* which resolver the system uses, for diagnostics */
     tun_policy_t policy;
     int policy_ready;
+    tun_policy_app_fn app_of; /* how app rules learn a flow's owner; NULL when they cannot */
+    void *app_ctx;
     direct_socket_iface_t direct; /* where flows the rules send direct leave */
     tun_loop_command_fn previous_command;
     void *previous_command_ctx;
@@ -83,6 +85,9 @@ void utun_leftovers_save(const tun_plan_t *plan);
 void utun_leftovers_forget(void);
 
 int utun_backend_runtime_init(utun_backend_t *backend);
+/* names the owner lookup the next start gives its policy. the lookup must stay
+   valid until the backend is stopped */
+void utun_backend_set_app_owner(utun_backend_t *backend, tun_policy_app_fn fn, void *ctx);
 int utun_backend_start(utun_backend_t *backend, const vl_server_t *server,
                        const char *resolved_ipv4, ruleset_t *rules,
                        const char *dns_upstream, dns_block_response_t block_response,

@@ -547,8 +547,7 @@ static void admit_waiting(tun_tcp_t *tcp) {
 static int decide(tun_tcp_t *tcp, relay_t *relay) {
     if (relay->key.destination_port == 53 || !tcp->config.policy) return 0;
     char why[96];
-    rule_action_t action = tun_policy_flow(tcp->config.policy, relay->key.destination,
-                                           relay->key.address_len,
+    rule_action_t action = tun_policy_flow_from(tcp->config.policy, &relay->key,
                                            (uint64_t)(senko_now_ms() / 1000),
                                            why, sizeof why);
     if (senko_trace_enabled() && action != RULE_ACTION_PROXY) {

@@ -7,6 +7,8 @@
 #include "core/transport.h"
 #include "core/transport_pick.h"
 #include "core/real_probe.h"
+#include "core/net_diag.h"
+#include "core/senko_clock.h"
 #include "core/vless.h"
 #include "core/subfetch.h"
 #include "core/net_safe.h"
@@ -20,6 +22,8 @@
 #include "legacy_ios.h"
 #include "senko_core_config.h"
 #include "app_proxy.h"
+#include "app_owner.h"
+#include "core/routing_profile.h"
 #include "direct_socket.h"
 #include "direct_dns.h"
 #include "egress.h"
@@ -79,15 +83,61 @@ void daemon_ctl_set_rules(daemon_ctl_t *d, ruleset_t *rules) {
     if (d) d->rules = rules;
 }
 
+void daemon_ctl_set_store(daemon_ctl_t *d, store_t *store, const char *geo_dir) {
+    if (!d) return;
+    d->store = store;
+    snprintf(d->geo_dir, sizeof d->geo_dir, "%s", geo_dir ? geo_dir : "");
+}
+
+/* what the running tunnel reads out of the ruleset: the loaded geo sets and the
+   owner lookup. both go only after the tunnel that used them has stopped */
+static void release_routing(daemon_ctl_t *d) {
+    if (d->rules) ruleset_release_geo(d->rules);
+    app_owner_close(d->owner);
+    d->owner = NULL;
+}
+
+/* rebuilds the routing profile's rules from the catalog and loads the geo sets
+   they name. runs with no tunnel up, because a running one reads the ruleset */
+static void prepare_routing(daemon_ctl_t *d) {
+    routing_info_t info;
+    size_t missing = 0;
+    if (!d->rules) return;
+    if (d->store) {
+        store_status_t status = store_apply_routing(d->store, &info);
+        if (status != STORE_OK)
+            fprintf(stderr, "senkod: the routing profile could not be applied (%d)\n", (int)status);
+        else if (d->store->routing_active >= 0)
+            fprintf(stderr, "senkod: routing profile \"%s\": %zu rule(s), %zu entr%s senko cannot match,"
+                            " unmatched traffic goes %s\n",
+                    info.name, info.rules, info.unsupported, info.unsupported == 1 ? "y" : "ies",
+                    d->rules->fallback == RULE_ACTION_DIRECT ? "straight out" : "through the tunnel");
+    }
+    if (d->geo_dir[0] && ruleset_bind_geo(d->rules, d->geo_dir, &missing) != RULES_OK)
+        fprintf(stderr, "senkod: the geo data could not be loaded\n");
+    if (missing)
+        fprintf(stderr, "senkod: %zu geo rule(s) have no data yet and match nothing until"
+                        " the geo files are downloaded\n", missing);
+    if (ruleset_has_type(d->rules, RULE_TYPE_APP)) {
+        d->owner = app_owner_open(NULL);
+        if (!d->owner)
+            fprintf(stderr, "senkod: app rules need proc_info, which this system does not have;"
+                            " they match nothing\n");
+    }
+}
+
 void daemon_ctl_shutdown(daemon_ctl_t *d) {
     if (!d) return;
     status_set(0);
     senko_core_backend_stop(&d->senko_core);
     app_proxy_stop(&d->app_proxy);
     utun_backend_destroy(&d->embedded_utun);
+    release_routing(d);
     /* the profile stays recorded: the next senkod brings the tunnel back */
     awg_backend_destroy(&d->awg);
     pthread_mutex_destroy(&d->probe_route_lock);
+    OPENSSL_cleanse(&d->started, sizeof d->started);
+    d->started_set = 0;
 }
 
 /* senko-core is a child process with no descriptor that closes on its exit,
@@ -109,6 +159,7 @@ int daemon_ctl_maintain(daemon_ctl_t *d) {
         fprintf(stderr, "senkod: embedded utun packet loop exited: %s\n",
                 d->embedded_utun.result.message);
         utun_backend_stop(&d->embedded_utun);
+        release_routing(d);
         loop_stop(d->loop);
         status_set(0);
         return -1;
@@ -117,6 +168,7 @@ int daemon_ctl_maintain(daemon_ctl_t *d) {
     if (senko_core_backend_running(&d->senko_core)) return 0;
     fprintf(stderr, "senkod: senko-core exited unexpectedly\n");
     senko_core_backend_stop(&d->senko_core);
+    release_routing(d);
     loop_stop(d->loop);
     status_set(0);
     return -1;
@@ -228,8 +280,9 @@ int daemon_ctl_native_config(void *ctx, const vl_server_t *server, char *buf,
     if (resolve_ipv4_addresses(server->host, endpoint, sizeof endpoint,
                                NULL, 0, 0) != 0)
         return -1;
-    if (senko_core_config_render_rules(server, endpoint, "utun", d->rules,
-                               buf, cap) != 0)
+    /* the extension cannot read the daemon's geo directory, so geo rules stay out */
+    if (senko_core_config_render_rules(server, endpoint, "utun", d->rules, NULL,
+                               NULL, buf, cap) != 0)
         return -1;
     *len = strlen(buf);
     return *len > 0 ? 0 : -1;
@@ -242,6 +295,8 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
     switch (action->kind) {
         case CTL_ACT_START: {
             const vl_server_t *s = &action->server;
+            d->started = *s;
+            d->started_set = 1;
 /* quic/udp only: no senko transport carries it, so there is nothing to hand
    the local socks loop. senko-core runs it where it can, and the utun backend
    has its own client (hy2_engine) for everything older. the connect hook
@@ -263,7 +318,7 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
 
             uint8_t uuid[VLESS_UUID_LEN];
             memset(uuid, 0, sizeof uuid);
-            if (s->proto == VL_PROTO_VLESS) {
+            if (cfg_proto_uses_uuid(s->proto)) {
                 if (vless_uuid_parse(s->uuid, uuid) != VLESS_OK) {
                     fprintf(stderr, "senkod: bad uuid in server link\n");
                     status_set(0);
@@ -276,6 +331,8 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
                 app_proxy_stop(&d->app_proxy);
                 utun_backend_stop(&d->embedded_utun);
             }
+            release_routing(d);
+            prepare_routing(d);
 
             if (quic_only) {
 /* nothing local backs this profile; drop any listener left from the last one */
@@ -288,6 +345,7 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
                                     s->sni, s->fp, s->pbk, s->sid, s->path,
                                     s->ws_host, s->mode, s->host, s->insecure) != LOOP_OK) {
                     fprintf(stderr, "senkod: socks listener failed\n");
+                    release_routing(d);
                     status_set(0);
                     return DCTL_ERR_LOOP;
                 }
@@ -300,6 +358,7 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
             if (resolve_ipv4_addresses(s->host, first_ip, sizeof first_ip,
                                        ip_list, sizeof ip_list, 0) != 0) {
                 fprintf(stderr, "senkod: dns resolution failed for %s\n", s->host);
+                release_routing(d);
                 loop_stop(d->loop);
                 status_set(0);
                 return DCTL_ERR_DNS;
@@ -320,6 +379,22 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
    it will not run on this device, which is the answer the tester came for */
             int core_attempted = pin == SENKO_BACKEND_CORE ||
                 (pin == SENKO_BACKEND_AUTO && senko_core_backend_supported());
+/* senko-core reads geo sets from the dat files but cannot name an app, so a
+   profile with app rules, or with geo rules and no dat yet, runs on the utun
+   backend, which decides them itself. a
+   quic only server has no utun path on ios 12 and later, and a pinned core was
+   asked for by name: both keep the core and lose those rules */
+            size_t core_lost = senko_core_config_unsupported(d->rules, d->geo_dir);
+            if (core_attempted && core_lost) {
+                if (pin == SENKO_BACKEND_AUTO && !quic_only) {
+                    fprintf(stderr, "senkod: %zu geo or app rule(s) need the utun backend,"
+                                    " senko-core is not used\n", core_lost);
+                    core_attempted = 0;
+                } else {
+                    fprintf(stderr, "senkod: senko-core cannot take %zu geo or app rule(s);"
+                                    " they match nothing on this backend\n", core_lost);
+                }
+            }
             int hook_pinned = pin == SENKO_BACKEND_APP_PROXY;
             int routing_ok;
             int failure = DCTL_ERR_UTUN;
@@ -327,7 +402,7 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
                 failure = DCTL_ERR_CORE;
                 routing_ok = senko_core_backend_start(&d->senko_core, s, first_ip,
                                               d->settings.dns_upstream, d->rules,
-                                              backend_reason,
+                                              d->geo_dir, backend_reason,
                                               sizeof backend_reason) == 0;
                 if (!routing_ok)
                     fprintf(stderr, "senkod: senko-core failed: %s\n",
@@ -339,6 +414,8 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
                 if (!routing_ok)
                     fprintf(stderr, "senkod: connect hook failed: %s\n", backend_reason);
             } else {
+                utun_backend_set_app_owner(&d->embedded_utun,
+                                           d->owner ? app_owner_policy_lookup : NULL, d->owner);
                 routing_ok = utun_backend_start(&d->embedded_utun, s, ip_list,
                     d->rules, d->settings.dns_upstream,
                     d->settings.block_response, backend_reason,
@@ -362,6 +439,7 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
             if (!routing_ok) {
                 snprintf(d->last_reason, sizeof d->last_reason, "%s",
                          backend_reason);
+                release_routing(d);
                 loop_stop(d->loop);
                 status_set(0);
                 return failure;
@@ -372,11 +450,14 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
         }
 
         case CTL_ACT_STOP:
+            OPENSSL_cleanse(&d->started, sizeof d->started);
+            d->started_set = 0;
             /* the badge belongs to amneziawg while that tunnel runs */
             if (!awg_backend_busy(&d->awg)) status_set(0);
             senko_core_backend_stop(&d->senko_core);
             app_proxy_stop(&d->app_proxy);
             utun_backend_stop(&d->embedded_utun);
+            release_routing(d);
             loop_stop(d->loop);
             return 0;
 
@@ -547,6 +628,26 @@ static void diag_top_rules(const ruleset_t *rules, char *buf, size_t cap,
     }
 }
 
+/* which profile the rules came from, and how well the app lookup is working: a
+   lookup that finds nothing looks the same as an app nobody ruled, so its
+   counters are what tell the two apart */
+static void diag_routing(const daemon_ctl_t *d, char *buf, size_t cap, size_t *off) {
+    if (d->store && d->store->routing_active >= 0)
+        diag_add(buf, cap, off, "routing.profile", "subscription %d, unmatched traffic goes %s",
+                 d->store->routing_active,
+                 d->rules && d->rules->fallback == RULE_ACTION_DIRECT ? "straight out"
+                                                                      : "through the tunnel");
+    if (d->owner) {
+        app_owner_stats_t st;
+        app_owner_stats(d->owner, &st);
+        diag_add(buf, cap, off, "rules.apps",
+                 "%llu named, %llu outside any app, %llu unknown, %zu socket(s), %llu scan(s), %llu error(s)",
+                 (unsigned long long)st.named, (unsigned long long)st.no_bundle,
+                 (unsigned long long)st.unowned, (size_t)st.sockets,
+                 (unsigned long long)st.scans, (unsigned long long)st.errors);
+    }
+}
+
 int daemon_ctl_diag(void *ctx, char *buf, size_t cap, size_t *len) {
     daemon_ctl_t *d = (daemon_ctl_t *)ctx;
     size_t off = 0;
@@ -598,6 +699,7 @@ int daemon_ctl_diag(void *ctx, char *buf, size_t cap, size_t *len) {
              d->settings.block_response == DNS_BLOCK_NXDOMAIN ? "nxdomain" :
              d->settings.block_response == DNS_BLOCK_REFUSED ? "refused" : "zero");
     diag_top_rules(d->rules, buf, cap, &off);
+    diag_routing(d, buf, cap, &off);
 
     diag_add(buf, cap, &off, "sub.user_agent", "Happ/3.26.1/ios");
     if (d->settings.sub_ignore_gating)
@@ -1040,6 +1142,29 @@ static int subfetch_dial(void *ctx, const char *host, uint16_t port, int budget_
     return subfetch_dial_direct(d, host, port, budget_ms, w->force_direct);
 }
 
+/* the user's words for a failed download. what names the thing fetched */
+static void fetch_error_text(subfetch_status_t r, const char *host, int http_status,
+                             const char *what, char *e, size_t ec) {
+    switch (r) {
+        case SUBFETCH_ERR_DIAL:
+            snprintf(e, ec, "cannot resolve or connect to %.96s", host); break;
+        case SUBFETCH_ERR_TRANSPORT:
+            snprintf(e, ec, "tls or connection to %.96s failed", host); break;
+        case SUBFETCH_ERR_HTTP:
+            if (http_status)
+                snprintf(e, ec, "%.96s answered HTTP %d", host, http_status);
+            else
+                snprintf(e, ec, "%.96s sent a response senko cannot read", host);
+            break;
+        case SUBFETCH_ERR_TOOBIG:
+            snprintf(e, ec, "the %s from %.96s is too large", what, host); break;
+        case SUBFETCH_ERR_REDIRECT:
+            snprintf(e, ec, "%.96s redirected too often or to an unusable address", host); break;
+        default:
+            snprintf(e, ec, "the %s url is invalid", what); break;
+    }
+}
+
 /* runs on a ctl_server fetch thread while the main loop keeps serving the
    local socks port, so nothing here may step the loop */
 int daemon_ctl_fetch(void *ctx, const char *url,
@@ -1075,28 +1200,8 @@ int daemon_ctl_fetch(void *ctx, const char *url,
     if (r != SUBFETCH_OK) {
         url_t eu;
         const char *host = url && url_parse(url, &eu) == URL_OK ? eu.host : "the server";
-        if (meta) {
-            char *e = meta->error;
-            size_t ec = sizeof meta->error;
-            switch (r) {
-                case SUBFETCH_ERR_DIAL:
-                    snprintf(e, ec, "cannot resolve or connect to %.96s", host); break;
-                case SUBFETCH_ERR_TRANSPORT:
-                    snprintf(e, ec, "tls or connection to %.96s failed", host); break;
-                case SUBFETCH_ERR_HTTP:
-                    if (info.http_status)
-                        snprintf(e, ec, "%.96s answered HTTP %d", host, info.http_status);
-                    else
-                        snprintf(e, ec, "%.96s sent a response senko cannot read", host);
-                    break;
-                case SUBFETCH_ERR_TOOBIG:
-                    snprintf(e, ec, "the subscription from %.96s is too large", host); break;
-                case SUBFETCH_ERR_REDIRECT:
-                    snprintf(e, ec, "%.96s redirected too often or to an unusable address", host); break;
-                default:
-                    snprintf(e, ec, "the subscription url is invalid"); break;
-            }
-        }
+        if (meta) fetch_error_text(r, host, info.http_status, "subscription",
+                                   meta->error, sizeof meta->error);
         const char *why = "unknown";
         switch (r) {
             case SUBFETCH_ERR_ARG:       why = "bad arg"; break;
@@ -1128,10 +1233,54 @@ int daemon_ctl_fetch(void *ctx, const char *url,
         snprintf(meta->support_url, sizeof meta->support_url, "%s", info.support_url);
         meta->gated = info.gated;
         meta->body_cut = info.body_cut;
+        snprintf(meta->routing, sizeof meta->routing, "%s", info.routing);
+        meta->routing_too_long = info.routing_too_long;
         snprintf(meta->gate_reason, sizeof meta->gate_reason, "%s", info.gate_reason);
     }
     fprintf(stderr, "senkod: subfetch ok %zu bytes\n", len ? *len : 0);
     return 0;
+}
+
+/* a geo dat is tens of megabytes, so it goes to a file as it arrives. happ gives
+   a download three minutes, and so does this. like a subscription it goes through
+   the tunnel when one is up and retries direct when that dial or handshake failed */
+int daemon_ctl_geo_fetch(void *ctx, const char *url, FILE *out, size_t max_bytes,
+                         size_t *written, char *error, size_t error_cap) {
+    fetch_dial_ctx_t dial_ctx = { ctx, 0, 0 };
+    subfetch_cfg_t cfg;
+    subfetch_info_t info;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.dial = subfetch_dial;
+    cfg.dial_ctx = &dial_ctx;
+    cfg.tcp = &transport_tcp;
+    cfg.tls = &transport_tls;
+    cfg.max_redirects = 5;
+    subfetch_status_t r = subfetch_get_file(&cfg, url, out, max_bytes, written, 180000, &info);
+    if ((r == SUBFETCH_ERR_DIAL || r == SUBFETCH_ERR_TRANSPORT) && dial_ctx.last_via_tunnel) {
+        /* start the file over: the failed attempt may have written some of it */
+        dial_ctx.force_direct = 1;
+        fprintf(stderr, "senkod: geo download retrying direct, bypassing the tunnel\n");
+        if (fflush(out) != 0 || ftruncate(fileno(out), 0) != 0 || fseek(out, 0, SEEK_SET) != 0) {
+            snprintf(error, error_cap, "the geo download file could not be reset");
+            return -1;
+        }
+        r = subfetch_get_file(&cfg, url, out, max_bytes, written, 180000, &info);
+    }
+    if (r == SUBFETCH_OK) {
+        fprintf(stderr, "senkod: geo download ok %zu bytes\n", *written);
+        return 0;
+    }
+    {
+        url_t u;
+        const char *host = url && url_parse(url, &u) == URL_OK ? u.host : "the server";
+        /* a sink that failed reads as an unreadable response; the disk is the cause */
+        if (r == SUBFETCH_ERR_HTTP && !info.http_status && ferror(out))
+            snprintf(error, error_cap, "the geo file could not be written, the disk may be full");
+        else
+            fetch_error_text(r, host, info.http_status, "geo file", error, error_cap);
+        fprintf(stderr, "senkod: geo download failed: %s\n", error);
+    }
+    return -1;
 }
 
 static int dial_numeric_until(daemon_ctl_t *d, const char *ip, uint16_t port,
@@ -1396,36 +1545,81 @@ int daemon_ctl_probe(void *ctx, const char *host, uint16_t port) {
     return ms;
 }
 
-/* the list ping. a bare tcp connect reported the nearest cdn edge for nodes
-   behind one (2 to 8 ms for a server abroad) and whatever the wifi radio added
-   while it dozed, so the number is the delay of a real request carried
-   through the server instead */
-static int probe_real_delay(daemon_ctl_t *d, const vl_server_t *server) {
-    const int timeout_ms = 6000;
+/* senko-core routes everything into its tunnel, the physical interface binding
+   notwithstanding, so a direct probe needs the address carved out */
+static int probe_bypass_add(daemon_ctl_t *d, const char *ip) {
+    int bypassed = 0;
+    pthread_mutex_lock(&d->probe_route_lock);
+    if (d->senko_core.active)
+        bypassed = senko_core_backend_bypass_add_ipv4(&d->senko_core, ip) == 0 ? 1 : -1;
+    pthread_mutex_unlock(&d->probe_route_lock);
+    return bypassed;
+}
+
+static void probe_bypass_remove(daemon_ctl_t *d, const char *ip, int bypassed) {
+    if (bypassed <= 0) return;
+    pthread_mutex_lock(&d->probe_route_lock);
+    senko_core_backend_bypass_remove_ipv4(&d->senko_core, ip);
+    pthread_mutex_unlock(&d->probe_route_lock);
+}
+
+/* vmess, reality and certificate dates fail when the device clock is off, and
+   look like a broken server when they do; a direct answer from the probe host
+   estimates the difference, without changing the device clock */
+static void probe_measure_clock(daemon_ctl_t *d) {
+    char ip[INET_ADDRSTRLEN];
+    if (!net_resolve_public_ipv4(REAL_PROBE_HOST, REAL_PROBE_PORT, ip, sizeof ip)) return;
+    int bypassed = probe_bypass_add(d, ip);
+    if (bypassed < 0) return;
+    int measured = real_probe_clock(ip, probe_bind_physical_interface, 3000) == 0;
+    probe_bypass_remove(d, ip, bypassed);
+    stage_mark(d, "device clock", measured);
+}
+
+/* the list ping and the server checks. a bare tcp connect reported the nearest
+   cdn edge for nodes behind one (2 to 8 ms for a server abroad) and whatever
+   the wifi radio added while it dozed, so the number is the delay of a real
+   request carried through the server instead. a failure leaves in reason what
+   is wrong, in words the app translates */
+static int diagnose_server(daemon_ctl_t *d, const vl_server_t *server, int timeout_ms, int tcp_only,
+                           char *reason, size_t reason_cap) {
+    net_diag_t diag;
+    memset(&diag, 0, sizeof diag);
+    diag.proto = server->proto;
+    diag.port = server->port;
     char ip[INET_ADDRSTRLEN];
     if (!net_resolve_public_ipv4(server->host, server->port, ip, sizeof ip)) {
         stage_mark(d, "resolve", 0);
+        diag.stage = NET_DIAG_DNS;
+        if (reason && reason_cap) net_diag_text(&diag, reason, reason_cap);
         return -1;
     }
     stage_mark(d, "resolve", 1);
 
-    int core_bypassed = 0;
-    pthread_mutex_lock(&d->probe_route_lock);
-    if (d->senko_core.active) {
-        core_bypassed = senko_core_backend_bypass_add_ipv4(&d->senko_core, ip) == 0;
-        stage_mark(d, "route bypass", core_bypassed);
+    int bypassed = probe_bypass_add(d, ip);
+    if (d->senko_core.active) stage_mark(d, "route bypass", bypassed > 0);
+    if (bypassed < 0) {
+        if (reason && reason_cap)
+            snprintf(reason, reason_cap, "this device could not open the connection: restart Senko and check System Logs");
+        return -1;
     }
-    pthread_mutex_unlock(&d->probe_route_lock);
-
-    char reason[64];
-    int ms = real_probe_run(server, ip, probe_bind_physical_interface, timeout_ms,
-                            reason, sizeof reason);
-    if (core_bypassed) {
-        pthread_mutex_lock(&d->probe_route_lock);
-        senko_core_backend_bypass_remove_ipv4(&d->senko_core, ip);
-        pthread_mutex_unlock(&d->probe_route_lock);
+    char text[256];
+    int ms = tcp_only
+        ? real_probe_tcp(server, ip, probe_bind_physical_interface, timeout_ms, text, sizeof text)
+        : real_probe_run(server, ip, probe_bind_physical_interface, timeout_ms,
+                         &diag, text, sizeof text);
+    probe_bypass_remove(d, ip, bypassed);
+    if (!tcp_only && ms < 0 && net_diag_wants_clock(&diag)) {
+        probe_measure_clock(d);
+        if (senko_clock_offset(&diag.clock_offset_s)) {
+            diag.clock_known = 1;
+            net_diag_text(&diag, text, sizeof text);
+        }
     }
-    stage_mark(d, ms >= 0 ? "answer through the server" : reason, ms >= 0);
+    stage_mark(d, "answer through the server", ms >= 0);
+    if (ms < 0) fprintf(stderr, "senkod: server %s:%u check failed: %s\n",
+                        server->host, (unsigned)server->port, text);
+    if (reason && reason_cap) snprintf(reason, reason_cap, "%s", ms >= 0 ? "" : text);
     return ms;
 }
 
@@ -1433,7 +1627,7 @@ int daemon_ctl_probe_server(void *ctx, const vl_server_t *server) {
     daemon_ctl_t *d = (daemon_ctl_t *)ctx;
     if (!d || !server) return -1;
     if (server->proto != VL_PROTO_HYSTERIA2)
-        return probe_real_delay(d, server);
+        return diagnose_server(d, server, 6000, 0, NULL, 0);
 
     char ip[INET_ADDRSTRLEN];
     if (!net_resolve_public_ipv4(server->host, server->port,
@@ -1743,9 +1937,18 @@ int daemon_ctl_verify_tunnel(void *ctx, char *reason, size_t reason_cap) {
     if (r != 0) {
         fprintf(stderr, "senkod: tunnel verify failed: %s (%dms)\n",
                 stage[0] ? stage : "unknown", timeout_ms);
-        if (reason && reason_cap)
+        /* the tunnel only sees requests fail; a direct probe of the server
+           names why. when the server answers directly, the fault is local
+           and the tunnel's own stage stays */
+        char why[256];
+        why[0] = '\0';
+        if (d->started_set && d->started.proto != VL_PROTO_HYSTERIA2 &&
+            diagnose_server(d, &d->started, 5000, 0, why, sizeof why) < 0 && why[0]) {
+            if (reason && reason_cap) snprintf(reason, reason_cap, "server: %s", why);
+        } else if (reason && reason_cap) {
             snprintf(reason, reason_cap, "%s",
                      stage[0] ? stage : "tunnel verify failed");
+        }
         status_set(0);
     } else {
         if (reason && reason_cap) reason[0] = '\0';
@@ -1766,53 +1969,17 @@ int daemon_ctl_ping_tunnel(void *ctx) {
     return rc == 0 ? ms : -1;
 }
 
-static int prepare_server_probe(daemon_ctl_t *d, const vl_server_t *server,
-                                char *reason, size_t reason_cap) {
-    const transport_vt_t *vt = transport_for_server(server);
-    if (!vt) {
-        if (reason && reason_cap)
-            snprintf(reason, reason_cap, "profile uses an unsupported transport or security mode");
-        return -1;
-    }
-    char public_ip[INET6_ADDRSTRLEN];
-    if (!net_resolve_public(server->host, server->port,
-                            public_ip, sizeof public_ip)) {
-        if (reason && reason_cap)
-            snprintf(reason, reason_cap, "server address is unsafe or cannot be resolved");
-        return -1;
-    }
-
-    uint8_t uuid[VLESS_UUID_LEN];
-    memset(uuid, 0, sizeof uuid);
-    if (server->proto == VL_PROTO_VLESS &&
-        vless_uuid_parse(server->uuid, uuid) != VLESS_OK) {
-        if (reason && reason_cap)
-            snprintf(reason, reason_cap, "profile has an invalid UUID");
-        return -1;
-    }
-    dialer_set_target(&d->dialer, server->host, server->port);
-    if (loop_set_server(d->loop, vt, dialer_connect, &d->dialer,
-                        server->proto, uuid, server->flow,
-                        server->user, server->pass, server->sni, server->fp,
-                        server->pbk, server->sid, server->path,
-                        server->ws_host, server->mode,
-                        server->host, server->insecure) != LOOP_OK) {
-        if (reason && reason_cap)
-            snprintf(reason, reason_cap, "local test proxy could not be prepared");
-        return -1;
-    }
-    return 0;
-}
-
 static int check_run(daemon_ctl_t *d, const char *mode, const vl_server_t *server,
                      char *reason, size_t reason_cap) {
     /* the tcp check stays a bare handshake: it tells a blocked port apart
        from a server that refuses the proxy, which the list ping cannot */
     if (strcmp(mode, "tcp") == 0) {
         if (server->proto == VL_PROTO_HYSTERIA2) return daemon_ctl_probe_server(d, server);
-        return daemon_ctl_probe(d, server->host, server->port);
+        return diagnose_server(d, server, 6000, 1, reason, reason_cap);
     }
     if (strcmp(mode, "real") == 0) {
+        if (server->proto != VL_PROTO_HYSTERIA2)
+            return diagnose_server(d, server, 6000, 0, reason, reason_cap);
         int ms = daemon_ctl_probe_server(d, server);
         if (ms < 0 && reason && reason_cap)
             snprintf(reason, reason_cap, "no answer through the server");
@@ -1856,24 +2023,14 @@ static int check_run(daemon_ctl_t *d, const char *mode, const vl_server_t *serve
             return -1;
         }
         stage_mark(d, "tunnel idle", 1);
-        if (prepare_server_probe(d, server, reason, reason_cap) != 0) {
-            stage_mark(d, "transport prepared", 0);
-            return -1;
-        }
-        stage_mark(d, "transport prepared", 1);
-        int ms = -1;
-        char stage[120];
-        stage[0] = '\0';
-        int result = tunnel_carry_probe(d, 7000, &ms, stage, sizeof stage);
-        loop_stop(d->loop);
-        if (result != 0) {
+        if (server->proto == VL_PROTO_HYSTERIA2) {
             if (reason && reason_cap)
-                snprintf(reason, reason_cap, "profile handshake failed: %s",
-                         stage[0] ? stage : "no valid response");
+                snprintf(reason, reason_cap, "profile uses an unsupported transport or security mode");
             return -1;
         }
-        return ms;
+        return diagnose_server(d, server, 6000, 0, reason, reason_cap);
     }
+
     if (reason && reason_cap) snprintf(reason, reason_cap, "unknown check type");
     return -1;
 }
@@ -1906,6 +2063,12 @@ int daemon_ctl_awg(void *ctx, const char *flag, const char *path, char *out, siz
     if (strcmp(flag, "--awg-probe") == 0) return DCTL_AWG_CHILD;
     if (strcmp(flag, "--awg-status") == 0) {
         awg_backend_status(&d->awg, out, cap);
+        /* the app reads the uptime from its own line, so the status word
+           stays exactly "connected" for every caller that compares it */
+        long up = awg_backend_uptime(&d->awg);
+        size_t used = strlen(out);
+        if (up >= 0 && used < cap)
+            snprintf(out + used, cap - used, "\nAWGUP %ld", up);
         return 0;
     }
     if (strcmp(flag, "--awg-stop") == 0) {

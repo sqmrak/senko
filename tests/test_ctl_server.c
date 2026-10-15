@@ -9,6 +9,7 @@
 #include "core/store.h"
 
 #include <errno.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
@@ -95,6 +96,8 @@ typedef struct {
     uint64_t expire;
     int  gated;
     const char *gate_reason;
+    const char *routing;    /* the routing response header the panel sends */
+    int  routing_too_long;
     int  hold_fd; /* when set, the fetch waits for a byte here like a slow panel */
 } fetch_rec_t;
 
@@ -112,6 +115,8 @@ static int mock_fetch(void *ctx, const char *url,
     if (meta) {
         meta->expire = g_fetch.expire;
         meta->gated = g_fetch.gated;
+        snprintf(meta->routing, sizeof meta->routing, "%s", g_fetch.routing ? g_fetch.routing : "");
+        meta->routing_too_long = g_fetch.routing_too_long;
         snprintf(meta->gate_reason, sizeof meta->gate_reason, "%s",
                  g_fetch.gate_reason ? g_fetch.gate_reason : "");
     }
@@ -286,6 +291,85 @@ static int state_line_is(const char *buf, const char *name) {
         while (*p >= '0' && *p <= '9') ++p;
     }
     return p[0] == '\n' && p[1] == '\0';
+}
+
+/* ---- routing profile fixtures: a profile as base64 and a geo dat to serve it ---- */
+
+typedef struct { unsigned char *p; size_t n, cap; } pbuf_t;
+
+static void pput(pbuf_t *b, const void *d, size_t n) {
+    if (b->n + n > b->cap) { b->cap = (b->n + n) * 2 + 64; b->p = realloc(b->p, b->cap); }
+    memcpy(b->p + b->n, d, n);
+    b->n += n;
+}
+static void pvarint(pbuf_t *b, uint64_t v) {
+    unsigned char c;
+    do { c = v & 0x7f; v >>= 7; if (v) c |= 0x80; pput(b, &c, 1); } while (v);
+}
+static void pfield(pbuf_t *b, unsigned f, const pbuf_t *m) {
+    pvarint(b, f << 3 | 2); pvarint(b, m->n); pput(b, m->p, m->n);
+}
+static void pstr(pbuf_t *b, unsigned f, const char *t) {
+    pvarint(b, f << 3 | 2); pvarint(b, strlen(t)); pput(b, t, strlen(t));
+}
+
+static int g_geo_fetches;
+static int g_geo_fail;
+
+/* serves a geosite or geoip dat that holds the tag "ru" */
+static int mock_geo_fetch(void *ctx, const char *url, FILE *out, size_t max_bytes,
+                          size_t *written, char *error, size_t error_cap) {
+    (void)ctx; (void)max_bytes;
+    ++g_geo_fetches;
+    if (g_geo_fail) {
+        snprintf(error, error_cap, "geo.example answered HTTP 503");
+        return -1;
+    }
+    pbuf_t dat = {0}, e = {0}, d = {0};
+    pstr(&e, 1, "RU");
+    if (strstr(url, "geosite")) {
+        pvarint(&d, 1 << 3); pvarint(&d, 2);
+        pstr(&d, 2, "yandex.ru");
+        pfield(&e, 2, &d);
+    } else {
+        const unsigned char net[4] = { 8, 8, 8, 0 };
+        pvarint(&d, 1 << 3 | 2); pvarint(&d, 4); pput(&d, net, 4);
+        pvarint(&d, 2 << 3); pvarint(&d, 24);
+        pfield(&e, 2, &d);
+    }
+    pfield(&dat, 1, &e);
+    fwrite(dat.p, 1, dat.n, out);
+    *written = dat.n;
+    free(dat.p); free(e.p); free(d.p);
+    return 0;
+}
+
+static void routing_link(const char *verb, const char *json, char *out, size_t cap) {
+    size_t n = strlen(json), len = 0;
+    char b64[2048];
+    b64_encode((const unsigned char *)json, n, b64, sizeof b64, &len);
+    b64[len] = '\0';
+    snprintf(out, cap, "happ://routing/%s/%s", verb, b64);
+}
+
+/* every line of a streamed answer, up to and including the one that starts with end */
+static size_t stream_until(ctl_server_t *s, int cli, const char *end, char *out, size_t cap) {
+    size_t tot = 0;
+    for (int round = 0; round < 40; ++round) {
+        for (int i = 0; i < 20; ++i) ctl_server_step(s, 2);
+        for (;;) {
+            ssize_t n = read(cli, out + tot, cap - 1 - tot);
+            if (n <= 0) break;
+            tot += (size_t)n;
+        }
+        out[tot] = '\0';
+        if (strstr(out, end)) return tot;
+    }
+    return tot;
+}
+
+static void send_line(int fd, const char *line) {
+    if (write(fd, line, strlen(line)) < 0) perror("write");
 }
 
 static size_t exchange(ctl_server_t *s, int cli, char *out, size_t cap) {
@@ -584,6 +668,13 @@ int main(void) {
     ok("routing verification never reports connected",
        strstr(buf, "STATE connected\n") == NULL);
     ok("routing verification removes active routing", rec.last_kind == CTL_ACT_STOP);
+    g_verify_reason = "server: the server did not return an answer: check the UUID; also check whether the server can reach the internet";
+    g_verify_fail = 1;
+    write(cli, "CONNECT 0\n", 10);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("server diagnosis keeps its layer and complete reason",
+       strstr(buf, "ERR server: the server did not return an answer: check the UUID; also check whether the server can reach the internet\n") != NULL);
+    ok("server diagnosis has no duplicate prefix", strstr(buf, "server: server:") == NULL);
     g_verify_reason = "mock verify failed";
 
     write(cli, "DISCONNECT\n", 11);
@@ -671,6 +762,132 @@ int main(void) {
         g_fetch.gated = 0;
         g_fetch.gate_reason = NULL;
         g_fetch.blob = saved_blob;
+    }
+
+/* a happ panel's routing profile: stored with the subscription, switched on by
+   onadd, listed, and turned into geo downloads without blocking the socket */
+    {
+        static char big[65536];
+        char link[2200], geo_dir[64];
+        const char *profile =
+            "{\"Name\":\"Mixed\",\"GlobalProxy\":\"false\","
+            "\"DirectSites\":[\"geosite:ru\",\"domain:direct.test\",\"regexp:^x\"],"
+            "\"DirectIp\":[\"geoip:ru\"],\"ProxySites\":[\"domain:via.test\"],"
+            "\"Geoipurl\":\"https://geo.example/geoip.dat\","
+            "\"Geositeurl\":\"https://geo.example/geosite.dat\"}";
+        snprintf(geo_dir, sizeof geo_dir, "/tmp/senko-ctlgeo-%d", (int)getpid());
+        ctl_server_set_geo(&s, mock_geo_fetch, geo_dir);
+        g_geo_fetches = 0;
+        g_fetch.hold_fd = 0;
+
+        routing_link("onadd", profile, link, sizeof link);
+        g_fetch.routing = link;
+        send_line(cli, "REFRESH 0\n");
+        exchange(&s, cli, buf, sizeof buf);
+        ok("a refresh that carries routing reports it",
+           strncmp(buf, "OK refreshed", 12) == 0 && strstr(buf, "routing profile added and switched on") != NULL);
+        ok("the profile is stored and switched on",
+           s.engine.store.routing_active == 0 && strcmp(store_sub_routing(&s.engine.store, 0), profile) == 0);
+        for (int i = 0; i < 200 && ctl_server_geo_busy(&s); ++i) {
+            ctl_server_step(&s, 5);
+            usleep(5000);
+        }
+        ok("the geo data was downloaded once per dat", !ctl_server_geo_busy(&s) && g_geo_fetches == 2);
+
+        send_line(cli, "GEO\n");
+        stream_until(&s, cli, "GEO ", big, sizeof big);
+        ok("geo state after the download", strstr(big, "GEO 0 ") != NULL && strstr(big, " 0 1 ") != NULL);
+        send_line(cli, "ROUTING\n");
+        stream_until(&s, cli, "ROUTINGEND", big, sizeof big);
+        ok("routing lists the profile", strstr(big, "ROUTING 0 1 0 ") != NULL && strstr(big, " Mixed\n") != NULL &&
+           strstr(big, "ROUTINGEND 0\n") != NULL);
+        ok("routing counts what senko can match", strstr(big, "ROUTING 0 1 0 4 1 2 ") != NULL);
+
+        send_line(cli, "ROUTINGENTRIES 0\n");
+        stream_until(&s, cli, "RENTRYEND", big, sizeof big);
+        ok("entries list", strstr(big, "RENTRY direct site 1 geosite:ru\n") != NULL &&
+           strstr(big, "RENTRY direct site 0 regexp:^x\n") != NULL &&
+           strstr(big, "RENTRY proxy site 1 domain:via.test\n") != NULL &&
+           strstr(big, "RENTRY direct ip 1 geoip:ru\n") != NULL && strstr(big, "RENTRYEND 5\n") != NULL);
+        send_line(cli, "ROUTINGENTRIES 7\n");
+        exchange(&s, cli, buf, sizeof buf);
+        ok("entries of a subscription without a profile", strncmp(buf, "ERR ", 4) == 0);
+
+        /* the same profile again changes nothing and does not download again */
+        send_line(cli, "REFRESH 0\n");
+        exchange(&s, cli, buf, sizeof buf);
+        ok("an unchanged profile is quiet", strncmp(buf, "OK refreshed", 12) == 0 && strstr(buf, "routing") == NULL &&
+           g_geo_fetches == 2);
+
+        /* switching routing off and on */
+        send_line(cli, "ROUTINGSET off\n");
+        exchange(&s, cli, buf, sizeof buf);
+        ok("routing off", strncmp(buf, "OK routing is off", 17) == 0 && s.engine.store.routing_active == -1);
+        send_line(cli, "ROUTINGSET 0\n");
+        exchange(&s, cli, buf, sizeof buf);
+        ok("routing on", strncmp(buf, "OK routing profile switched on", 30) == 0 && s.engine.store.routing_active == 0);
+        send_line(cli, "ROUTINGSET 5\n");
+        exchange(&s, cli, buf, sizeof buf);
+        ok("a subscription without a profile cannot be switched on", strncmp(buf, "ERR ", 4) == 0 &&
+           s.engine.store.routing_active == 0);
+        send_line(cli, "ROUTINGSET x\n");
+        exchange(&s, cli, buf, sizeof buf);
+        ok("a bad index is refused", strncmp(buf, "ERR ", 4) == 0);
+
+        /* GEOUPDATE forces a download; a failed one is reported, not hidden */
+        g_geo_fail = 1;
+        send_line(cli, "GEOUPDATE\n");
+        exchange(&s, cli, buf, sizeof buf);
+        ok("geo update starts", strncmp(buf, "OK geo download started", 23) == 0);
+        for (int i = 0; i < 200 && ctl_server_geo_busy(&s); ++i) {
+            ctl_server_step(&s, 5);
+            usleep(5000);
+        }
+        send_line(cli, "GEO\n");
+        stream_until(&s, cli, "GEO ", big, sizeof big);
+        ok("a failed download is reported", strstr(big, "GEO 0 ") != NULL && strstr(big, " 2 geo.example answered HTTP 503\n") != NULL);
+        g_geo_fail = 0;
+
+        /* a profile's rules never appear as the user's, and cannot be deleted */
+        send_line(cli, "SET rule block domain-suffix mine.test\n");
+        exchange(&s, cli, buf, sizeof buf);
+        ok("user rule saved", strncmp(buf, "OK rule saved", 13) == 0);
+        store_apply_routing(&s.engine.store, NULL);
+        ok("profile rules joined the ruleset", s.engine.store.rules.count > 1);
+        send_line(cli, "RULES\n");
+        stream_until(&s, cli, "RULEEND", big, sizeof big);
+        ok("only the user's rule is listed", strstr(big, "mine.test") != NULL && strstr(big, "direct.test") == NULL &&
+           strstr(big, "RULEEND 1\n") != NULL);
+        send_line(cli, "DELRULE 1\n");
+        exchange(&s, cli, buf, sizeof buf);
+        ok("a profile rule cannot be deleted by index", strncmp(buf, "ERR no such rule", 16) == 0);
+        ruleset_init(&s.engine.store.rules);
+
+        /* what cannot be used is reported and leaves the profile alone */
+        g_fetch.routing = "happ://routing/onadd/@@@@";
+        send_line(cli, "REFRESH 0\n");
+        exchange(&s, cli, buf, sizeof buf);
+        ok("a broken routing link is reported", strncmp(buf, "OK refreshed", 12) == 0 &&
+           strstr(buf, "routing profile refused") != NULL && strcmp(store_sub_routing(&s.engine.store, 0), profile) == 0);
+        g_fetch.routing = NULL;
+        g_fetch.routing_too_long = 1;
+        send_line(cli, "REFRESH 0\n");
+        exchange(&s, cli, buf, sizeof buf);
+        ok("a routing header past the buffer is reported", strstr(buf, "too long") != NULL);
+        g_fetch.routing_too_long = 0;
+
+        /* the panel withdraws its profile */
+        g_fetch.routing = "happ://routing/off";
+        send_line(cli, "REFRESH 0\n");
+        exchange(&s, cli, buf, sizeof buf);
+        ok("off withdraws the profile", strstr(buf, "switched its routing off") != NULL &&
+           s.engine.store.routing_active == -1 && store_sub_routing(&s.engine.store, 0)[0] == '\0');
+        g_fetch.routing = NULL;
+        {
+            char cmd[128];
+            snprintf(cmd, sizeof cmd, "rm -rf %s", geo_dir);
+            if (system(cmd) != 0) ok("geo dir cleanup", 0);
+        }
     }
 
 /* a panel that takes seconds to answer used to stall the whole control
@@ -922,6 +1139,47 @@ int main(void) {
     ok("parse delrule",
        ctl_parse_cmd("DELRULE 3\n", 10, &parsed) == CTL_OK &&
        parsed.kind == CTL_CMD_DEL_RULE && parsed.server_index == 3);
+
+    ok("parse routing", ctl_parse_cmd("ROUTING\n", 8, &parsed) == CTL_OK && parsed.kind == CTL_CMD_ROUTING);
+    ok("routing takes no argument", ctl_parse_cmd("ROUTING 1\n", 10, &parsed) != CTL_OK);
+    ok("parse routing set", ctl_parse_cmd("ROUTINGSET 4\n", 13, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_ROUTING_SET && parsed.server_index == 4);
+    ok("parse routing off", ctl_parse_cmd("ROUTINGSET off\n", 15, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_ROUTING_SET && parsed.server_index == -1);
+    ok("routing set needs an index", ctl_parse_cmd("ROUTINGSET\n", 11, &parsed) != CTL_OK &&
+       ctl_parse_cmd("ROUTINGSET -2\n", 14, &parsed) != CTL_OK &&
+       ctl_parse_cmd("ROUTINGSET x\n", 13, &parsed) != CTL_OK &&
+       ctl_parse_cmd("ROUTINGSET OFF\n", 15, &parsed) != CTL_OK);
+    ok("parse routing entries", ctl_parse_cmd("ROUTINGENTRIES 2\n", 17, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_ROUTING_ENTRIES && parsed.server_index == 2 &&
+       ctl_parse_cmd("ROUTINGENTRIES\n", 15, &parsed) != CTL_OK);
+    ok("parse geo", ctl_parse_cmd("GEO\n", 4, &parsed) == CTL_OK && parsed.kind == CTL_CMD_GEO &&
+       ctl_parse_cmd("GEOUPDATE\n", 10, &parsed) == CTL_OK && parsed.kind == CTL_CMD_GEO_UPDATE &&
+       ctl_parse_cmd("GEO now\n", 8, &parsed) != CTL_OK);
+    ok("parse vless-core removal", ctl_parse_cmd("VLESSCORE REMOVE\n", 17, &parsed) == CTL_OK &&
+       parsed.kind == CTL_CMD_RIVAL_REMOVE &&
+       ctl_parse_cmd("VLESSCORE\n", 10, &parsed) != CTL_OK &&
+       ctl_parse_cmd("VLESSCORE REMOVE ALL\n", 21, &parsed) != CTL_OK &&
+       ctl_parse_cmd("VLESSCORE remove\n", 17, &parsed) != CTL_OK);
+    {
+        char line[256];
+        size_t n = 0;
+        ok("build routing", ctl_build_routing(3, 1, 0, 12, 2, 4, 1700000000ULL, "Mixed profile", line,
+                                              sizeof line, &n) == CTL_OK &&
+           strcmp(line, "ROUTING 3 1 0 12 2 4 1700000000 Mixed profile\n") == 0);
+        ok("build routing end", ctl_build_routingend(-1, line, sizeof line, &n) == CTL_OK &&
+           strcmp(line, "ROUTINGEND -1\n") == 0);
+        ok("build entry", ctl_build_rentry("direct", 0, 1, "geosite:ru", line, sizeof line, &n) == CTL_OK &&
+           strcmp(line, "RENTRY direct site 1 geosite:ru\n") == 0 &&
+           ctl_build_rentry("block", 1, 0, "geoip:x", line, sizeof line, &n) == CTL_OK &&
+           strcmp(line, "RENTRY block ip 0 geoip:x\n") == 0);
+        ok("build entry end", ctl_build_rentryend(7, line, sizeof line, &n) == CTL_OK &&
+           strcmp(line, "RENTRYEND 7\n") == 0);
+        ok("build geo", ctl_build_geo(1, 99, 3, 2, "it failed", line, sizeof line, &n) == CTL_OK &&
+           strcmp(line, "GEO 1 99 3 2 it failed\n") == 0 &&
+           ctl_build_geo(0, 0, 0, 0, NULL, line, sizeof line, &n) == CTL_OK && strcmp(line, "GEO 0 0 0 0 \n") == 0);
+        ok("build routing too small", ctl_build_routing(0, 0, 0, 0, 0, 0, 0, "x", line, 8, &n) == CTL_ERR_BUF);
+    }
 
     write(cli, "SETTINGS\n", 9);
     exchange(&s, cli, buf, sizeof buf);

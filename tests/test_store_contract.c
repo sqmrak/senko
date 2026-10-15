@@ -256,8 +256,8 @@ int main(void) {
         int moved[STORE_MAX_SERVERS];
         const char feed[] =
             "vless://44444444-4444-4444-8444-444444444444@a.example:443?security=tls&type=tcp#A\n"
-            /* vmess {"ps":"VM node","add":"vm.example","port":"8443"} */
-            "vmess://eyJwcyI6IlZNIG5vZGUiLCJhZGQiOiJ2bS5leGFtcGxlIiwicG9ydCI6Ijg0NDMifQ==\n"
+            /* vmess {"ps":"VM node","add":"vm.example","port":"8443","id":...,"net":"kcp"} */
+            "vmess://eyJwcyI6IlZNIG5vZGUiLCJhZGQiOiJ2bS5leGFtcGxlIiwicG9ydCI6Ijg0NDMiLCJpZCI6IjQ0NDQ0NDQ0LTQ0NDQtNDQ0NC04NDQ0LTQ0NDQ0NDQ0NDQ0NCIsIm5ldCI6ImtjcCJ9\n"
             "tuic://uuid:pw@[2001:db8::1]:9443?alpn=h3#T%20one\n"
             "vless://44444444-4444-4444-8444-444444444444@b.example:443?security=tls&type=tcp#B\n";
         store_init(&ps);
@@ -272,7 +272,7 @@ int main(void) {
            ps.servers[2].proto == VL_PROTO_UNSUPPORTED &&
            strcmp(ps.servers[2].remark, "VM node") == 0 &&
            strcmp(ps.servers[2].host, "vm.example") == 0 && ps.servers[2].port == 8443 &&
-           strcmp(ps.servers[2].unsupported, "vmess") == 0);
+           strcmp(ps.servers[2].unsupported, "kcp transport") == 0);
         ok("tuic placeholder reads the authority and fragment",
            ps.servers[3].proto == VL_PROTO_UNSUPPORTED &&
            strcmp(ps.servers[3].remark, "T one") == 0 &&
@@ -299,14 +299,14 @@ int main(void) {
            moved[4] == 1 && strcmp(ps.servers[1].remark, "B") == 0);
 
         const char only_vmess[] =
-            "vmess://eyJwcyI6IlZNIG5vZGUiLCJhZGQiOiJ2bS5leGFtcGxlIiwicG9ydCI6Ijg0NDMifQ==\n";
+            "vmess://eyJwcyI6IlZNIG5vZGUiLCJhZGQiOiJ2bS5leGFtcGxlIiwicG9ydCI6Ijg0NDMiLCJpZCI6IjQ0NDQ0NDQ0LTQ0NDQtNDQ0NC04NDQ0LTQ0NDQ0NDQ0NDQ0NCIsIm5ldCI6ImtjcCJ9\n";
         size_t madded = 0;
         ok("manual import still skips what it cannot run",
            cfg_parse_subscription(only_vmess, sizeof only_vmess - 1, back.servers, 4, &madded) == CFG_OK &&
            madded == 0);
 
         const char xray[] =
-            "[{\"remarks\":\"VM\",\"outbounds\":[{\"protocol\":\"vmess\",\"settings\":"
+            "[{\"remarks\":\"VM\",\"outbounds\":[{\"protocol\":\"wireguard\",\"settings\":"
             "{\"vnext\":[{\"address\":\"x.example\",\"port\":443}]}}]}]";
         ok("xray json keeps an unknown outbound",
            store_refresh_sub_ex(&ps, psub, xray, sizeof xray - 1, &padded, &stats, NULL) == STORE_OK &&
@@ -332,6 +332,58 @@ int main(void) {
         size_t object_len = strlen(object_cut);
         ok("a cut json object cannot be salvaged",
            cfg_subscription_prefix(object_cut, &object_len) == -1);
+    }
+
+    {
+        /* a subscription's happ routing profile: stored, saved, rebuilt at connect */
+        static store_t rs, back;
+        static char saved[256 * 1024];
+        size_t sub_a = 0, sub_b = 0, saved_len = 0;
+        routing_info_t info;
+        const char profile[] = "{\"Name\":\"P\",\"GlobalProxy\":\"false\","
+            "\"DirectSites\":[\"domain:direct.test\",\"geosite:ru\"],\"BlockIp\":[\"10.1.0.0/16\"],"
+            "\"ProxySites\":[\"domain:via.test\"]}";
+        store_init(&rs);
+        ok("routing starts off", rs.routing_active == -1);
+        store_add_sub(&rs, "A", "https://a.example/x", &sub_a);
+        store_add_sub(&rs, "B", "https://b.example/x", &sub_b);
+        ok("profile stored", store_set_sub_routing(&rs, sub_a, profile, strlen(profile)) == STORE_OK &&
+           strcmp(store_sub_routing(&rs, sub_a), profile) == 0 && store_sub_routing(&rs, sub_b)[0] == '\0');
+        ok("bad profile refused", store_set_sub_routing(&rs, sub_b, "{\"x\":1}", 7) == STORE_ERR_PARSE &&
+           store_set_sub_routing(&rs, sub_b, "nope", 4) == STORE_ERR_PARSE);
+        ok("activate needs a profile", store_set_routing_active(&rs, (int)sub_b) == STORE_ERR_RANGE &&
+           store_set_routing_active(&rs, 31) == STORE_ERR_RANGE &&
+           store_set_routing_active(&rs, (int)sub_a) == STORE_OK && rs.routing_active == (int)sub_a);
+        ok("user rule", store_add_rule(&rs, "block domain-suffix user.test", 29, NULL) == STORE_OK);
+
+        ok("apply", store_apply_routing(&rs, &info) == STORE_OK && info.rules == 4 &&
+           rs.rules.count == 5 && rs.rules.fallback == RULE_ACTION_DIRECT);
+        ok("profile rules tagged", rs.rules.entries[0].source == 0 && rs.rules.entries[1].source == (uint8_t)(sub_a + 1));
+        ok("apply twice does not stack", store_apply_routing(&rs, NULL) == STORE_OK && rs.rules.count == 5);
+
+        ok("serialize skips profile rules", store_serialize(&rs, saved, sizeof saved, &saved_len) == STORE_OK &&
+           strstr(saved, "direct.test") == NULL && strstr(saved, "SET rule block domain-suffix user.test") != NULL &&
+           strstr(saved, "SUBROUTING 0 ") != NULL && strstr(saved, "ROUTINGACTIVE 0") != NULL);
+        ok("deserialize", store_deserialize(&back, saved, saved_len) == STORE_OK &&
+           strcmp(store_sub_routing(&back, sub_a), profile) == 0 && back.routing_active == (int)sub_a &&
+           back.rules.count == 1);
+        ok("rebuilt after restart", store_apply_routing(&back, &info) == STORE_OK && back.rules.count == 5 &&
+           back.rules.fallback == RULE_ACTION_DIRECT);
+
+        ok("switch off restores the fallback", store_set_routing_active(&rs, -1) == STORE_OK &&
+           store_apply_routing(&rs, &info) == STORE_OK && rs.rules.count == 1 &&
+           rs.rules.fallback == RULE_ACTION_PROXY && info.rules == 0);
+        store_set_routing_active(&rs, (int)sub_a);
+        store_apply_routing(&rs, NULL);
+        ok("removing the subscription drops its profile", store_remove_sub(&rs, sub_a) == STORE_OK &&
+           rs.routing_active == -1 && store_sub_routing(&rs, sub_a)[0] == '\0');
+        ok("rules of a removed subscription go at the next apply",
+           store_apply_routing(&rs, NULL) == STORE_OK && rs.rules.count == 1);
+        store_add_sub(&rs, "A", "https://a.example/x", &sub_a);
+        store_set_sub_routing(&rs, sub_a, profile, strlen(profile));
+        store_set_routing_active(&rs, (int)sub_a);
+        ok("blank clears and switches off", store_set_sub_routing(&rs, sub_a, "", 0) == STORE_OK &&
+           rs.routing_active == -1 && store_sub_routing(&rs, sub_a)[0] == '\0');
     }
 
     if (g_fail) {

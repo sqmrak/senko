@@ -9,6 +9,7 @@
 #include "core/store.h"
 #include "ctl_server.h"
 #include "daemon_ctl.h"
+#include "../common/senko_paths.h"
 #include "dialer.h"
 #include "loop.h"
 #include "proc_detach.h"
@@ -84,7 +85,7 @@ static int run_single(const char *link, int port) {
 
     uint8_t uuid[VLESS_UUID_LEN];
     memset(uuid, 0, sizeof uuid);
-    if (srv.proto == VL_PROTO_VLESS) {
+    if (cfg_proto_uses_uuid(srv.proto)) {
         if (vless_uuid_parse(srv.uuid, uuid) != VLESS_OK) {
             fprintf(stderr, "bad uuid in link\n");
             return 2;
@@ -207,6 +208,8 @@ static int run_managed(const char *ctl_path, const char *config_path,
     ctl_server_set_awg(&cs, daemon_ctl_awg, daemon_ctl_awg_busy);
     ctl_server_set_stats(&cs, daemon_ctl_stats);
     daemon_ctl_set_rules(&dc, &cs.engine.store.rules);
+    daemon_ctl_set_store(&dc, &cs.engine.store, SENKO_GEO_DIR);
+    ctl_server_set_geo(&cs, daemon_ctl_geo_fetch, SENKO_GEO_DIR);
 
     if (config_path && config_path[0]) {
 /* the settings were merged from this file and the command line before the
