@@ -103,7 +103,7 @@ static int listener(int type, uint32_t address, uint16_t *port) {
     a.sin_addr.s_addr = htonl(address);
     a.sin_port = htons(*port);
     if (fd < 0 || bind(fd, (struct sockaddr *)&a, sizeof a) != 0 ||
-        (type == SOCK_STREAM && listen(fd, 4) != 0) ||
+        (type == SOCK_STREAM && listen(fd, 64) != 0) ||
         getsockname(fd, (struct sockaddr *)&a, &n) != 0) {
         perror("listener");
         return -1;
@@ -256,6 +256,30 @@ int main(void) {
         ok("the site's echo of the app's bytes comes back", got > 0);
     }
 
+    /* a browser holds many connections open at once: idle keep-alive ones keep
+       their relay, so a low ceiling starves the next page or a speed test */
+    enum { MANY = 20 };
+    for (int i = 0; i < MANY; ++i) {
+        len = pkt_tcp4(packet, APP, (uint16_t)(41000 + i), LOOPBACK, tcp_port, PKT_SYN, 7000, 0, 0);
+        send_frame(dev[1], packet, len);
+    }
+    int answered[MANY] = { 0 };
+    int answers = 0;
+    int64_t many_until = senko_now_ms() + 4000;
+    while (answers < MANY && senko_now_ms() < many_until) {
+        got = recv_wait(dev[1], frame, sizeof frame, 100);
+        if (got <= 4 || !pkt_is_v4(frame + 4) || pkt_proto(frame + 4, (size_t)got - 4) != 6) continue;
+        size_t l4 = pkt_l4(frame + 4, (size_t)got - 4);
+        const uint8_t *tcp = frame + 4 + l4;
+        uint16_t to = pkt_rd16(tcp + 2);
+        if (pkt_rd16(tcp) != tcp_port || (tcp[13] & (PKT_SYN | PKT_ACK)) != (PKT_SYN | PKT_ACK)) continue;
+        if (to >= 41000 && to < 41000 + MANY && !answered[to - 41000]) {
+            answered[to - 41000] = 1;
+            ++answers;
+        }
+    }
+    ok("twenty direct connections are all answered at once", answers == MANY);
+
     /* a tcp flow abroad is the server's */
     len = pkt_tcp4(packet, APP, 40002, ABROAD, 443, PKT_SYN, 5, 0, 0);
     ok("a syn abroad is written", send_frame(dev[1], packet, len) > 0);
@@ -330,8 +354,8 @@ int main(void) {
 
     awg_split_counts_t counts;
     awg_split_counts(split, &counts);
-    ok("three flows stayed in the tunnel, three went local",
-       counts.tunnel_flows == 3 && counts.local_flows == 3);
+    ok("three flows stayed in the tunnel, the rest went local",
+       counts.tunnel_flows == 3 && counts.local_flows == 3 + MANY);
 
     char one = 1;
     ok("the stop is written", write(wake[1], &one, 1) == 1);

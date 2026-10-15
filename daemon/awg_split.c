@@ -19,7 +19,12 @@
 #define SPLIT_GENERATION 1
 /* the link's timers are checked at least this often, as awg_link_run does */
 #define SPLIT_TICK_MS 1000
-#define SPLIT_TCP_FLOWS 8
+/* a direct flow costs a socket and a relay buffer, not a server connection, so
+   the ceiling follows the stack: its 32 connection slots minus the few that
+   time-wait still holds. a browser keeps idle connections open, and with eight
+   relays they starved the next page and a speed test, whose streams then waited
+   in the stack until it dropped their syn */
+#define SPLIT_TCP_FLOWS 24
 
 struct awg_split {
     awg_split_config_t config;
@@ -32,6 +37,7 @@ struct awg_split {
     flow_split_t table;
     tun_loop_hooks_t previous;
     awg_split_counts_t counts;
+    char last_tcp_error[sizeof ((tun_tcp_stats_t *)0)->last_error];
 
     /* set on the loop thread, read once the loop has returned */
     int stop_asked;
@@ -151,6 +157,15 @@ static void hook_prepare(void *ctx, fd_set *readable, fd_set *writable, int *hig
 static void hook_dispatch(void *ctx, const fd_set *readable, const fd_set *writable) {
     awg_split_t *split = ctx;
     if (split->previous.dispatch) split->previous.dispatch(split->previous.ctx, readable, writable);
+    /* a refused flow is otherwise visible only as a page that never loads, and
+       its reason sits in the relay until the next one overwrites it */
+    const tun_tcp_stats_t *tcp = tun_tcp_stats(split->tcp);
+    split->counts.tcp_refused = (uint32_t)tcp->refused;
+    split->counts.tcp_aborted = (uint32_t)tcp->aborted;
+    if (tcp->last_error[0] && strcmp(tcp->last_error, split->last_tcp_error) != 0) {
+        snprintf(split->last_tcp_error, sizeof split->last_tcp_error, "%s", tcp->last_error);
+        fprintf(stderr, "senkod: amneziawg direct flow: %s\n", split->last_tcp_error);
+    }
     if (split->failed || split->stop_asked) return;
     if (FD_ISSET(split->config.wake_fd, readable)) {
         split->stop_asked = 1;

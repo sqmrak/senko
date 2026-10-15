@@ -45,6 +45,8 @@ typedef struct {
     uint32_t tunnel_flows; /* flows the rules left to the server */
     uint32_t local_flows;  /* flows sent to the local stack */
     uint32_t forgotten;    /* live flows a full table dropped */
+    uint32_t tcp_refused;  /* direct tcp flows answered with a reset before they opened */
+    uint32_t tcp_aborted;  /* direct tcp flows that failed after they opened */
 } awg_split_counts_t;
 
 /* 1 when the rules send something other than the tunnel, so sorting is needed */

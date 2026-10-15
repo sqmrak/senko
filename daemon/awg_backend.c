@@ -467,8 +467,10 @@ int awg_backend_describe(awg_backend_t *backend, int index, char *key, size_t ke
             awg_split_counts_t counts;
             awg_split_counts(backend->split, &counts);
             snprintf(value, value_cap, "%u flow(s) through the tunnel, %u sent out locally,"
-                     " %u forgotten", (unsigned)counts.tunnel_flows,
-                     (unsigned)counts.local_flows, (unsigned)counts.forgotten);
+                     " %u forgotten, direct tcp %u refused %u aborted",
+                     (unsigned)counts.tunnel_flows, (unsigned)counts.local_flows,
+                     (unsigned)counts.forgotten, (unsigned)counts.tcp_refused,
+                     (unsigned)counts.tcp_aborted);
         } else {
             snprintf(value, value_cap, "no rule sends traffic out of the tunnel");
         }
