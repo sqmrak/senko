@@ -40,6 +40,7 @@ static int proc_count;
 static int fail_list;
 static int refuse_null_probe;
 static int info_calls, path_calls;
+static int path_answers_zero; /* ios 6 writes the path and answers 0 */
 
 static fake_proc_t *proc_of(int pid) {
     for (int i = 0; i < proc_count; ++i)
@@ -71,7 +72,7 @@ static int fake_info(int callnum, int pid, int flavor, uint64_t arg, void *buffe
     if (callnum == 2 && flavor == 11) {
         ++path_calls;
         strncpy(buffer, p->path, (size_t)size);
-        return (int)strlen(p->path);
+        return path_answers_zero ? 0 : (int)strlen(p->path);
     }
     if (callnum == 3 && flavor == 3) {
         for (int i = 0; i < p->sockets; ++i) {
@@ -186,6 +187,26 @@ int main(void) {
     k = key(TUN_FLOW_TCP, 50006, utun);
     ok("an extension is its app", app_owner_lookup(o, &k, 1006, bundle, sizeof bundle) == 1 &&
        strcmp(bundle, "com.example.Demo-App_1") == 0);
+    /* ios 6.1 answers a path query with 0 and fills the buffer; reading the
+       answer as a length made every lookup fail */
+    path_answers_zero = 1;
+    app_owner_t *old = app_owner_open(fake_info);
+    k = key(TUN_FLOW_TCP, 50006, utun);
+    ok("a kernel that answers 0 with the path in the buffer", app_owner_lookup(old, &k, 1000, bundle,
+       sizeof bundle) == 1 && strcmp(bundle, "com.example.Demo-App_1") == 0);
+    char kept_path[sizeof procs[0].path];
+    memcpy(kept_path, proc_of(40)->path, sizeof kept_path);
+    proc_of(40)->path[0] = '\0';
+    app_owner_close(old);
+    old = app_owner_open(fake_info);
+    app_owner_stats(old, &st);
+    ok("an empty path is not an app", app_owner_lookup(old, &k, 1000, bundle, sizeof bundle) == 0);
+    app_owner_stats(old, &st);
+    ok("and it is counted as an error", st.errors == 1);
+    app_owner_close(old);
+    memcpy(proc_of(40)->path, kept_path, sizeof kept_path);
+    path_answers_zero = 0;
+
     k = key(TUN_FLOW_TCP, 50007, utun);
     ok("the socket on the flow's own address wins over another interface's",
        app_owner_lookup(o, &k, 1007, bundle, sizeof bundle) == 1);

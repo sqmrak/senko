@@ -304,7 +304,10 @@ int app_owner_lookup(app_owner_t *o, const tun_flow_key_t *key, uint64_t now_ms,
     }
     memset(path, 0, sizeof path);
     n = o->info(PROC_INFO_CALL_PIDINFO, e->pid, PROC_PIDPATHINFO, 0, path, (int)sizeof path - 1);
-    if (n <= 0) {
+    /* ios 6 answers 0 and writes the path into the buffer, the way libproc
+       takes it; later kernels answer the length. only the buffer tells a path
+       from no path */
+    if (n < 0 || path[0] == '\0') {
         ++o->stats.errors;
         return 0;
     }
