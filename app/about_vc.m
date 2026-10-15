@@ -15,12 +15,11 @@ static NSString * const kAboutAction = @"a";
 
 static NSString * const kAboutThanks =
     @"@CookieValerka, @inraxx, @not_a_modder, @s3dativee, @Lineysom, @shizotoaster, "
-    @"@fly1ngangel, @anazerka";
+    @"@fly1ngangel, @anazerka, @fr0n1k, @vladosik228, @kfrom7, @ningmeng";
 static NSString * const kAboutSponsors = @"@s3dativee, @shizotoaster, @not_a_modder";
 static NSString * const kAboutTesters =
-    @"@inraxx, @s3dativee, @rafal_official, @RealPetuh, @QuaIcomm, @belo4kaFLUNI, "
-    @"@Wolfer_QUIC, @fluffynifty, @not_a_modder, @Lineysom, @Lime_iOS6, @fr0n1k, "
-    @"@ogeprint, @CookieValerka, @ra1n_developer";
+    @"@inraxx, @s3dativee, @rafal_official, @QuaIcomm, @belo4kaFLUNI, "
+    @"@Wolfer_QUIC, @koshdevv, @Lineysom, @Lime_iOS6, @ogeprint, @ra1n_developer";
 
 /* cap the width so ipad landscape rows do not stretch across the screen */
 static CGFloat AboutSideMargin(CGFloat width) {
