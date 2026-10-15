@@ -2,6 +2,7 @@
 #include <dispatch/dispatch.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "../daemon/core/amnezia_qr.h"
 
 typedef struct zbar_image_s zbar_image_t;
 typedef struct zbar_image_scanner_s zbar_image_scanner_t;
@@ -24,6 +25,7 @@ typedef struct zbar_image_scanner_s zbar_image_scanner_t;
     zbar_image_t *_zbarImage;
     uint8_t *_zbarPixels;
     size_t _zbarCapacity;
+    amz_qr_t _frames; /* amnezia profiles arrive as a series of codes */
     BOOL _done;
     BOOL _captureSetup;
     UILabel *_hintLabel;

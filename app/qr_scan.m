@@ -52,6 +52,7 @@ static NSString *SenkoQRMetadataType(void) {
     }
     if (_session) [(AVCaptureSession *)_session stopRunning];
     if (_queue) dispatch_sync(_queue, ^{});
+    amz_qr_free(&_frames);
     if (_zbarImage) zbar_image_destroy(_zbarImage);
     if (_zbarScanner) zbar_image_scanner_destroy(_zbarScanner);
     free(_zbarPixels);
@@ -305,6 +306,7 @@ static void SenkoFocusForScanning(AVCaptureDevice *cam) {
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     _done = NO;
+    amz_qr_free(&_frames);
     [_hintLabel setText:@"point the camera at a QR code\nserver link, subscription URL\nor a WireGuard / AmneziaWG .conf"];
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(showScanTimeout) object:nil];
     [self performSelector:@selector(showScanTimeout) withObject:nil afterDelay:8.0];
@@ -463,19 +465,53 @@ didOutputMetadataObjects:(NSArray *)objects
     }
 }
 
+/* the metadata and sample buffer callbacks both land off the main thread, and
+   the frame series, the timeout and the delegate all belong to it */
 - (void)hit:(NSString *)txt {
     if (_done) return;
-    _done = YES;
-/* the metadata and sample buffer callbacks both land on the capture queue, and
-   the timeout was scheduled on the main run loop: cancelling it from here
-   touched another thread's run loop */
     dispatch_async(dispatch_get_main_queue(), ^{
+        [self acceptScanned:txt];
+    });
+}
+
+- (void)acceptScanned:(NSString *)txt {
+    if (_done) return;
+    NSData *bytes = [txt dataUsingEncoding:NSUTF8StringEncoding];
+    amz_qr_status_t st = amz_qr_add(&_frames, (const char *)[bytes bytes], [bytes length]);
+    if (st == AMZ_QR_PART || st == AMZ_QR_REPEAT) {
         [NSObject cancelPreviousPerformRequestsWithTarget:self
                                                  selector:@selector(showScanTimeout)
                                                    object:nil];
-        if ([_delegate respondsToSelector:@selector(qrScanner:didDecode:)])
-            [_delegate qrScanner:self didDecode:txt];
-    });
+        _hintLabel.text = [NSString stringWithFormat:
+            @"amnezia code %u of %u\nkeep the phone on the next code",
+            (unsigned)_frames.have, (unsigned)_frames.count];
+        return;
+    }
+    if (st == AMZ_QR_ERR_SPACE) {
+        _hintLabel.text = @"amnezia profile is too large";
+        return;
+    }
+    if (st == AMZ_QR_DONE) {
+        char *joined = malloc(AMZ_QR_MAX_BYTES * 2);
+        size_t joinedLen = 0;
+        NSString *whole = nil;
+        if (joined && amz_qr_result(&_frames, joined, AMZ_QR_MAX_BYTES * 2, &joinedLen) == 0)
+            whole = [[[NSString alloc] initWithBytes:joined length:joinedLen
+                                            encoding:NSUTF8StringEncoding] autorelease];
+        free(joined);
+        amz_qr_free(&_frames);
+        if (!whole) {
+            _hintLabel.text = @"amnezia codes could not be joined";
+            return;
+        }
+        txt = whole;
+    }
+    _done = YES;
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(showScanTimeout)
+                                               object:nil];
+    if ([_delegate respondsToSelector:@selector(qrScanner:didDecode:)])
+        [_delegate qrScanner:self didDecode:txt];
 }
 
 @end
