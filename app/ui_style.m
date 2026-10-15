@@ -82,17 +82,17 @@ static UIFont *SenkoSFSemibold(CGFloat size) {
 UIFont *SenkoFontTitle(CGFloat size) {
     if (SenkoThemeIsIos26())
         return SenkoSFBold(size);
-/* the thin face the other themes use is the opposite of material's medium
-   weight headings */
     if (SenkoThemeIsMaterial()) {
         UIFont *medium = [UIFont fontWithName:@"HelveticaNeue-Medium" size:size];
         return medium ? medium : [UIFont boldSystemFontOfSize:size];
     }
-    UIFont *f = [UIFont fontWithName:@"HelveticaNeue-UltraLight" size:size];
-    if (!f) f = [UIFont fontWithName:@"HelveticaNeue-Thin" size:size];
-    if (!f) f = [UIFont fontWithName:@"HelveticaNeue-Light" size:size];
-    if (!f) f = [UIFont systemFontOfSize:size];
-    return f;
+/* the flat bars put this over a light, nearly white ground, where the ultra
+   light Helvetica it used to ask for drew a grey hairline that read as a
+   disabled title on ios 10. the weight is the one the system bar uses */
+    if ([UIFont respondsToSelector:@selector(systemFontOfSize:weight:)])
+        return SenkoSFSemibold(size);
+    UIFont *medium = [UIFont fontWithName:@"HelveticaNeue-Medium" size:size];
+    return medium ? medium : [UIFont boldSystemFontOfSize:size];
 }
 
 UIFont *SenkoFontBody(CGFloat size, BOOL semibold) {
