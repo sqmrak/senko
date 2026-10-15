@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "net_fail.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -27,6 +29,9 @@ typedef struct {
     const char *peer_host; /* dial target host, last authority fallback */
     int insecure; /* skip certificate and hostname verification (allowInsecure) */
     transport_tls_shared_t *shared_ctx; /* borrowed trust store for one backend run */
+/* where the transport records why the server failed. caller owned and NULL in
+   the relays; handles keep the pointer, so it has to outlive them */
+    net_fail_t *fail;
 } transport_tls_cfg_t;
 
 transport_tls_shared_t *transport_tls_shared_create(const transport_tls_cfg_t *cfg);

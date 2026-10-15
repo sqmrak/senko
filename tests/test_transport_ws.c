@@ -10,6 +10,7 @@
 #include <openssl/evp.h>
 
 static int g_fail = 0;
+static net_fail_t failure;
 
 static void ok(const char *what, int cond) {
     if (cond) return;
@@ -91,6 +92,8 @@ static int start_ws(int sv[2], void **h, char *req, size_t req_cap) {
     cfg.sni = "tls.example";
     cfg.ws_host = "cdn.example";
     cfg.path = "/ws";
+    memset(&failure, 0, sizeof failure);
+    cfg.fail = &failure;
 
     *h = transport_ws_tcp.open(sv[0], &cfg);
     if (!*h) return -1;
@@ -239,6 +242,15 @@ int main(void) {
     close_pair(sv, h);
 
     h = NULL;
+    ok("start ws missing path", start_ws(sv, &h, req, sizeof req) == 0);
+    const char denied[] = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+    ok("write missing path response", write(sv[1], denied, sizeof denied - 1) == sizeof denied - 1);
+    wr = transport_ws_tcp.write(h, &one, 1);
+    ok("ws reports the real http status", wr == TRANSPORT_ERR &&
+       failure.kind == NET_FAIL_HTTP_STATUS && failure.value == 404);
+    close_pair(sv, h);
+
+    h = NULL;
     ok("start ws ping", start_ws(sv, &h, req, sizeof req) == 0);
     ok("complete ws ping", complete_ws(sv[1], h, req) == 0);
     const uint8_t ping_payload[] = { 'p', 'i', 'n', 'g' };
@@ -271,6 +283,21 @@ int main(void) {
     ok("write bad u64 length", write_bad_u64_length(sv[1]) == 0);
     rr = transport_ws_tcp.read(h, tmp, sizeof tmp);
     ok("bad u64 length rejected", rr == TRANSPORT_ERR);
+    close_pair(sv, h);
+
+    /* the 10-byte header of the second frame is split: 4 bytes buffered, the rest
+       already in the socket, so the read must fetch them instead of waiting */
+    h = NULL;
+    ok("start ws split header", start_ws(sv, &h, req, sizeof req) == 0);
+    ok("complete ws split header", complete_ws(sv[1], h, req) == 0);
+    const uint8_t split_head[] = { 0x82, 0x03, 'a', 'b', 'c', 0x82, 0x7f, 0, 0 };
+    ok("write split header head", write(sv[1], split_head, sizeof split_head) == (ssize_t)sizeof split_head);
+    rr = transport_ws_tcp.read(h, tmp, sizeof tmp);
+    ok("split header first payload", rr == 3 && memcmp(tmp, "abc", 3) == 0);
+    const uint8_t split_tail[] = { 0, 0, 0, 0, 0, 2, 'x', 'y' };
+    ok("write split header tail", write(sv[1], split_tail, sizeof split_tail) == (ssize_t)sizeof split_tail);
+    rr = transport_ws_tcp.read(h, tmp, sizeof tmp);
+    ok("split header completes", rr == 2 && memcmp(tmp, "xy", 2) == 0);
     close_pair(sv, h);
 
     h = NULL;

@@ -124,9 +124,14 @@ static int run(SSL_CTX *ctx, end_t end, char *buf, size_t cap, size_t *got) {
     transport_tls_cfg_t cfg;
     memset(&cfg, 0, sizeof cfg);
     cfg.sni = "eof.test";
-    cfg.insecure = 1;
+    cfg.insecure = end != END_HOLD;
+    net_fail_t fail = {0};
+    cfg.fail = &fail;
     void *handle = transport_tls.open(pair[0], &cfg);
     int result = handle ? drain(pair[0], handle, buf, cap, got) : 0;
+    if (end == END_HOLD)
+        check("untrusted certificate keeps its precise reason", result == TRANSPORT_ERR &&
+              fail.kind == NET_FAIL_CERT_UNTRUSTED);
     if (handle) transport_tls.close(handle);
     pthread_join(thread, NULL);
     close(pair[0]);
@@ -151,6 +156,26 @@ int main(void) {
 
     r = run(ctx, END_CUT_IN_RECORD, buf, sizeof buf, &got);
     check("a cut inside a record is an error", r == TRANSPORT_ERR && got == 0);
+
+    run(ctx, END_HOLD, buf, sizeof buf, &got);
+
+    /* a plaintext port must be diagnosed separately from certificate failures */
+    {
+        int pair[2];
+        check("plain socketpair", socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+        fcntl(pair[0], F_SETFL, fcntl(pair[0], F_GETFL, 0) | O_NONBLOCK);
+        transport_tls_cfg_t cfg = {0};
+        net_fail_t fail = {0};
+        cfg.fail = &fail;
+        cfg.sni = "plain.test";
+        void *handle = transport_tls.open(pair[0], &cfg);
+        const char answer[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
+        check("plain answer", write(pair[1], answer, sizeof answer - 1) == sizeof answer - 1);
+        int result = handle ? drain(pair[0], handle, buf, sizeof buf, &got) : 0;
+        check("plain port identified", result == TRANSPORT_ERR && fail.kind == NET_FAIL_NOT_TLS);
+        if (handle) transport_tls.close(handle);
+        close(pair[0]); close(pair[1]);
+    }
 
     /* a handshake cut short by close leaves "shutdown while in init" on the
        thread's error queue; the next idle read elsewhere must still just wait */

@@ -2,6 +2,7 @@
 
 #include "real_probe.h"
 #include "senko_time.h"
+#include "senko_clock.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -22,6 +23,8 @@ typedef enum {
     FAKE_ANSWER = 0,  /* a proxy that carries the request and gets 204 */
     FAKE_CLOSE,       /* a proxy that hangs up after the greeting */
     FAKE_GARBAGE,     /* a proxy whose target speaks something else */
+    FAKE_HTTP_ERROR,
+    FAKE_TRUNCATED,
     FAKE_SILENT       /* a proxy that accepts and never answers */
 } fake_mode_t;
 
@@ -83,7 +86,9 @@ static void *fake_proxy_main(void *arg) {
         goto out;
     }
     const char *answer = p->mode == FAKE_GARBAGE ? "SSH-2.0-OpenSSH\r\n"
-                                                 : "HTTP/1.1 204 No Content\r\n\r\n";
+        : p->mode == FAKE_HTTP_ERROR ? "HTTP/1.1 503 Service Unavailable\r\nDate: Sun, 06 Nov 1994 08:49:37 GMT\r\n\r\n"
+        : p->mode == FAKE_TRUNCATED ? "HTTP/1.1 204 No Content\r\n"
+        : "HTTP/1.1 204 No Content\r\n\r\n";
     (void)!write(fd, answer, strlen(answer));
 out:
     close(fd);
@@ -131,7 +136,7 @@ static int run_mode(fake_mode_t mode, int timeout_ms, fake_proxy_t *out,
     vl_server_t s;
     socks_profile(&s, port);
     int64_t start = senko_now_ms();
-    int ms = real_probe_run(&s, "127.0.0.1", count_bind, timeout_ms, reason, cap);
+    int ms = real_probe_run(&s, "127.0.0.1", count_bind, timeout_ms, NULL, reason, cap);
     *elapsed = senko_now_ms() - start;
     /* a silent proxy keeps reading until the probe hangs up */
     pthread_join(t, NULL);
@@ -140,7 +145,7 @@ static int run_mode(fake_mode_t mode, int timeout_ms, fake_proxy_t *out,
 }
 
 int main(void) {
-    char reason[64];
+    char reason[320];
     fake_proxy_t p;
     int64_t elapsed = 0;
 
@@ -155,11 +160,11 @@ int main(void) {
 
     ms = run_mode(FAKE_GARBAGE, 2000, &p, reason, sizeof reason, &elapsed);
     ok("non http answer fails", ms == -1 &&
-       strcmp(reason, "unexpected answer through the server") == 0);
+       strstr(reason, "not SOCKS5") != NULL);
 
     ms = run_mode(FAKE_SILENT, 400, &p, reason, sizeof reason, &elapsed);
     ok("silent proxy times out", ms == -1 &&
-       strcmp(reason, "no answer through the server") == 0);
+       strstr(reason, "did not return an answer") != NULL);
     ok("timeout is bounded", elapsed >= 350 && elapsed < 1500);
 
     /* nothing listens on a port whose listener was just closed */
@@ -168,17 +173,27 @@ int main(void) {
     close(lf);
     vl_server_t s;
     socks_profile(&s, port);
-    ms = real_probe_run(&s, "127.0.0.1", NULL, 1000, reason, sizeof reason);
-    ok("refused connect fails", ms == -1 && strcmp(reason, "tcp connect failed") == 0);
+    ms = real_probe_run(&s, "127.0.0.1", NULL, 1000, NULL, reason, sizeof reason);
+    ok("refused connect fails", ms == -1 && strstr(reason, "refused the connection on port") != NULL);
 
     s.proto = VL_PROTO_HYSTERIA2;
-    ms = real_probe_run(&s, "127.0.0.1", NULL, 1000, reason, sizeof reason);
+    ms = real_probe_run(&s, "127.0.0.1", NULL, 1000, NULL, reason, sizeof reason);
     ok("hysteria2 is not probed here", ms == -1 &&
        strcmp(reason, "unsupported transport") == 0);
 
-    ok("status line accepted", real_probe_answer_ok("HTTP/1.1 204", 12));
-    ok("short answer rejected", !real_probe_answer_ok("HTTP", 4));
-    ok("other protocol rejected", !real_probe_answer_ok("SSH-2.0", 7));
+    senko_clock_reset();
+    ms = run_mode(FAKE_HTTP_ERROR, 2000, &p, reason, sizeof reason, &elapsed);
+    ok("http error is not success or proof of bad credentials", ms == -1 && strstr(reason, "HTTP 503"));
+    int64_t offset;
+    ok("failed target date cannot poison clock", !senko_clock_offset(&offset));
+    ms = run_mode(FAKE_TRUNCATED, 2000, &p, reason, sizeof reason, &elapsed);
+    ok("incomplete 204 headers are rejected", ms == -1);
+    const char *status = "HTTP/1.1 204 No Content\r\n";
+    ok("status line accepted", real_probe_status(status, strlen(status)) == 204);
+    ok("short answer rejected", real_probe_status("HTTP", 4) == -1);
+    ok("other protocol rejected", real_probe_status("SSH-2.0", 7) == -1);
+    ok("four digit status rejected", real_probe_status("HTTP/1.1 2040 OK", 15) == -1);
+    ok("signed status rejected", real_probe_status("HTTP/1.1 +204 OK", 15) == -1);
 
     if (g_fail) return 1;
     printf("all real probe checks passed\n");

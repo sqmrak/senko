@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 #include "config.h"
+#include "net_diag.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,13 +24,24 @@ typedef void (*real_probe_bind_fn)(int fd);
    carried back through it. a tcp connect alone measures the nearest cdn edge
    when a node sits behind one, which read as 2 ms for a server abroad.
    ip is the server's resolved ipv4 address. returns milliseconds, or -1 with
-   the failed stage in reason */
+   reason saying what is wrong in words a user can act on; diag (may be NULL)
+   keeps the facts behind it, so a caller that measures the clock afterwards
+   can word it again with net_diag_text */
 int real_probe_run(const vl_server_t *server, const char *ip,
+                   real_probe_bind_fn bind_fd, int timeout_ms,
+                   net_diag_t *diag, char *reason, size_t reason_cap);
+
+/* a bare tcp check of the server port, with the same socket diagnosis */
+int real_probe_tcp(const vl_server_t *server, const char *ip,
                    real_probe_bind_fn bind_fd, int timeout_ms,
                    char *reason, size_t reason_cap);
 
-/* whether an answer from REAL_PROBE_HOST starts like an http status line */
-int real_probe_answer_ok(const char *buf, size_t len);
+/* the status of an http answer's first line, or -1 when it is not one */
+int real_probe_status(const char *buf, size_t len);
+
+/* asks REAL_PROBE_HOST at ip directly, outside any tunnel, and records its
+   Date in senko_clock; 0 when it did */
+int real_probe_clock(const char *ip, real_probe_bind_fn bind_fd, int timeout_ms);
 
 #ifdef __cplusplus
 }

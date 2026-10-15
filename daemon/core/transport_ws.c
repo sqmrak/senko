@@ -38,6 +38,8 @@ typedef struct {
     int                  rx_has_frame;
     int                  rx_opcode;
     size_t               rx_frame_left;
+    int                  rx_sub_eof;
+    net_fail_t          *fail;
 } ws_handle_t;
 
 static int ws_token_ok(const char *s) {
@@ -139,6 +141,7 @@ static void *ws_open_common(int fd, const transport_tls_cfg_t *cfg, const transp
     if (!h) return NULL;
 
     h->sub_vt = sub_vt;
+    h->fail = cfg ? cfg->fail : NULL;
     h->sub_h = sub_vt->open(fd, cfg);
     if (!h->sub_h) {
         free(h);
@@ -298,8 +301,10 @@ static int ws_handshake_step(ws_handle_t *h) {
             if (end) {
                 if (strncmp((char *)h->hs_buf, "HTTP/1.1 101", 12) == 0 ||
                     strncmp((char *)h->hs_buf, "HTTP/1.0 101", 12) == 0) {
-                    if (!ws_accept_ok(h, (char *)h->hs_buf, end + 2))
+                    if (!ws_accept_ok(h, (char *)h->hs_buf, end + 2)) {
+                        net_fail_note(h->fail, NET_FAIL_TRANSPORT, 0);
                         return TRANSPORT_ERR;
+                    }
                     h->state = WS_STATE_ESTABLISHED;
 
                     size_t req_len = (size_t)(end + 4 - (char *)h->hs_buf);
@@ -310,13 +315,19 @@ static int ws_handshake_step(ws_handle_t *h) {
                     }
                     return 0;
                 }
+                /* a wrong path or host is answered 404, 400 or 403 here */
+                int status = net_fail_http_status((char *)h->hs_buf, h->hs_len);
+                if (status > 0)
+                    net_fail_note(h->fail, NET_FAIL_HTTP_STATUS, status);
                 return TRANSPORT_ERR;
             }
             if (h->hs_len >= sizeof(h->hs_buf) - 1) {
+                net_fail_note(h->fail, NET_FAIL_TRANSPORT, 0);
                 return TRANSPORT_ERR;
             }
             continue;
         }
+        if (r == TRANSPORT_EOF) net_fail_note(h->fail, NET_FAIL_CLOSED, 0);
         return r;
     }
 
@@ -393,6 +404,88 @@ static int ws_write(void *handle, const uint8_t *buf, size_t len) {
     }
 }
 
+/* decodes buffered frames only; WANT_READ means the buffer needs more input */
+static int ws_parse(ws_handle_t *h, uint8_t *buf, size_t len) {
+    for (;;) {
+        size_t unparsed = h->rx_len - h->rx_off;
+        if (!h->rx_has_frame) {
+            if (unparsed < 2) return TRANSPORT_WANT_READ;
+
+            uint8_t b0 = h->rx_buf[h->rx_off];
+            uint8_t b1 = h->rx_buf[h->rx_off + 1];
+
+            int opcode = b0 & 0x0F;
+            int masked = b1 & 0x80;
+            size_t payload_len = b1 & 0x7F;
+            size_t header_size = 2;
+            int fin = b0 & 0x80;
+            int rsv = b0 & 0x70;
+
+            if (!fin || rsv || masked) return TRANSPORT_ERR;
+            if (opcode != 0x02 && opcode != 0x08 && opcode != 0x09 && opcode != 0x0a)
+                return TRANSPORT_ERR;
+
+            if (payload_len == 126) header_size = 4;
+            else if (payload_len == 127) header_size = 10;
+
+            if (unparsed < header_size) return TRANSPORT_WANT_READ;
+
+            size_t frame_len = 0;
+            if (payload_len == 126) {
+                frame_len = (h->rx_buf[h->rx_off + 2] << 8) | h->rx_buf[h->rx_off + 3];
+            } else if (payload_len == 127) {
+                frame_len = 0;
+                if (h->rx_buf[h->rx_off + 2] & 0x80) return TRANSPORT_ERR;
+                for (int i = 0; i < 8; ++i) {
+                    if (frame_len > (((size_t)-1) >> 8)) return TRANSPORT_ERR;
+                    frame_len = (frame_len << 8) | h->rx_buf[h->rx_off + 2 + i];
+                }
+            } else {
+                frame_len = payload_len;
+            }
+            if ((opcode & 0x08) && frame_len > 125) return TRANSPORT_ERR;
+
+            h->rx_off += header_size;
+            h->rx_has_frame = 1;
+            h->rx_opcode = opcode;
+            h->rx_frame_left = frame_len;
+
+            unparsed = h->rx_len - h->rx_off;
+        }
+
+        if (h->rx_opcode == 0x08) {
+            return TRANSPORT_EOF;
+        }
+        if (h->rx_opcode == 0x09 || h->rx_opcode == 0x0a) {
+            if (unparsed < h->rx_frame_left) return TRANSPORT_WANT_READ;
+            if (h->rx_opcode == 0x09) {
+                int pr = ws_send_control(h, 0x0a, h->rx_buf + h->rx_off,
+                                         h->rx_frame_left);
+                if (pr < 0) return pr;
+            }
+            h->rx_off += h->rx_frame_left;
+            h->rx_frame_left = 0;
+            h->rx_has_frame = 0;
+            /* the next frame may already be buffered, so decode it before waiting */
+            continue;
+        }
+
+        size_t take = unparsed < h->rx_frame_left ? unparsed : h->rx_frame_left;
+        take = take < len ? take : len;
+
+        if (take > 0) {
+            memcpy(buf, h->rx_buf + h->rx_off, take);
+            h->rx_off += take;
+            h->rx_frame_left -= take;
+            if (h->rx_frame_left == 0) {
+                h->rx_has_frame = 0;
+            }
+            return (int)take;
+        }
+        return TRANSPORT_WANT_READ;
+    }
+}
+
 static int ws_read(void *handle, uint8_t *buf, size_t len) {
     ws_handle_t *h = (ws_handle_t *)handle;
     if (!h) return TRANSPORT_ERR;
@@ -408,112 +501,40 @@ static int ws_read(void *handle, uint8_t *buf, size_t len) {
     int pr = ws_flush_pending(h);
     if (pr < 0 && pr != TRANSPORT_WANT_WRITE) return pr;
 
-    if (h->rx_off > 0 && h->rx_off == h->rx_len) {
-        h->rx_len = 0;
-        h->rx_off = 0;
-    } else if (h->rx_off > 0 && (h->rx_off > sizeof(h->rx_buf) / 2 ||
-                                 h->rx_len == sizeof(h->rx_buf))) {
-        /* a full buffer must reclaim the consumed prefix even below the
-           halfway mark, otherwise the read below is left with no room */
-        memmove(h->rx_buf, h->rx_buf + h->rx_off, h->rx_len - h->rx_off);
-        h->rx_len -= h->rx_off;
-        h->rx_off = 0;
-    }
+    for (;;) {
+        int r = ws_parse(h, buf, len);
+        if (r != TRANSPORT_WANT_READ) return r;
+        /* buffered frames came before the lower EOF, so they were delivered above */
+        if (h->rx_sub_eof) return TRANSPORT_EOF;
 
-    size_t rx_space = sizeof(h->rx_buf) - h->rx_len;
-    /* a zero-length read reports EOF, so only read when there is real room */
-    if (rx_space > 0 &&
-        (h->rx_len - h->rx_off == 0 || (h->rx_has_frame && h->rx_frame_left > 0 && h->rx_len - h->rx_off < h->rx_frame_left))) {
-        int r = h->sub_vt->read(h->sub_h, h->rx_buf + h->rx_len, rx_space);
-        if (r > 0) {
-            h->rx_len += (size_t)r;
-        } else if (r < 0) {
-            if (r != TRANSPORT_WANT_READ || h->rx_len - h->rx_off == 0) {
-                return r;
-            }
+        if (h->rx_off > 0 && h->rx_off == h->rx_len) {
+            h->rx_len = 0;
+            h->rx_off = 0;
+        } else if (h->rx_off > 0 && (h->rx_off > sizeof(h->rx_buf) / 2 ||
+                                     h->rx_len == sizeof(h->rx_buf))) {
+            /* a full buffer must reclaim the consumed prefix even below the
+               halfway mark, otherwise the read below is left with no room */
+            memmove(h->rx_buf, h->rx_buf + h->rx_off, h->rx_len - h->rx_off);
+            h->rx_len -= h->rx_off;
+            h->rx_off = 0;
+        }
+
+        /* the lower transport can hold decrypted bytes that socket readiness never
+           reports, so it is read until it says WANT_READ instead of waiting for the socket */
+        size_t rx_space = sizeof(h->rx_buf) - h->rx_len;
+        if (rx_space == 0) return TRANSPORT_ERR;
+
+        int rr = h->sub_vt->read(h->sub_h, h->rx_buf + h->rx_len, rx_space);
+        if (rr > 0) {
+            h->rx_len += (size_t)rr;
+        } else if (rr == 0) {
+            h->rx_sub_eof = 1;
+        } else if (rr != TRANSPORT_WANT_READ) {
+            return rr;
         } else {
-            return TRANSPORT_EOF;
-        }
-    }
-
-    size_t unparsed = h->rx_len - h->rx_off;
-    if (!h->rx_has_frame) {
-        if (unparsed < 2) return TRANSPORT_WANT_READ;
-
-        uint8_t b0 = h->rx_buf[h->rx_off];
-        uint8_t b1 = h->rx_buf[h->rx_off + 1];
-
-        int opcode = b0 & 0x0F;
-        int masked = b1 & 0x80;
-        size_t payload_len = b1 & 0x7F;
-        size_t header_size = 2;
-        int fin = b0 & 0x80;
-        int rsv = b0 & 0x70;
-
-        if (!fin || rsv || masked) return TRANSPORT_ERR;
-        if (opcode != 0x02 && opcode != 0x08 && opcode != 0x09 && opcode != 0x0a)
-            return TRANSPORT_ERR;
-
-        if (payload_len == 126) header_size = 4;
-        else if (payload_len == 127) header_size = 10;
-
-        if (unparsed < header_size) return TRANSPORT_WANT_READ;
-
-        size_t frame_len = 0;
-        if (payload_len == 126) {
-            frame_len = (h->rx_buf[h->rx_off + 2] << 8) | h->rx_buf[h->rx_off + 3];
-        } else if (payload_len == 127) {
-            frame_len = 0;
-            if (h->rx_buf[h->rx_off + 2] & 0x80) return TRANSPORT_ERR;
-            for (int i = 0; i < 8; ++i) {
-                if (frame_len > (((size_t)-1) >> 8)) return TRANSPORT_ERR;
-                frame_len = (frame_len << 8) | h->rx_buf[h->rx_off + 2 + i];
-            }
-        } else {
-            frame_len = payload_len;
-        }
-        if ((opcode & 0x08) && frame_len > 125) return TRANSPORT_ERR;
-
-        h->rx_off += header_size;
-        h->rx_has_frame = 1;
-        h->rx_opcode = opcode;
-        h->rx_frame_left = frame_len;
-
-        unparsed = h->rx_len - h->rx_off;
-    }
-
-    if (h->rx_has_frame) {
-        if (h->rx_opcode == 0x08) {
-            return TRANSPORT_EOF;
-        }
-        if (h->rx_opcode == 0x09 || h->rx_opcode == 0x0a) {
-            if (unparsed < h->rx_frame_left) return TRANSPORT_WANT_READ;
-            if (h->rx_opcode == 0x09) {
-                int pr = ws_send_control(h, 0x0a, h->rx_buf + h->rx_off,
-                                         h->rx_frame_left);
-                if (pr < 0) return pr;
-            }
-            h->rx_off += h->rx_frame_left;
-            h->rx_frame_left = 0;
-            h->rx_has_frame = 0;
             return TRANSPORT_WANT_READ;
         }
-
-        size_t take = unparsed < h->rx_frame_left ? unparsed : h->rx_frame_left;
-        take = take < len ? take : len;
-
-        if (take > 0) {
-            memcpy(buf, h->rx_buf + h->rx_off, take);
-            h->rx_off += take;
-            h->rx_frame_left -= take;
-            if (h->rx_frame_left == 0) {
-                h->rx_has_frame = 0;
-            }
-            return (int)take;
-        }
     }
-
-    return TRANSPORT_WANT_READ;
 }
 
 /* keep pollout active while a framed websocket write is pending */

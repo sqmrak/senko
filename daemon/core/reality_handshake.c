@@ -167,7 +167,9 @@ static int rh_wait_io(int fd, short events, int64_t deadline) {
 
 /* the budget bounds a stall, not the transfer: a server flight arriving in
    many small reads over an edge/3g link used to be charged a full poll slice
-   per successful wait and died as "io" while bytes were still flowing */
+   per successful wait and died as "io" while bytes were still flowing.
+   failures leave errno saying why: 0 for the server's close, ETIMEDOUT for a
+   stall, the socket's own error otherwise */
 static int read_full(int fd, uint8_t *buf, size_t n, int *want_read) {
     size_t off = 0;
     int64_t idle_deadline = senko_now_ms() + RH_HS_IO_BUDGET_MS;
@@ -178,12 +180,16 @@ static int read_full(int fd, uint8_t *buf, size_t n, int *want_read) {
             idle_deadline = senko_now_ms() + RH_HS_IO_BUDGET_MS;
             continue;
         }
-        if (r == 0) return -1; /* peer closed mid-record */
+        if (r == 0) { /* peer closed mid-record */
+            errno = 0;
+            return -1;
+        }
         if (errno == EINTR) continue;
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             int w = rh_wait_io(fd, POLLIN, idle_deadline);
             if (w == 1) continue;
             if (w == 0 && want_read && off == 0) *want_read = 1;
+            if (w == 0) errno = ETIMEDOUT;
             return -1;
         }
         return -1;
@@ -203,7 +209,9 @@ static int write_full(int fd, const uint8_t *buf, size_t n) {
         }
         if (w < 0 && errno == EINTR) continue;
         if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            if (rh_wait_io(fd, POLLOUT, idle_deadline) == 1) continue;
+            int ready = rh_wait_io(fd, POLLOUT, idle_deadline);
+            if (ready == 1) continue;
+            if (ready == 0) errno = ETIMEDOUT;
             return -1;
         }
         return -1;
@@ -215,7 +223,11 @@ static int read_record(int fd, uint8_t *type, uint8_t *body, size_t cap, size_t 
     uint8_t hdr[5];
     if (read_full(fd, hdr, 5, want_read) != 0) return -1;
     size_t len = ((size_t)hdr[3] << 8) | hdr[4];
-    if (len > cap) return -1;
+    /* a length past any tls record is a port answering in plain text */
+    if (len > cap) {
+        errno = EPROTO;
+        return -1;
+    }
     if (read_full(fd, body, len, want_read) != 0) return -1;
     *type = hdr[0];
     *body_len = len;
@@ -369,6 +381,7 @@ static cert_proof_t cert_extract(const uint8_t *msg, size_t msg_len,
 void *reality_handshake_open(int fd, const rh_params_t *p, rh_status_t *err) {
     rh_status_t e = RH_ERR_PROTO;
     const char *stage = "arguments";
+    int io_errno = 0;
 #define FAIL(code) do { e = (code); goto fail; } while (0)
 
     rh_conn_t *c = NULL;
@@ -580,6 +593,7 @@ void *reality_handshake_open(int fd, const rh_params_t *p, rh_status_t *err) {
     return c;
 
 fail:
+    io_errno = errno;
     /* the sealed session id carries this device's clock, and a fronted
        server that finds it too far off its own quietly falls back to the
        camouflage site instead of ever presenting its real certificate;
@@ -598,6 +612,8 @@ fail:
     if (tr.ctx) tls13_transcript_free(&tr);
     if (c) free(c);
     if (err) *err = e;
+    /* rh_open reads why the io failed after this block's own calls */
+    errno = io_errno;
     return NULL;
 #undef FAIL
 }
@@ -1025,6 +1041,7 @@ static void *rh_open(int fd, const transport_tls_cfg_t *cfg) {
     errno = 0;
     int pr = poll(&pfd, 1, 4000);
     if (pr <= 0) {
+        net_fail_note(cfg->fail, NET_FAIL_TIMEOUT, 0);
         if (pr == 0)
             fprintf(stderr, "senkod: reality tcp connect timed out\n");
         else
@@ -1038,6 +1055,7 @@ static void *rh_open(int fd, const transport_tls_cfg_t *cfg) {
     socklen_t err_len = sizeof err_code;
     if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err_code, &err_len) < 0 || err_code != 0) {
         int saved_errno = errno;
+        net_fail_note(cfg->fail, net_fail_from_errno(err_code ? err_code : saved_errno), 0);
         fprintf(stderr, "senkod: reality tcp connect failed: so_error=%d errno=%d\n",
                 err_code, saved_errno);
         fcntl(fd, F_SETFL, flags);
@@ -1048,6 +1066,14 @@ static void *rh_open(int fd, const transport_tls_cfg_t *cfg) {
     void *h = reality_handshake_open(fd, &p, &err);
     if (!h) {
         int saved_errno = errno;
+        if (err == RH_ERR_NOT_REALITY)
+            net_fail_note(cfg->fail, NET_FAIL_REALITY, 0);
+        else if (err == RH_ERR_IO)
+            net_fail_note(cfg->fail, saved_errno == 0 ? NET_FAIL_CLOSED
+                          : saved_errno == EPROTO ? NET_FAIL_NOT_TLS
+                          : net_fail_from_errno(saved_errno), 0);
+        else
+            net_fail_note(cfg->fail, NET_FAIL_TLS, 0);
         fprintf(stderr, "senkod: reality handshake failed: %s (%d), errno=%d\n",
                 rh_status_name(err), (int)err, saved_errno);
     }
