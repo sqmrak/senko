@@ -354,7 +354,7 @@ static UILabel *AboutHeroLabel(UIView *host, UIFont *font) {
                     value:@"TCP · TLS · REALITY + Vision\nWebSocket · XHTTP · gRPC\n"
                           @"AmneziaWG · SOCKS5 · HTTP(S) CONNECT"
                     glyph:@"glyph-split.png" action:NULL],
-                [self row:@"Compatibility" value:@"iOS 5-16 · armv7 + arm64 + arm64e"
+                [self row:@"Compatibility" value:@"iOS 4.3-16 · armv7 + arm64 + arm64e"
                     glyph:@"glyph-repeat.png" action:NULL],
                 [self row:@"Security"
                     value:SenkoLocalizedText(@"Token-authenticated control socket · subscription SSRF "
