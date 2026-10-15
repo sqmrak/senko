@@ -1,20 +1,20 @@
 diff --git a/main/distro/senko/senko.go b/main/distro/senko/senko.go
 new file mode 100644
-index 00000000..2dd1ed33
+index 00000000..0a8986a9
 --- /dev/null
 +++ b/main/distro/senko/senko.go
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,63 @@
 +// package senko registers only the xray-core features senko actually drives.
 +//
 +// daemon/senko_core_config.c is the only writer of senko-core's config, and it only
-+// ever emits: a "tun" inbound, one outbound (vless over tcp/ws/grpc/xhttp with
-+// tls/reality, trojan, aead shadowsocks, hysteria2 with an optional salamander
-+// mask and port hopping, or a plain socks/http fallback), a "freedom" direct
-+// outbound, a "blackhole" block outbound, and field routing rules by domain or
-+// ip. senko-core is invoked as "run -c <file>.json", nothing else.
++// ever emits: a "tun" inbound, one outbound (vless or vmess over tcp/ws/grpc/xhttp
++// with tls/reality, trojan, aead shadowsocks, hysteria2 with an optional
++// salamander mask and port hopping, or a plain socks/http fallback), a "freedom"
++// direct outbound, a "blackhole" block outbound, and field routing rules by
++// domain or ip. senko-core is invoked as "run -c <file>.json", nothing else.
 +//
-+// main/distro/all additionally links vmess, wireguard, dokodemo, loopback, kcp,
-+// httpupgrade, dns/fakedns/geodata, and the full
++// main/distro/all additionally links the vmess inbound, wireguard, dokodemo,
++// loopback, kcp, httpupgrade, dns/fakedns/geodata, and the full
 +// commander/observatory/reverse/metrics/stats/toml/yaml/remote-config stack,
 +// none of which senko ever configures. infra/conf still imports those unless
 +// the build sets the senko_trim tag (scripts/patches/senko-core-trim-conf.patch)
@@ -33,9 +33,9 @@ index 00000000..2dd1ed33
 +	// fixes a dependency cycle caused by core import in the internet package
 +	_ "github.com/xtls/xray-core/transport/internet/tagged/taggedimpl"
 +
-+	// proxies senko_core_config.c can emit: tun inbound, the vless, trojan,
-+	// shadowsocks, hysteria and plain socks/http outbounds, freedom direct,
-+	// blackhole block
++	// proxies senko_core_config.c can emit: tun inbound, the vless, vmess,
++	// trojan, shadowsocks, hysteria and plain socks/http outbounds, freedom
++	// direct, blackhole block
 +	_ "github.com/xtls/xray-core/proxy/blackhole"
 +	_ "github.com/xtls/xray-core/proxy/freedom"
 +	_ "github.com/xtls/xray-core/proxy/http"
@@ -46,6 +46,7 @@ index 00000000..2dd1ed33
 +	_ "github.com/xtls/xray-core/proxy/tun"
 +	_ "github.com/xtls/xray-core/proxy/vless/inbound"
 +	_ "github.com/xtls/xray-core/proxy/vless/outbound"
++	_ "github.com/xtls/xray-core/proxy/vmess/outbound"
 +
 +	// transports network_name() in senko_core_config.c can produce, plus their
 +	// security settings

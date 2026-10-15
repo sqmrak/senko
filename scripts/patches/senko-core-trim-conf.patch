@@ -2437,15 +2437,169 @@ index 3cbe9215..d361b566 100644
  
  import (
 diff --git a/infra/conf/vmess.go b/infra/conf/vmess.go
-index 6ff27469..a1c5a865 100644
+index 6ff27469..f87c5d42 100644
 --- a/infra/conf/vmess.go
 +++ b/infra/conf/vmess.go
-@@ -1,3 +1,5 @@
+@@ -7,10 +7,8 @@ import (
+ 	"github.com/xtls/xray-core/common/errors"
+ 	"github.com/xtls/xray-core/common/protocol"
+ 	"github.com/xtls/xray-core/common/serial"
+-	"github.com/xtls/xray-core/common/task"
+ 	"github.com/xtls/xray-core/common/uuid"
+ 	"github.com/xtls/xray-core/proxy/vmess"
+-	"github.com/xtls/xray-core/proxy/vmess/inbound"
+ 	"github.com/xtls/xray-core/proxy/vmess/outbound"
+ 	"google.golang.org/protobuf/proto"
+ )
+@@ -43,65 +41,6 @@ func (a *VMessAccount) Build() *vmess.Account {
+ 	}
+ }
+ 
+-type VMessDefaultConfig struct {
+-	Level byte `json:"level"`
+-}
+-
+-// Build implements Buildable
+-func (c *VMessDefaultConfig) Build() *inbound.DefaultConfig {
+-	config := new(inbound.DefaultConfig)
+-	config.Level = uint32(c.Level)
+-	return config
+-}
+-
+-type VMessInboundConfig struct {
+-	Users    []json.RawMessage   `json:"users"`
+-	Clients  []json.RawMessage   `json:"clients"`
+-	Defaults *VMessDefaultConfig `json:"default"`
+-}
+-
+-// Build implements Buildable
+-func (c *VMessInboundConfig) Build() (proto.Message, error) {
+-	errors.PrintNonRemovalDeprecatedFeatureWarning("VMess (with no Forward Secrecy, etc.)", "VLESS Encryption")
+-
+-	config := &inbound.Config{}
+-
+-	if c.Defaults != nil {
+-		config.Default = c.Defaults.Build()
+-	}
+-
+-	if c.Clients != nil {
+-		c.Users = c.Clients
+-	}
+-	config.User = make([]*protocol.User, len(c.Users))
+-	processUser := func(idx int) error {
+-		rawData := c.Users[idx]
+-		user := new(protocol.User)
+-		if err := json.Unmarshal(rawData, user); err != nil {
+-			return errors.New("invalid VMess user").Base(err)
+-		}
+-		account := new(VMessAccount)
+-		if err := json.Unmarshal(rawData, account); err != nil {
+-			return errors.New("invalid VMess user").Base(err)
+-		}
+-
+-		u, err := uuid.ParseString(account.ID)
+-		if err != nil {
+-			return err
+-		}
+-		account.ID = u.String()
+-
+-		user.Account = serial.ToTypedMessage(account.Build())
+-		config.User[idx] = user
+-		return nil
+-	}
+-	if err := task.ParallelForN(len(c.Users), processUser); err != nil {
+-		return nil, err
+-	}
+-
+-	return config, nil
+-}
+-
+ type VMessOutboundTarget struct {
+ 	Address *Address          `json:"address"`
+ 	Port    uint16            `json:"port"`
+diff --git a/infra/conf/vmess_inbound_full.go b/infra/conf/vmess_inbound_full.go
+new file mode 100644
+index 00000000..c0ab61f1
+--- /dev/null
++++ b/infra/conf/vmess_inbound_full.go
+@@ -0,0 +1,77 @@
 +//go:build !senko_trim
 +
- package conf
- 
- import (
++package conf
++
++// the vmess inbound a senko_trim build leaves out; senko only dials vmess, so
++// the outbound and the shared account stay in vmess.go
++
++import (
++	"encoding/json"
++
++	"github.com/xtls/xray-core/common/errors"
++	"github.com/xtls/xray-core/common/protocol"
++	"github.com/xtls/xray-core/common/serial"
++	"github.com/xtls/xray-core/common/task"
++	"github.com/xtls/xray-core/common/uuid"
++	"github.com/xtls/xray-core/proxy/vmess/inbound"
++	"google.golang.org/protobuf/proto"
++)
++
++type VMessDefaultConfig struct {
++	Level byte `json:"level"`
++}
++
++// Build implements Buildable
++func (c *VMessDefaultConfig) Build() *inbound.DefaultConfig {
++	config := new(inbound.DefaultConfig)
++	config.Level = uint32(c.Level)
++	return config
++}
++
++type VMessInboundConfig struct {
++	Users    []json.RawMessage   `json:"users"`
++	Clients  []json.RawMessage   `json:"clients"`
++	Defaults *VMessDefaultConfig `json:"default"`
++}
++
++// Build implements Buildable
++func (c *VMessInboundConfig) Build() (proto.Message, error) {
++	errors.PrintNonRemovalDeprecatedFeatureWarning("VMess (with no Forward Secrecy, etc.)", "VLESS Encryption")
++
++	config := &inbound.Config{}
++
++	if c.Defaults != nil {
++		config.Default = c.Defaults.Build()
++	}
++
++	if c.Clients != nil {
++		c.Users = c.Clients
++	}
++	config.User = make([]*protocol.User, len(c.Users))
++	processUser := func(idx int) error {
++		rawData := c.Users[idx]
++		user := new(protocol.User)
++		if err := json.Unmarshal(rawData, user); err != nil {
++			return errors.New("invalid VMess user").Base(err)
++		}
++		account := new(VMessAccount)
++		if err := json.Unmarshal(rawData, account); err != nil {
++			return errors.New("invalid VMess user").Base(err)
++		}
++
++		u, err := uuid.ParseString(account.ID)
++		if err != nil {
++			return err
++		}
++		account.ID = u.String()
++
++		user.Account = serial.ToTypedMessage(account.Build())
++		config.User[idx] = user
++		return nil
++	}
++	if err := task.ParallelForN(len(c.Users), processUser); err != nil {
++		return nil, err
++	}
++
++	return config, nil
++}
 diff --git a/infra/conf/wireguard.go b/infra/conf/wireguard.go
 index 8131be28..a0701962 100644
 --- a/infra/conf/wireguard.go
@@ -2457,10 +2611,10 @@ index 8131be28..a0701962 100644
  
  import (
 diff --git a/infra/conf/xray.go b/infra/conf/xray.go
-index bdcabbd5..64c29a00 100644
+index bdcabbd5..024f684c 100644
 --- a/infra/conf/xray.go
 +++ b/infra/conf/xray.go
-@@ -20,38 +20,36 @@ import (
+@@ -20,24 +20,19 @@ import (
  
  var (
  	inboundConfigLoader = NewJSONConfigLoader(ConfigCreatorCache{
@@ -2493,10 +2647,8 @@ index bdcabbd5..64c29a00 100644
  		"direct":      func() interface{} { return new(FreedomConfig) },
  		"freedom":     func() interface{} { return new(FreedomConfig) },
  		"http":        func() interface{} { return new(HTTPClientConfig) },
- 		"shadowsocks": func() interface{} { return new(ShadowsocksClientConfig) },
- 		"socks":       func() interface{} { return new(SocksClientConfig) },
- 		"vless":       func() interface{} { return new(VLessOutboundConfig) },
--		"vmess":       func() interface{} { return new(VMessOutboundConfig) },
+@@ -47,11 +42,15 @@ var (
+ 		"vmess":       func() interface{} { return new(VMessOutboundConfig) },
  		"trojan":      func() interface{} { return new(TrojanClientConfig) },
  		"hysteria":    func() interface{} { return new(HysteriaClientConfig) },
 -		"dns":         func() interface{} { return new(DNSOutboundConfig) },
@@ -2513,7 +2665,7 @@ index bdcabbd5..64c29a00 100644
  type SniffingConfig struct {
  	Enabled         bool       `json:"enabled"`
  	DestOverride    StringList `json:"destOverride"`
-@@ -195,8 +193,8 @@ func (c *InboundDetourConfig) Build() (*core.InboundHandlerConfig, error) {
+@@ -195,8 +194,8 @@ func (c *InboundDetourConfig) Build() (*core.InboundHandlerConfig, error) {
  	if err != nil {
  		return nil, errors.New("failed to load inbound detour config for protocol ", c.Protocol).Base(err)
  	}
@@ -2526,10 +2678,10 @@ index bdcabbd5..64c29a00 100644
  	if err != nil {
 diff --git a/infra/conf/xray_full.go b/infra/conf/xray_full.go
 new file mode 100644
-index 00000000..79553f31
+index 00000000..46edf71c
 --- /dev/null
 +++ b/infra/conf/xray_full.go
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,23 @@
 +//go:build !senko_trim
 +
 +package conf
@@ -2547,7 +2699,6 @@ index 00000000..79553f31
 +	}
 +	for id, creator := range map[string]ConfigCreator{
 +		"loopback":  func() interface{} { return new(LoopbackConfig) },
-+		"vmess":     func() interface{} { return new(VMessOutboundConfig) },
 +		"dns":       func() interface{} { return new(DNSOutboundConfig) },
 +		"wireguard": func() interface{} { return &WireGuardConfig{IsClient: true} },
 +	} {
