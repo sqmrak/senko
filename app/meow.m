@@ -263,6 +263,23 @@ static void SenkoMeowSwizzle(Class cls, SEL orig, SEL neo) {
     method_exchangeImplementations(m1, m2);
 }
 
+/* a control sends one action per registered handler, and the press feedback of
+   a card or a round button (shrink on touch down, restore on release) is a
+   handler like any other, so a single tap played the sound once for each of
+   them. a handler that also listens for touch down, cancel or release outside
+   follows the finger and is not the tap */
+static BOOL SenkoActionFollowsPress(UIControl *control, id target, SEL action) {
+    static const UIControlEvents press[] = {
+        UIControlEventTouchDown, UIControlEventTouchCancel, UIControlEventTouchUpOutside,
+        UIControlEventTouchDragEnter, UIControlEventTouchDragExit
+    };
+    NSString *name = NSStringFromSelector(action);
+    for (size_t i = 0; i < sizeof press / sizeof press[0]; ++i)
+        if ([[control actionsForTarget:target forControlEvent:press[i]] containsObject:name])
+            return YES;
+    return NO;
+}
+
 @implementation UIApplication (SenkoMeow)
 /* the sender is classified before the action runs, never after: the edit menu
    tears its callout bar down while performing cut, copy or paste, so the button
@@ -271,6 +288,9 @@ static void SenkoMeowSwizzle(Class cls, SEL orig, SEL neo) {
 - (BOOL)senko_sendAction:(SEL)action to:(id)target from:(id)sender forEvent:(UIEvent *)event {
     BOOL fromControl = sender && ([sender isKindOfClass:[UIControl class]] ||
                                   [sender isKindOfClass:[UIBarButtonItem class]]);
+    if (fromControl && [sender isKindOfClass:[UIControl class]] &&
+        SenkoActionFollowsPress(sender, target, action))
+        fromControl = NO;
     BOOL ok = [self senko_sendAction:action to:target from:sender forEvent:event];
     if (fromControl) SenkoThemeSfxPlay();
     return ok;
