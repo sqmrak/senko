@@ -33,6 +33,105 @@ static void SenkoBuildTranslations(void) {
     gRussianToEnglish = [[NSMutableDictionary alloc] init];
     gEnglishToChinese = [[NSMutableDictionary alloc] init];
 
+    /* routing profiles, geo data and per app rules */
+    SenkoAddTranslation(@"Addresses", @"Адреса");
+    SenkoAddChineseTranslation(@"Addresses", @"地址");
+    SenkoAddTranslation(@"All apps", @"Все приложения");
+    SenkoAddChineseTranslation(@"All apps", @"所有应用");
+    SenkoAddTranslation(@"Apps", @"Приложения");
+    SenkoAddChineseTranslation(@"Apps", @"应用");
+    SenkoAddTranslation(@"A rule for an app wins over every domain and address rule. Block wins over direct, and direct over the tunnel.", @"Правило приложения сильнее любого правила домена и адреса. Блокировка сильнее прямого соединения, а прямое сильнее туннеля.");
+    SenkoAddChineseTranslation(@"A rule for an app wins over every domain and address rule. Block wins over direct, and direct over the tunnel.", @"应用规则优先于所有域名和地址规则。阻止优先于直连，直连优先于隧道。");
+    SenkoAddTranslation(@"Choose how each app is routed", @"Выберите маршрут для каждого приложения");
+    SenkoAddChineseTranslation(@"Choose how each app is routed", @"为每个应用选择路由");
+    SenkoAddTranslation(@"Default", @"По умолчанию");
+    SenkoAddChineseTranslation(@"Default", @"默认");
+    SenkoAddTranslation(@"%d lists missing", @"Не хватает списков: %d");
+    SenkoAddChineseTranslation(@"%d lists missing", @"缺少 %d 个列表");
+    SenkoAddTranslation(@"%d not supported", @"не поддерживается: %d");
+    SenkoAddChineseTranslation(@"%d not supported", @"%d 条不支持");
+    SenkoAddTranslation(@"Domains and addresses", @"Домены и адреса");
+    SenkoAddChineseTranslation(@"Domains and addresses", @"域名和地址");
+    SenkoAddTranslation(@"Downloading...", @"Загрузка...");
+    SenkoAddChineseTranslation(@"Downloading...", @"正在下载...");
+    SenkoAddTranslation(@"%d rules", @"правил: %d");
+    SenkoAddChineseTranslation(@"%d rules", @"%d 条规则");
+    SenkoAddTranslation(@"%d with a rule", @"с правилом: %d");
+    SenkoAddChineseTranslation(@"%d with a rule", @"%d 个有规则");
+    SenkoAddTranslation(@"Entries marked as not supported (regexp, ext) are skipped. A name that is not written as domain:, full:, keyword: or geosite: matches as part of a name.", @"Записи с пометкой «не поддерживается» (regexp, ext) пропускаются. Имя без domain:, full:, keyword: или geosite: совпадает как часть имени.");
+    SenkoAddChineseTranslation(@"Entries marked as not supported (regexp, ext) are skipped. A name that is not written as domain:, full:, keyword: or geosite: matches as part of a name.", @"标记为不支持的条目（regexp、ext）会被跳过。未用 domain:、full:、keyword: 或 geosite: 写出的名称按名称的一部分匹配。");
+    SenkoAddTranslation(@"Everything goes through the tunnel, apart from your own rules", @"Всё идёт через туннель, кроме ваших правил");
+    SenkoAddChineseTranslation(@"Everything goes through the tunnel, apart from your own rules", @"除您自己的规则外，所有流量都经隧道");
+    SenkoAddTranslation(@"Exact domain", @"Точный домен");
+    SenkoAddChineseTranslation(@"Exact domain", @"精确域名");
+    SenkoAddTranslation(@"Failed: %@", @"Ошибка: %@");
+    SenkoAddChineseTranslation(@"Failed: %@", @"失败：%@");
+    SenkoAddTranslation(@"Geo data", @"Гео-данные");
+    SenkoAddChineseTranslation(@"Geo data", @"地理数据");
+    SenkoAddTranslation(@"Geoip list", @"Список geoip");
+    SenkoAddChineseTranslation(@"Geoip list", @"geoip 列表");
+    SenkoAddTranslation(@"Geosite list", @"Список geosite");
+    SenkoAddChineseTranslation(@"Geosite list", @"geosite 列表");
+    SenkoAddTranslation(@"Names", @"Имена");
+    SenkoAddChineseTranslation(@"Names", @"名称");
+    SenkoAddTranslation(@"No apps found.", @"Приложения не найдены.");
+    SenkoAddChineseTranslation(@"No apps found.", @"未找到应用。");
+    SenkoAddTranslation(@"No rules yet", @"Правил пока нет");
+    SenkoAddChineseTranslation(@"No rules yet", @"暂无规则");
+    SenkoAddTranslation(@"No subscription has sent a routing profile. A happ panel sends one in its response, and it shows up here after the next refresh.", @"Ни одна подписка не прислала профиль маршрутизации. Панель happ присылает его в ответе, и он появится здесь после следующего обновления.");
+    SenkoAddChineseTranslation(@"No subscription has sent a routing profile. A happ panel sends one in its response, and it shows up here after the next refresh.", @"尚无订阅发送路由配置。happ 面板会在响应中发送，下次刷新后会显示在这里。");
+    SenkoAddTranslation(@"Not downloaded", @"Не загружено");
+    SenkoAddChineseTranslation(@"Not downloaded", @"尚未下载");
+    SenkoAddTranslation(@"Not supported, skipped", @"Не поддерживается, пропущено");
+    SenkoAddChineseTranslation(@"Not supported, skipped", @"不支持，已跳过");
+    SenkoAddTranslation(@"Profile entries", @"Записи профиля");
+    SenkoAddChineseTranslation(@"Profile entries", @"配置条目");
+    SenkoAddTranslation(@"Profiles come from your subscriptions. A change applies the next time the tunnel connects.", @"Профили приходят из ваших подписок. Изменение вступит в силу при следующем подключении туннеля.");
+    SenkoAddChineseTranslation(@"Profiles come from your subscriptions. A change applies the next time the tunnel connects.", @"配置来自您的订阅。更改将在下次连接隧道时生效。");
+    SenkoAddTranslation(@"Reading the app list...", @"Чтение списка приложений...");
+    SenkoAddChineseTranslation(@"Reading the app list...", @"正在读取应用列表...");
+    SenkoAddTranslation(@"Reading the profile from the daemon...", @"Чтение профиля из демона...");
+    SenkoAddChineseTranslation(@"Reading the profile from the daemon...", @"正在从守护进程读取配置...");
+    SenkoAddTranslation(@"rest direct", @"остальное напрямую");
+    SenkoAddChineseTranslation(@"rest direct", @"其余直连");
+    SenkoAddTranslation(@"rest through the tunnel", @"остальное через туннель");
+    SenkoAddChineseTranslation(@"rest through the tunnel", @"其余经隧道");
+    SenkoAddTranslation(@"Routing", @"Маршрутизация");
+    SenkoAddChineseTranslation(@"Routing", @"路由");
+    SenkoAddTranslation(@"Routing profile", @"Профиль маршрутизации");
+    SenkoAddChineseTranslation(@"Routing profile", @"路由配置");
+    SenkoAddTranslation(@"Search apps", @"Поиск приложений");
+    SenkoAddChineseTranslation(@"Search apps", @"搜索应用");
+    SenkoAddTranslation(@"Search logs", @"Поиск по журналу");
+    SenkoAddChineseTranslation(@"Search logs", @"搜索日志");
+    SenkoAddTranslation(@"Lines: %d", @"Строк: %d");
+    SenkoAddChineseTranslation(@"Lines: %d", @"行数：%d");
+    SenkoAddTranslation(@"Share", @"Поделиться");
+    SenkoAddChineseTranslation(@"Share", @"分享");
+    SenkoAddTranslation(@"Senko is a very jealous fox, and she does not like it when you use something else... ;(", @"Сенко очень ревнивая лиса, и она не любит, когда пользуются чем-то другим... ;(");
+    SenkoAddChineseTranslation(@"Senko is a very jealous fox, and she does not like it when you use something else... ;(", @"仙狐是一只非常爱吃醋的狐狸，她不喜欢你使用别的东西…… ;(");
+    SenkoAddTranslation(@"Continue", @"Продолжить");
+    SenkoAddChineseTranslation(@"Continue", @"继续");
+    SenkoAddTranslation(@"Remove vless-core", @"Удалить vless-core");
+    SenkoAddChineseTranslation(@"Remove vless-core", @"卸载 vless-core");
+    SenkoAddTranslation(@"Removing vless-core...", @"Удаляю vless-core...");
+    SenkoAddChineseTranslation(@"Removing vless-core...", @"正在卸载 vless-core...");
+    SenkoAddTranslation(@"Senko is happy now :3", @"Сенко снова счастлива :3");
+    SenkoAddChineseTranslation(@"Senko is happy now :3", @"仙狐又开心了 :3");
+    SenkoAddTranslation(@"vless-core is still there. Remove it in your package manager.", @"vless-core всё ещё на месте. Удалите его в менеджере пакетов.");
+    SenkoAddChineseTranslation(@"vless-core is still there. Remove it in your package manager.", @"vless-core 仍然存在，请在包管理器中卸载。");
+
+    SenkoAddTranslation(@"Showing the first %d of %d entries. ", @"Показаны первые %d из %d записей. ");
+    SenkoAddChineseTranslation(@"Showing the first %d of %d entries. ", @"显示前 %d 条，共 %d 条。");
+    SenkoAddTranslation(@"The profile names geosite and geoip lists. They are downloaded once and kept for a week.", @"Профиль ссылается на списки geosite и geoip. Они скачиваются один раз и хранятся неделю.");
+    SenkoAddChineseTranslation(@"The profile names geosite and geoip lists. They are downloaded once and kept for a week.", @"配置引用了 geosite 和 geoip 列表。它们只下载一次，并保留一周。");
+    SenkoAddTranslation(@"Updated %@", @"Обновлено: %@");
+    SenkoAddChineseTranslation(@"Updated %@", @"更新于 %@");
+    SenkoAddTranslation(@"Update geo data", @"Обновить гео-данные");
+    SenkoAddChineseTranslation(@"Update geo data", @"更新地理数据");
+    SenkoAddTranslation(@"With a rule", @"С правилом");
+    SenkoAddChineseTranslation(@"With a rule", @"已设规则");
+
     SenkoAddTranslation(@"About", @"О приложении");
     SenkoAddTranslation(@"Amnezia/VLESS Client", @"Клиент Amnezia/VLESS");
     SenkoAddTranslation(@"Model", @"Модель");
@@ -1416,11 +1515,108 @@ NSString *SenkoRedactSecrets(NSString *text) {
 /* the daemon prefixes the panel's own wording, which stays untranslated */
 static NSString * const kGatePrefix = @"subscription refused this device: ";
 
+/* the daemon keeps its english reasons for logs; only known sentences are translated */
+static NSString *SenkoNetworkErrorTextForLanguage(NSString *text, NSInteger language) {
+    static NSString * const messages[][3] = {
+        { @"the server did not open the chosen transport: check the path, host and transport type", @"Сервер не открыл выбранный транспорт. Проверьте путь, Host и тип транспорта.", @"服务器未建立所选传输连接。请检查路径、Host 和传输类型。" },
+        { @"this device could not open the connection: restart Senko and check System Logs", @"Устройство не смогло открыть соединение. Перезапустите Senko и проверьте системные логи.", @"设备无法建立连接。请重启 Senko 并查看系统日志。" },
+        { @"this device has no network route to the server: check the internet connection", @"Нет сетевого соединения с сервером. Проверьте доступ к интернету.", @"设备无法访问服务器。请检查网络连接。" },
+        { @"the server refused the connection on port %@: check the port and whether the server is running", @"Сервер отклонил соединение на порту %@. Проверьте порт и запущен ли сервер.", @"服务器拒绝了端口 %@ 的连接。请检查端口及服务器是否运行。" },
+        { @"the server does not answer: it is off, the address is wrong, or the network blocks it", @"Сервер не отвечает. Проверьте адрес, доступность сервера и блокировки в сети.", @"服务器无响应。请检查地址、服务器状态及网络限制。" },
+        { @"the connection was reset during the handshake: check the network and the server settings", @"Соединение оборвалось при подключении. Проверьте сеть и настройки сервера.", @"连接在握手时被重置。请检查网络及服务器设置。" },
+        { @"the server closed the connection during the handshake: check the port and the security setting", @"Сервер закрыл соединение при подключении. Проверьте порт и режим защиты.", @"服务器在握手时关闭了连接。请检查端口和安全设置。" },
+        { @"the server does not speak TLS on port %@: check the port and the security setting", @"На порту %@ сервер ответил без TLS. Проверьте порт и режим защиты.", @"服务器端口 %@ 未使用 TLS。请检查端口和安全设置。" },
+        { @"the server certificate is for another name: check the SNI", @"Сертификат сервера выдан для другого имени. Проверьте SNI.", @"服务器证书对应另一个域名。请检查 SNI。" },
+        { @"the server certificate is not trusted: it is self-signed or from an unknown issuer", @"Сертификат сервера не подтверждён доверенным центром. Проверьте сертификат сервера.", @"服务器证书不受信任。请检查服务器证书及签发机构。" },
+        { @"the server certificate has expired", @"Срок сертификата сервера истёк по часам устройства. Проверьте дату устройства и сертификат.", @"按设备时间，服务器证书已过期。请检查设备日期和证书。" },
+        { @"the server certificate is not valid yet: check the device date and the certificate dates", @"Сертификат сервера ещё не действует по часам устройства. Проверьте дату устройства и сертификат.", @"按设备时间，服务器证书尚未生效。请检查设备日期和证书。" },
+        { @"REALITY did not accept the connection: check the public key, the short id and the SNI", @"Не удалось подтвердить сервер REALITY. Проверьте публичный ключ, short ID и SNI.", @"无法验证 REALITY 服务器。请检查公钥、short ID 和 SNI。" },
+        { @"the server has no such path (HTTP 404): check the path", @"Сервер не нашёл указанный путь (HTTP 404). Проверьте путь подключения.", @"服务器找不到指定路径（HTTP 404）。请检查连接路径。" },
+        { @"the server rejected the request (HTTP 400): check the path and the transport type", @"Сервер отклонил запрос (HTTP 400). Проверьте путь и тип транспорта.", @"服务器拒绝了请求（HTTP 400）。请检查路径和传输类型。" },
+        { @"the server refused access (HTTP 403): check the path and the host", @"Сервер запретил доступ (HTTP 403). Проверьте путь и Host.", @"服务器禁止访问（HTTP 403）。请检查路径和 Host。" },
+        { @"the server front answered HTTP %@: check the server and its proxy service", @"Сервер вернул HTTP %@. Проверьте сервер и его прокси-службу.", @"服务器返回 HTTP %@。请检查服务器及其代理服务。" },
+        { @"the server answered HTTP %@ instead of opening the transport: check the path and the transport type", @"Сервер вернул HTTP %@ вместо подключения. Проверьте путь и тип транспорта.", @"服务器返回 HTTP %@，未建立传输连接。请检查路径和传输类型。" },
+        { @"the server has no such gRPC service: check the service name", @"Сервер не нашёл службу gRPC. Проверьте имя службы.", @"服务器找不到 gRPC 服务。请检查服务名称。" },
+        { @"the server answered gRPC status %@: check the service name", @"Служба gRPC отклонила запрос (статус %@). Проверьте имя службы.", @"gRPC 服务返回状态 %@。请检查服务名称。" },
+        { @"the TLS handshake with the server failed: check the SNI and the security setting", @"Не удалось установить защищённое соединение с сервером. Проверьте SNI и режим защиты.", @"无法与服务器建立 TLS 连接。请检查 SNI 和安全设置。" },
+        { @"the server name does not resolve: check the address and the internet connection", @"Не удалось найти сервер по имени. Проверьте адрес и доступ к интернету.", @"无法解析服务器域名。请检查地址和网络连接。" },
+        { @"the server closed the request without an answer: check the UUID and the device clock", @"Сервер закрыл соединение без ответа. Проверьте UUID и дату и время устройства.", @"服务器未响应便关闭连接。请检查 UUID 和设备日期与时间。" },
+        { @"the server closed the request without an answer: check the %@", @"Сервер закрыл соединение без ответа. Проверьте %@.", @"服务器未响应便关闭连接。请检查 %@。" },
+        { @"the server did not return an answer: check the %@; also check whether the server can reach the internet", @"Сервер не прислал ответ. Проверьте %@ и доступ сервера к интернету.", @"服务器未返回响应。请检查 %@ 及服务器的互联网连接。" },
+        { @"the server answer does not decrypt: check the %@, or this is not a %@ server", @"Не удалось расшифровать ответ сервера. Проверьте %@ и что сервер использует %@.", @"无法解密服务器响应。请检查 %@ 及服务器是否使用 %@。" },
+        { @"the server answered as a website instead of carrying the request: check the %@", @"Сервер ответил как обычный сайт. Проверьте %@ и настройки прокси.", @"服务器返回了网站内容。请检查 %@ 及代理设置。" },
+        { @"the proxy refused the user name or password", @"Прокси отклонил имя пользователя или пароль.", @"代理拒绝了用户名或密码。" },
+        { @"the server answer is not %@: check the protocol and the port", @"Ответ сервера не соответствует %@. Проверьте протокол и порт.", @"服务器响应不符合 %@。请检查协议和端口。" },
+        { @"the connection check received HTTP %@ instead of 204: check the %@ and whether the server can reach the check website", @"Проверка соединения получила HTTP %@ вместо ожидаемого ответа. Проверьте %@ и доступ сервера к проверочному сайту.", @"连接检查收到 HTTP %@，未收到预期响应。请检查 %@ 及服务器能否访问检测网站。" },
+        { @"AmneziaWG server does not answer: check the endpoint, port, keys and whether UDP is blocked", @"Сервер AmneziaWG не отвечает. Проверьте адрес, порт, ключи и блокировку UDP.", @"AmneziaWG 服务器无响应。请检查地址、端口、密钥及 UDP 限制。" },
+        { @"AmneziaWG received packets that do not match this profile: check the keys and packet settings", @"Ответ AmneziaWG не соответствует профилю. Проверьте ключи и параметры пакетов.", @"AmneziaWG 响应与配置不匹配。请检查密钥和数据包设置。" },
+        { @"AmneziaWG could not send or receive data: check the network and System Logs", @"Не удалось передать данные AmneziaWG. Проверьте сеть и системные логи.", @"AmneziaWG 无法收发数据。请检查网络和系统日志。" },
+        { @"The tunnel device could not start or stopped: restart Senko and check System Logs", @"Не удалось запустить туннель или он остановился. Перезапустите Senko и проверьте системные логи.", @"隧道设备无法启动或已停止。请重启 Senko 并查看系统日志。" },
+        { @"the device clock appears %@ days ahead compared with the HTTP check: verify automatic date and time", @"Возможно, часы устройства спешат на %@ дн. по сравнению с HTTP-проверкой. Проверьте автоматическую дату и время.", @"与 HTTP 检测相比，设备时钟可能快 %@ 天。请检查自动日期与时间。" },
+        { @"the device clock appears %@ days behind compared with the HTTP check: verify automatic date and time", @"Возможно, часы устройства отстают на %@ дн. по сравнению с HTTP-проверкой. Проверьте автоматическую дату и время.", @"与 HTTP 检测相比，设备时钟可能慢 %@ 天。请检查自动日期与时间。" },
+        { @"the device clock appears %@ hours ahead compared with the HTTP check: verify automatic date and time", @"Возможно, часы устройства спешат на %@ ч. по сравнению с HTTP-проверкой. Проверьте автоматическую дату и время.", @"与 HTTP 检测相比，设备时钟可能快 %@ 小时。请检查自动日期与时间。" },
+        { @"the device clock appears %@ hours behind compared with the HTTP check: verify automatic date and time", @"Возможно, часы устройства отстают на %@ ч. по сравнению с HTTP-проверкой. Проверьте автоматическую дату и время.", @"与 HTTP 检测相比，设备时钟可能慢 %@ 小时。请检查自动日期与时间。" },
+        { @"the device clock appears %@ minutes ahead compared with the HTTP check: verify automatic date and time", @"Возможно, часы устройства спешат на %@ мин. по сравнению с HTTP-проверкой. Проверьте автоматическую дату и время.", @"与 HTTP 检测相比，设备时钟可能快 %@ 分钟。请检查自动日期与时间。" },
+        { @"the device clock appears %@ minutes behind compared with the HTTP check: verify automatic date and time", @"Возможно, часы устройства отстают на %@ мин. по сравнению с HTTP-проверкой. Проверьте автоматическую дату и время.", @"与 HTTP 检测相比，设备时钟可能慢 %@ 分钟。请检查自动日期与时间。" },
+        { @"password and the cipher", @"пароль и шифр", @"密码及加密方式" },
+        { @"user name and password", @"имя пользователя и пароль", @"用户名和密码" },
+        { @"password", @"пароль", @"密码" },
+    };
+    if (![text length]) return nil;
+    for (NSUInteger i = 0; i < sizeof messages / sizeof messages[0]; ++i) {
+        NSString *target = messages[i][language];
+        for (NSUInteger sourceLanguage = 0; sourceLanguage < 3; ++sourceLanguage) {
+            NSString *source = messages[i][sourceLanguage];
+            NSRange placeholder = [source rangeOfString:@"%@"];
+            if (placeholder.location == NSNotFound) {
+                if ([text isEqualToString:source]) return target;
+                continue;
+            }
+            if (![text hasPrefix:[source substringToIndex:placeholder.location]]) continue;
+            NSString *pattern = [[NSRegularExpression escapedPatternForString:source]
+                stringByReplacingOccurrencesOfString:@"%@" withString:@"(.+?)"];
+            NSRegularExpression *rx = [NSRegularExpression regularExpressionWithPattern:
+                [NSString stringWithFormat:@"^%@$", pattern] options:0 error:NULL];
+            NSTextCheckingResult *match = [rx firstMatchInString:text options:0
+                range:NSMakeRange(0, [text length])];
+            if (!match) continue;
+            NSString *a = [text substringWithRange:[match rangeAtIndex:1]];
+            NSString *translated = SenkoNetworkErrorTextForLanguage(a, language);
+            if (translated) a = translated;
+            if ([match numberOfRanges] == 2) return [NSString stringWithFormat:target, a];
+            NSString *b = [text substringWithRange:[match rangeAtIndex:2]];
+            return [NSString stringWithFormat:target, a, b];
+        }
+    }
+    return nil;
+}
+
+static NSString *SenkoNetworkErrorText(NSString *text) {
+    return SenkoNetworkErrorTextForLanguage(text,
+        SenkoLanguageIsChinese() ? 2 : SenkoLanguageIsRussian() ? 1 : 0);
+}
+
 NSString *SenkoHumanReadableError(NSString *text) {
     NSString *raw = [text stringByTrimmingCharactersInSet:
                      [NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if ([raw hasPrefix:@"ERR "]) raw = [raw substringFromIndex:4];
+    NSString *detail = [raw hasPrefix:@"server: "] ? [raw substringFromIndex:8] : raw;
+    NSString *network = SenkoNetworkErrorText(detail);
+    if (network) return network;
     NSString *message = nil;
+    if ([raw rangeOfString:@"handshake timed out without udp response"].location != NSNotFound)
+        message = @"AmneziaWG server does not answer: check the endpoint, port, keys and whether UDP is blocked";
+    else if ([raw rangeOfString:@"unrelated udp responses"].location != NSNotFound ||
+             [raw rangeOfString:@"handshake authentication failed"].location != NSNotFound ||
+             [raw rangeOfString:@"invalid response packet"].location != NSNotFound)
+        message = @"AmneziaWG received packets that do not match this profile: check the keys and packet settings";
+    else if ([raw rangeOfString:@"udp transport failed"].location != NSNotFound ||
+             [raw rangeOfString:@"udp socket"].location != NSNotFound ||
+             [raw hasPrefix:@"error endpoint udp"])
+        message = @"AmneziaWG could not send or receive data: check the network and System Logs";
+    else if ([raw hasPrefix:@"error cannot open a utun"] || [raw hasPrefix:@"error the utun device failed"])
+        message = @"The tunnel device could not start or stopped: restart Senko and check System Logs";
+    if (message) return SenkoNetworkErrorText(message);
     if ([raw isEqualToString:@"socks: tunnel open failed"] ||
         [raw isEqualToString:@"socks: tunnel verify failed"])
         message = @"The tunnel could not be opened. Check the server settings, key, and selected transport.";
@@ -1467,8 +1663,6 @@ NSString *SenkoHumanReadableError(NSString *text) {
         message = @"The tunnel could not be opened. Check the server settings, key, and selected transport.";
     else if ([raw hasPrefix:@"routing:"])
         message = @"The connect hook could not start. Check that senkotlsfix is installed, or pick another backend.";
-    else if ([raw hasPrefix:@"error endpoint udp"])
-        message = @"Could not connect to the server. Check the address, network, and server availability.";
     else if ([raw hasPrefix:@"error utun"] || [raw hasPrefix:@"error route"])
         message = @"The tunnel could not start. Open System Logs to see whether utun, routes, or the server failed.";
     else if ([raw isEqualToString:@"unknown content type"])
@@ -1528,7 +1722,7 @@ static BOOL SenkoAllDigits(NSString *text) {
 
 /* bulk actions answer with "<verb> <n> server(s)[ tail]", and the bare count
    rule below would read the verb as the number */
-/* the skip summary senkod appends to an import: "skipped 3: vmess 2, tuic 1".
+/* the skip summary senkod appends to an import: "skipped 3: tuic 2, ssr 1".
    protocol names stay as they are; the reasons senko words itself are translated */
 static NSString *SenkoSkipTailRu(NSString *tail) {
     static NSString * const kPairs[][2] = {
@@ -1542,6 +1736,8 @@ static NSString *SenkoSkipTailRu(NSString *tail) {
         { @"trojan over reality", @"trojan через reality" },
         { @"vless encryption", @"шифрование vless" },
         { @"invalid vless id", @"неверный id vless" },
+        { @"invalid vmess id", @"неверный id vmess" },
+        { @"vmess does not use flow", @"у vmess нет flow" },
         { @"shadowsocks plugin", @"плагин shadowsocks" },
         { @"shadowsocks userinfo that does not decode", @"нечитаемые данные shadowsocks" },
         { @"shadowsocks cipher that is not a name", @"нечитаемый шифр shadowsocks" },
@@ -1704,12 +1900,16 @@ static NSString *SenkoBaseText(NSString *text) {
     if (![text length]) return text;
     SenkoBuildTranslations();
     NSString *english = [gRussianToEnglish objectForKey:text];
+    if (english) return english;
+    english = SenkoNetworkErrorTextForLanguage(text, 0);
     return english ? english : text;
 }
 
 NSString *SenkoLocalizedText(NSString *text) {
     if (![text length]) return text;
     NSString *english = SenkoBaseText(text);
+    NSString *network = SenkoNetworkErrorText(english);
+    if (network) return network;
     SenkoBuildTranslations();
     if (SenkoLanguageIsChinese()) {
         NSString *chinese = [gEnglishToChinese objectForKey:english];
@@ -1759,9 +1959,16 @@ static void SenkoRelocalizeController(UIViewController *controller) {
         }
     }
     SenkoRelocalizeView(controller.view);
-    for (UIViewController *child in controller.childViewControllers)
+    /* ios 4.3 answers childViewControllers privately with an NSHashTable, not
+       the ordered array ios 5 made public with didMoveToParentViewController: */
+    NSArray *children = nil;
+    if ([controller isKindOfClass:[UINavigationController class]])
+        children = ((UINavigationController *)controller).viewControllers;
+    else if ([controller respondsToSelector:@selector(didMoveToParentViewController:)])
+        children = controller.childViewControllers;
+    for (UIViewController *child in children)
         SenkoRelocalizeController(child);
-    SenkoRelocalizeController(controller.presentedViewController);
+    SenkoRelocalizeController(SenkoPresentedController(controller));
 }
 
 static void SenkoRelocalizeView(UIView *view) {
@@ -1774,7 +1981,9 @@ static void SenkoRelocalizeView(UIView *view) {
     if ([view isKindOfClass:[UIButton class]]) {
         UIButton *button = (UIButton *)view;
         NSDictionary *titles = objc_getAssociatedObject(button, &kSenkoRawButtonTitles);
-        for (NSNumber *stateNumber in titles) {
+        /* the swizzled setTitle:forState: rewrites this same dictionary, and ios 12
+           throws on mutation during fast enumeration */
+        for (NSNumber *stateNumber in [titles allKeys]) {
             NSString *raw = [titles objectForKey:stateNumber];
             [button setTitle:raw forState:[stateNumber unsignedIntegerValue]];
         }

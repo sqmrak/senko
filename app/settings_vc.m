@@ -6,11 +6,12 @@
 #import "control_client.h"
 #import "ui_theme.h"
 #import "themes_vc.h"
-#import "rules_vc.h"
+#import "routing_vc.h"
 #import "dev_menu_vc.h"
 #import "update_install.h"
 #import "app_common.h"
 #import "crash_report.h"
+#import "text_prompt.h"
 
 /* a backup is the config file itself, so there is no magic to check for and no
    format version to compare: the file is ours when one of its first lines is a
@@ -103,7 +104,7 @@ static const SenkoSettingsRowInfo kSenkoRowInfo[] = {
     [SenkoRowDNS]          = { "DNS",                     "glyph-shield.png" },
     [SenkoRowDNSPort]      = { "Local DNS port",          "glyph-hash.png" },
     [SenkoRowSocksPort]    = { "SOCKS port",              "glyph-port.png" },
-    [SenkoRowRules]        = { "Split tunneling",         "glyph-split.png" },
+    [SenkoRowRules]        = { "Routing",                 "glyph-split.png" },
     [SenkoRowAbout]        = { "About",                   "glyph-info.png" },
     [SenkoRowDeveloper]    = { "Developer settings",      "glyph-code.png" }
 };
@@ -293,7 +294,7 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
 }
 
 - (void)donePressed {
-    [self dismissViewControllerAnimated:YES completion:nil];
+    SenkoDismissModal(self, nil);
 }
 
 /* the developer section is the last one, so unlocking it never renumbers a row
@@ -619,29 +620,48 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
 }
 
 /* a plain text alert is the only input control that behaves the same from ios 5
-   to ios 15, and the daemon validates what comes out of it */
+   to ios 15, and the daemon validates what comes out of it. ios 4.3 has no text
+   alert and gets a small screen */
 - (void)showEditorForRow:(SenkoSettingsRow)row {
     NSString *key = SenkoTextSettingKey(row);
+    NSString *title =
+        SenkoLocalizedText([NSString stringWithUTF8String:kSenkoRowInfo[row].title]);
+    NSString *message = [key isEqualToString:@"dns_upstream"]
+        ? SenkoLocalizedText(@"An IPv4 address, for example 1.1.1.1")
+        : SenkoLocalizedText(@"A port number between 1 and 65535");
+    [_editingKey release];
+    _editingKey = [key copy];
+    if (![UIAlertView instancesRespondToSelector:@selector(setAlertViewStyle:)]) {
+        [SenkoTextPromptVC presentFrom:self
+                                 title:title
+                               message:message
+                                  text:[_settings objectForKey:key]
+                              keyboard:UIKeyboardTypeNumbersAndPunctuation
+                               confirm:SenkoLocalizedText(@"Save")
+                               handler:^(NSString *text) { [self applyEditedText:text]; }];
+        return;
+    }
     UIAlertView *editor = [[[UIAlertView alloc]
-        initWithTitle:SenkoLocalizedText([NSString stringWithUTF8String:kSenkoRowInfo[row].title])
-              message:[key isEqualToString:@"dns_upstream"]
-                          ? SenkoLocalizedText(@"An IPv4 address, for example 1.1.1.1")
-                          : SenkoLocalizedText(@"A port number between 1 and 65535")
+        initWithTitle:title
+              message:message
              delegate:self
     cancelButtonTitle:SenkoLocalizedText(@"Cancel")
     otherButtonTitles:SenkoLocalizedText(@"Save"), nil] autorelease];
     editor.tag = 4206;
-    if ([editor respondsToSelector:@selector(setAlertViewStyle:)]) {
-        editor.alertViewStyle = UIAlertViewStylePlainTextInput;
-        UITextField *field = [editor textFieldAtIndex:0];
-        field.autocapitalizationType = UITextAutocapitalizationTypeNone;
-        field.autocorrectionType = UITextAutocorrectionTypeNo;
-        field.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
-        field.text = [_settings objectForKey:key];
-    }
-    [_editingKey release];
-    _editingKey = [key copy];
+    editor.alertViewStyle = UIAlertViewStylePlainTextInput;
+    UITextField *field = [editor textFieldAtIndex:0];
+    field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    field.autocorrectionType = UITextAutocorrectionTypeNo;
+    field.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
+    field.text = [_settings objectForKey:key];
     [editor show];
+}
+
+- (void)applyEditedText:(NSString *)text {
+    if (![_editingKey length]) return;
+    NSString *value = [text stringByTrimmingCharactersInSet:
+                       [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([value length]) [self applySetting:_editingKey value:value];
 }
 
 /* the alert picker is the one control that exists unchanged from ios 5 to 15 */
@@ -722,14 +742,14 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
     UINavigationController *nav = self.navigationController;
     void (^showInstall)(void) = ^{
         UIViewController *host = nav ? (UIViewController *)nav : (UIViewController *)self;
-        if (host.presentedViewController) {
+        if (SenkoPresentedController(host)) {
             host = self;
         }
         UpdateInstallVC *uvc = [[[UpdateInstallVC alloc] initWithControl:_ctl
                                                              packagePath:pkg] autorelease];
         uvc.modalTransitionStyle = UIModalTransitionStyleCoverVertical;
         uvc.modalPresentationStyle = UIModalPresentationFullScreen;
-        [host presentViewController:uvc animated:YES completion:nil];
+        SenkoPresentModal(host, uvc);
     };
     if (nav && nav.topViewController != self) {
 /* wait for the pop animation */
@@ -797,11 +817,8 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
         return;
     }
     if (alert.tag == 4206) {
-        if (buttonIndex == alert.cancelButtonIndex || ![_editingKey length]) return;
-        NSString *value = [[[alert textFieldAtIndex:0] text]
-            stringByTrimmingCharactersInSet:
-                [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        if ([value length]) [self applySetting:_editingKey value:value];
+        if (buttonIndex == alert.cancelButtonIndex) return;
+        [self applyEditedText:[[alert textFieldAtIndex:0] text]];
         return;
     }
     if (alert.tag == 4204) {
@@ -868,7 +885,7 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
             [self openUpdateBrowser];
             break;
         case SenkoRowRules:
-            [self pushController:[[[RulesVC alloc] initWithControl:_ctl] autorelease]];
+            [self pushController:[[[RoutingVC alloc] initWithControl:_ctl] autorelease]];
             break;
         case SenkoRowAbout:
             [self pushController:[[[AboutVC alloc] init] autorelease]];
@@ -892,7 +909,7 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
             [alert show];
             return;
         }
-        [vc dismissViewControllerAnimated:YES completion:nil];
+        SenkoDismissModal(vc, nil);
     }];
 }
 

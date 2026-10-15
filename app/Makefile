@@ -15,7 +15,7 @@ ENTITLEMENTS ?= entitlements.plist
 #        ARCH="-arch arm64 -miphoneos-version-min=7.0"
 TRIPLE  ?= arm-apple-darwin11
 CC      := $(TC)/clang -target $(TRIPLE) -B $(TC)
-ARCH    ?= -arch armv7 -miphoneos-version-min=5.0
+ARCH    ?= -arch armv7 -miphoneos-version-min=4.3
 CFLAGS  := -fno-objc-arc -fblocks -Wall -Wextra -O2 $(EXTRA_CFLAGS) $(ARCH) -isysroot $(SDK) \
            -I. -Itheme -Ithird_party/zbar/include -Ithird_party/zbar/zbar \
            -Ithird_party/zbar/zbar/decoder -Ithird_party/zbar/zbar/qrcode
@@ -63,6 +63,11 @@ APP_SRC := \
 	main_vc_tunnel.m \
 	main_vc_import.m \
 	settings_vc.m \
+	routing_vc.m \
+	routing_ui.m \
+	app_routing_vc.m \
+	app_catalog.m \
+	profile_entries_vc.m \
 	theme_edit_vc.m \
 	about_vc.m \
 	logs_vc.m \
@@ -81,6 +86,8 @@ APP_SRC := \
 	qr_scan.m \
 	server_cell.m \
 	home_view.m \
+	card_kit.m \
+	rival_prompt.m \
 	server_picker.m \
 	stats_vc.m \
 	server_sheet.m \
@@ -90,6 +97,7 @@ APP_SRC := \
 	empty_state.m \
 	themes_vc.m \
 	rules_vc.m \
+	text_prompt.m \
 	dev_table_vc.m \
 	dev_menu_vc.m \
 	dev_checks_vc.m \
@@ -100,6 +108,7 @@ APP_SRC := \
 	../daemon/core/b64.c \
 	../daemon/core/control.c \
 	../daemon/core/amnezia_bundle.c \
+	../daemon/core/amnezia_qr.c \
 	../daemon/core/third_party/cJSON.c \
 	$(THEME_SRC)
 
@@ -144,7 +153,7 @@ $(BIN): $(APP_SRC) $(ZBAR_OBJ) $(FLAG_SRC) $(ICON_SRC) $(GLYPH_SRC) $(EMOJI_SRC)
 		cp Info.plist $(APP)/; \
 		cp icons/Icon.png icons/Icon@2x.png icons/Icon-72.png icons/Icon-72@2x.png \
 		   icons/Icon-60@2x.png icons/Icon-60@3x.png icons/Icon-76.png icons/Icon-76@2x.png \
-		   icons/Icon-83.5@2x.png icons/sqmrak.jpg icons/boykisser.png icons/senko-fall.png icons/meow.caf icons/meow.wav icons/ouch.wav icons/miside-bg.jpg icons/frutiger-bg.jpg icons/frutiger-bg-dark.jpg icons/frutiger-bg-dark-wide.jpg icons/server-placeholder.png \
+		   icons/Icon-83.5@2x.png icons/sqmrak.jpg icons/boykisser.png icons/senko-fall.png icons/senko-jealous.png icons/meow.caf icons/meow.wav icons/ouch.wav icons/miside-bg.jpg icons/frutiger-bg.jpg icons/frutiger-bg-dark.jpg icons/frutiger-bg-dark-wide.jpg icons/server-placeholder.png \
 		   icons/ios26-bg-light.jpg icons/ios26-bg-dark.jpg \
 		   icons/Default.png icons/Default@2x.png icons/Default-568h@2x.png \
 		   icons/Default-667h@2x.png icons/Default-736h@3x.png \

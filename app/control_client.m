@@ -45,6 +45,28 @@
 }
 @end
 
+@implementation SenkoRoutingProfile
+- (void)dealloc {
+    [name release];
+    [super dealloc];
+}
+@end
+
+@implementation SenkoRoutingEntry
+- (void)dealloc {
+    [action release];
+    [entry release];
+    [super dealloc];
+}
+@end
+
+@implementation SenkoGeoState
+- (void)dealloc {
+    [message release];
+    [super dealloc];
+}
+@end
+
 @implementation SenkoDiagFact
 - (void)dealloc {
     [key release];
@@ -148,6 +170,22 @@ static int rules_reply_complete(const char *buf, size_t len) {
         size_t llen = i - start;
         const char *ln = buf + start;
         if ((llen >= 8 && memcmp(ln, "RULEEND ", 8) == 0) ||
+            (llen >= 4 && memcmp(ln, "ERR ", 4) == 0))
+            return 1;
+        start = i + 1;
+    }
+    return 0;
+}
+
+/* ROUTING closes with ROUTINGEND and ROUTINGENTRIES with RENTRYEND */
+static int routing_reply_complete(const char *buf, size_t len) {
+    size_t start = 0;
+    for (size_t i = 0; i < len; ++i) {
+        if (buf[i] != '\n') continue;
+        size_t llen = i - start;
+        const char *ln = buf + start;
+        if ((llen >= 10 && memcmp(ln, "ROUTINGEND", 10) == 0) ||
+            (llen >= 9 && memcmp(ln, "RENTRYEND", 9) == 0) ||
             (llen >= 4 && memcmp(ln, "ERR ", 4) == 0))
             return 1;
         start = i + 1;
@@ -348,6 +386,8 @@ static int senkoCtlAuth(int fd, NSString *sockPath, int timeoutMs,
     else if (is_list) done_fn = list_reply_complete;
     else if (is_rules) done_fn = rules_reply_complete;
     else if (is_diag) done_fn = diag_reply_complete;
+    else if ([cmd isEqualToString:@"ROUTING"] || [cmd hasPrefix:@"ROUTINGENTRIES "])
+        done_fn = routing_reply_complete;
     else if ([cmd hasPrefix:@"NATIVE_CONFIG "])
         done_fn = native_config_reply_complete;
     else if (is_blob) done_fn = blob_reply_complete;
@@ -510,6 +550,115 @@ static SenkoRule *parseRULE(NSString *line) {
     [self sendCommand:[NSString stringWithFormat:@"DELRULE %d", index]
             timeoutMs:3000
                 reply:done];
+}
+
+/* ROUTING <sub> <active> <global> <rules> <unsupported> <geo tags> <updated> <name>.
+   the name is last because it may hold spaces */
+static SenkoRoutingProfile *parseROUTING(NSString *line) {
+    NSArray *t = [line componentsSeparatedByString:@" "];
+    if ([t count] < 9) return nil;
+    SenkoRoutingProfile *p = [[[SenkoRoutingProfile alloc] init] autorelease];
+    p->index = [[t objectAtIndex:1] intValue];
+    p->active = [[t objectAtIndex:2] intValue] != 0;
+    p->globalProxy = [[t objectAtIndex:3] intValue] != 0;
+    p->rules = [[t objectAtIndex:4] intValue];
+    p->unsupported = [[t objectAtIndex:5] intValue];
+    p->geoTags = [[t objectAtIndex:6] intValue];
+    p->updated = (unsigned long long)[[t objectAtIndex:7] longLongValue];
+    p->name = [[[t subarrayWithRange:NSMakeRange(8, [t count] - 8)]
+                componentsJoinedByString:@" "] copy];
+    return p;
+}
+
+- (void)listRoutingProfiles:(void (^)(NSArray *, int))done {
+    [self sendCommand:@"ROUTING" timeoutMs:3000 reply:^(NSString *reply) {
+        if (![reply length]) {
+            if (done) done(nil, -1);
+            return;
+        }
+        NSMutableArray *profiles = [NSMutableArray array];
+        BOOL sawEnd = NO;
+        int active = -1;
+        for (NSString *ln in [reply componentsSeparatedByString:@"\n"]) {
+            if ([ln hasPrefix:@"ROUTINGEND "]) {
+                sawEnd = YES;
+                active = [[ln substringFromIndex:11] intValue];
+                break;
+            }
+            if (![ln hasPrefix:@"ROUTING "]) continue;
+            SenkoRoutingProfile *p = parseROUTING(ln);
+            if (p) [profiles addObject:p];
+        }
+        if (done) done(sawEnd ? profiles : nil, active);
+    }];
+}
+
+- (void)setRoutingProfileIndex:(int)index reply:(void (^)(NSString *))done {
+    [self sendCommand:[NSString stringWithFormat:@"ROUTINGSET %@",
+                       index < 0 ? @"off" : [NSString stringWithFormat:@"%d", index]]
+            timeoutMs:3000
+                reply:done];
+}
+
+/* RENTRY <action> <site|ip> <supported> <entry>. the entry is last, spaces and all */
+- (void)listRoutingEntriesIndex:(int)index done:(void (^)(NSArray *, int))done {
+    [self sendCommand:[NSString stringWithFormat:@"ROUTINGENTRIES %d", index]
+            timeoutMs:3000
+                reply:^(NSString *reply) {
+        if (![reply length]) {
+            if (done) done(nil, 0);
+            return;
+        }
+        NSMutableArray *entries = [NSMutableArray array];
+        BOOL sawEnd = NO;
+        int total = 0;
+        for (NSString *ln in [reply componentsSeparatedByString:@"\n"]) {
+            if ([ln hasPrefix:@"RENTRYEND "]) {
+                sawEnd = YES;
+                total = [[ln substringFromIndex:10] intValue];
+                break;
+            }
+            if (![ln hasPrefix:@"RENTRY "]) continue;
+            NSArray *t = [ln componentsSeparatedByString:@" "];
+            if ([t count] < 5) continue;
+            SenkoRoutingEntry *e = [[[SenkoRoutingEntry alloc] init] autorelease];
+            e->action = [[t objectAtIndex:1] copy];
+            e->isIP = [[t objectAtIndex:2] isEqualToString:@"ip"];
+            e->supported = [[t objectAtIndex:3] intValue] != 0;
+            e->entry = [[[t subarrayWithRange:NSMakeRange(4, [t count] - 4)]
+                         componentsJoinedByString:@" "] copy];
+            [entries addObject:e];
+        }
+        if (done) done(sawEnd ? entries : nil, total);
+    }];
+}
+
+/* GEO <busy> <stamp> <missing> <result> <message> */
+- (void)geoState:(void (^)(SenkoGeoState *))done {
+    [self sendCommand:@"GEO" timeoutMs:3000 reply:^(NSString *reply) {
+        NSString *ln = [[reply componentsSeparatedByString:@"\n"] objectAtIndex:0];
+        NSArray *t = [ln componentsSeparatedByString:@" "];
+        if (![ln hasPrefix:@"GEO "] || [t count] < 5) {
+            if (done) done(nil);
+            return;
+        }
+        SenkoGeoState *g = [[[SenkoGeoState alloc] init] autorelease];
+        g->busy = [[t objectAtIndex:1] intValue] != 0;
+        g->stamp = (unsigned long long)[[t objectAtIndex:2] longLongValue];
+        g->missing = [[t objectAtIndex:3] intValue];
+        g->result = [[t objectAtIndex:4] intValue];
+        g->message = [[[t subarrayWithRange:NSMakeRange(5, [t count] - 5)]
+                       componentsJoinedByString:@" "] copy];
+        if (done) done(g);
+    }];
+}
+
+- (void)updateGeo:(void (^)(NSString *))done {
+    [self sendCommand:@"GEOUPDATE" timeoutMs:3000 reply:done];
+}
+
+- (void)removeRival:(void (^)(NSString *))done {
+    [self sendCommand:@"VLESSCORE REMOVE" timeoutMs:5000 reply:done];
 }
 
 - (void)daemonDiagnostics:(void (^)(NSArray *))done {
@@ -764,7 +913,8 @@ static BOOL tokenIsProto(NSString *s) {
     return [s isEqualToString:@"vless"] || [s isEqualToString:@"socks5"] ||
            [s isEqualToString:@"http"] || [s isEqualToString:@"https"] ||
            [s isEqualToString:@"trojan"] || [s isEqualToString:@"shadowsocks"] ||
-           [s isEqualToString:@"ss"] || [s isEqualToString:@"hysteria2"];
+           [s isEqualToString:@"ss"] || [s isEqualToString:@"hysteria2"] ||
+           [s isEqualToString:@"vmess"];
 }
 
 static BOOL tokenIsNet(NSString *s) {
@@ -790,7 +940,7 @@ static SenkoServer *parseSRV(NSString *line) {
     sv->group    = [[t objectAtIndex:3] intValue];
     NSUInteger remarkStart = 7;
     BOOL unsupported = [[t objectAtIndex:7] isEqualToString:@"0"];
-    /* a placeholder row names its foreign protocol ("vmess") in the proto slot */
+    /* a placeholder row names its foreign protocol ("tuic") in the proto slot */
     BOOL newLayout = [t count] >= 10 &&
         (tokenIsProto([t objectAtIndex:4]) || unsupported) &&
         tokenIsNet([t objectAtIndex:5]) &&
@@ -1011,9 +1161,10 @@ static SenkoSub *parseSUB(NSString *line) {
 
 - (void)traffic:(void (^)(BOOL, uint64_t, uint64_t))done {
     [self sendCommand:@"STATUS" reply:^(NSString *reply) {
-        BOOL connected = [SenkoControlStateFromReply(reply, NULL)
-                          isEqualToString:@"connected"];
-        if (done) done(connected && _trafficKnown, _trafficUp, _trafficDown);
+        (void)reply;
+        /* the daemon counts the running backend, vless or amneziawg, and the
+           caller already knows the tunnel is up */
+        if (done) done(_trafficKnown, _trafficUp, _trafficDown);
     }];
 }
 
@@ -1152,21 +1303,34 @@ static SenkoSub *parseSUB(NSString *line) {
    about amneziawg on every device whose senkod was simply not running */
 - (void)awgRequest:(NSString *)verb path:(NSString *)path
        silenceIsError:(BOOL)silenceIsError reply:(void (^)(NSString *))done {
+    [self awgRequest:verb path:path silenceIsError:silenceIsError
+              uptime:^(NSString *status, long up) {
+        (void)up;
+        if (done) done(status);
+    }];
+}
+
+/* up is the AWGUP line of a connected tunnel, -1 when the reply has none */
+- (void)awgRequest:(NSString *)verb path:(NSString *)path
+       silenceIsError:(BOOL)silenceIsError uptime:(void (^)(NSString *, long))done {
     NSString *cmd = [path length] ? [NSString stringWithFormat:@"AWG %@ %@", verb, path]
                                   : [NSString stringWithFormat:@"AWG %@", verb];
     [self sendCommand:cmd timeoutMs:20000 reply:^(NSString *reply) {
         NSMutableString *out = [NSMutableString string];
         NSString *error = nil;
+        long up = -1;
         for (NSString *line in [reply componentsSeparatedByString:@"\n"]) {
             if ([line hasPrefix:@"AWG "])
                 [out appendFormat:@"%@\n", [line substringFromIndex:4]];
+            else if ([line hasPrefix:@"AWGUP "])
+                up = atol([[line substringFromIndex:6] UTF8String]);
             else if ([line hasPrefix:@"ERR "])
                 error = [line substringFromIndex:4];
         }
         NSString *status = [out length] ? out : nil;
         if (!status && error) status = [NSString stringWithFormat:@"error %@", error];
         else if (!status && !reply && silenceIsError) status = @"error senkod did not answer";
-        if (done) done(status);
+        if (done) done(status, up);
     }];
 }
 
@@ -1181,6 +1345,10 @@ static SenkoSub *parseSUB(NSString *line) {
 
 - (void)awgStatus:(void (^)(NSString *))done {
     [self awgRequest:@"STATUS" path:nil silenceIsError:NO reply:done];
+}
+
+- (void)awgStatusWithUptime:(void (^)(NSString *, long))done {
+    [self awgRequest:@"STATUS" path:nil silenceIsError:NO uptime:done];
 }
 
 - (void)probeAWGAtPath:(NSString *)path reply:(void (^)(NSString *))done {

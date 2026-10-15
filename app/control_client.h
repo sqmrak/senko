@@ -49,6 +49,41 @@ NSString *SenkoControlStateFromReply(NSString *reply, long *uptime);
 }
 @end
 
+/* a routing profile a subscription delivered, as the daemon summarizes it */
+@interface SenkoRoutingProfile : NSObject {
+@public
+    int      index;          /* the subscription's index */
+    BOOL     active;
+    BOOL     globalProxy;    /* unmatched traffic goes through the tunnel */
+    int      rules;          /* entries senko can match */
+    int      unsupported;    /* entries it cannot (regexp, ext) */
+    int      geoTags;
+    unsigned long long updated;
+    NSString *name;
+}
+@end
+
+/* one entry of a profile as the panel wrote it */
+@interface SenkoRoutingEntry : NSObject {
+@public
+    NSString *action;
+    BOOL     isIP;
+    BOOL     supported;
+    NSString *entry;
+}
+@end
+
+/* the state of the geo data the active profile names */
+@interface SenkoGeoState : NSObject {
+@public
+    BOOL     busy;
+    unsigned long long stamp;   /* seconds since the epoch of the last complete download, 0 never */
+    int      missing;           /* tags of the active profile that have no file yet */
+    int      result;            /* 0 none yet, 1 the last download finished, 2 it failed */
+    NSString *message;
+}
+@end
+
 /* one line of the daemon's diagnostic report. the key is a dotted path and the
    value is free text, so an app older than the daemon shows a fact it has no
    title for instead of dropping it */
@@ -134,6 +169,17 @@ NSString *SenkoControlStateFromReply(NSString *reply, long *uptime);
 - (void)addRuleAction:(NSString *)action type:(NSString *)type
                 value:(NSString *)value reply:(void (^)(NSString *reply))done;
 - (void)deleteRuleIndex:(int)index reply:(void (^)(NSString *reply))done;
+/* routing profiles. activeIndex is the subscription whose profile is switched
+   on, -1 for none. a profile applies at the next connect */
+- (void)listRoutingProfiles:(void (^)(NSArray *profiles, int activeIndex))done;
+/* index -1 switches routing off */
+- (void)setRoutingProfileIndex:(int)index reply:(void (^)(NSString *reply))done;
+- (void)listRoutingEntriesIndex:(int)index
+                           done:(void (^)(NSArray *entries, int total))done;
+- (void)geoState:(void (^)(SenkoGeoState *state))done;
+- (void)updateGeo:(void (^)(NSString *reply))done;
+/* asks the daemon to remove vless-core, which the user agreed to on the prompt */
+- (void)removeRival:(void (^)(NSString *reply))done;
 /* which rung of every fallback ladder the daemon actually took */
 - (void)daemonDiagnostics:(void (^)(NSArray *facts))done;
 /* the same check the server rows run, with the stage list the daemon walked.
@@ -152,6 +198,8 @@ NSString *SenkoControlStateFromReply(NSString *reply, long *uptime);
 - (void)startAWGAtPath:(NSString *)path reply:(void (^)(NSString *status))done;
 - (void)stopAWG:(void (^)(NSString *status))done;
 - (void)awgStatus:(void (^)(NSString *status))done;
+/* uptime in seconds, -1 when the daemon sent none */
+- (void)awgStatusWithUptime:(void (^)(NSString *status, long uptime))done;
 - (void)probeAWGAtPath:(NSString *)path reply:(void (^)(NSString *status))done;
 - (void)validateAWGAtPath:(NSString *)path reply:(void (^)(NSString *status))done;
 - (void)updatePackageAtPath:(NSString *)path reply:(void (^)(NSString *status))done;
