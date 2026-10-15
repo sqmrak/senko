@@ -608,7 +608,16 @@ enable_senkostatus_hooks() {
   [ -f "${STATUS_DYLIB}" ] || return 0
   [ -f "${STATUS_PLIST}" ] || return 0
   mkdir -p "${SUBSTRATE_DIR}" || return 0
-  ln -sf "${STATUS_DYLIB}" "${SUBSTRATE_DIR}/senkostatus.dylib" || return 0
+  rm -f "${SUBSTRATE_DIR}/senkostatus.dylib"
+  if [ -n "$JBROOT" ]; then
+    ln -sf "${STATUS_DYLIB}" "${SUBSTRATE_DIR}/senkostatus.dylib" || return 0
+  else
+    # a rootful ios 10 springboard wrote no status line with the link in place, and a
+    # rootful ios 10.3.3 launchd would not run a link to a payload binary either
+    cp "${STATUS_DYLIB}" "${SUBSTRATE_DIR}/senkostatus.dylib" || return 0
+    chown root:wheel "${SUBSTRATE_DIR}/senkostatus.dylib" || true
+    chmod 755 "${SUBSTRATE_DIR}/senkostatus.dylib" || true
+  fi
   cp "${STATUS_PLIST}" "${SUBSTRATE_DIR}/senkostatus.plist" || return 0
   chown root:wheel "${SUBSTRATE_DIR}/senkostatus.plist" || true
   chmod 644 "${SUBSTRATE_DIR}/senkostatus.plist" || true

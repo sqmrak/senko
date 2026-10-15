@@ -423,5 +423,52 @@ class RootfulHealTests(unittest.TestCase):
         self.assertEqual(self.log_text(), '')
 
 
+class StatusHookPlacement(unittest.TestCase):
+    """the status library reaches springboard through the substrate directory"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name)
+        self.dylib = self.base / 'payload/usr/lib/senkostatus.dylib'
+        self.plist = self.base / 'payload/usr/lib/senkostatus.plist'
+        self.dylib.parent.mkdir(parents=True)
+        self.dylib.write_bytes(b'\xca\xfe\xba\xbe fixture library')
+        self.plist.write_text('{ Filter = { Bundles = ( "com.apple.springboard" ); }; }\n')
+        self.target = self.base / 'substrate'
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def enable(self, jbroot):
+        script = 'JBROOT="%s"\nSTATUS_DYLIB="%s"\nSTATUS_PLIST="%s"\nSUBSTRATE_DIR="%s"\n%s\nenable_senkostatus_hooks\n' % (
+            jbroot, self.dylib, self.plist, self.target,
+            shell_function(POSTINST, 'enable_senkostatus_hooks'))
+        return subprocess.run(['/bin/sh', '-c', script], capture_output=True, text=True)
+
+    def test_rootful_gets_a_real_copy(self):
+        self.assertEqual(self.enable('').returncode, 0)
+        placed = self.target / 'senkostatus.dylib'
+        self.assertTrue(placed.is_file() and not placed.is_symlink())
+        self.assertEqual(placed.read_bytes(), self.dylib.read_bytes())
+        self.assertTrue((self.target / 'senkostatus.plist').is_file())
+
+    def test_rootful_replaces_an_older_link_without_touching_the_payload(self):
+        self.target.mkdir()
+        (self.target / 'senkostatus.dylib').symlink_to(self.dylib)
+        self.assertEqual(self.enable('').returncode, 0)
+        placed = self.target / 'senkostatus.dylib'
+        self.assertFalse(placed.is_symlink())
+        self.assertEqual(self.dylib.read_bytes(), b'\xca\xfe\xba\xbe fixture library')
+
+    def test_rootless_keeps_the_link(self):
+        self.assertEqual(self.enable('/var/jb').returncode, 0)
+        self.assertTrue((self.target / 'senkostatus.dylib').is_symlink())
+
+    def test_a_missing_library_places_nothing(self):
+        self.dylib.unlink()
+        self.assertEqual(self.enable('').returncode, 0)
+        self.assertFalse((self.target / 'senkostatus.dylib').exists())
+
+
 if __name__ == '__main__':
     unittest.main()
