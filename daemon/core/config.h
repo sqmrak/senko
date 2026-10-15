@@ -37,10 +37,18 @@ typedef enum {
    later, and the utun backend dials it through daemon/hy2_engine.c everywhere
    else. see daemon_ctl_apply's CTL_ACT_START */
     VL_PROTO_HYSTERIA2,
-/* a feed entry senko cannot run (vmess, tuic, a bad field), kept as a named row
+/* the aead header only: the uuid lives in uuid, the body cipher ("auto",
+   "aes-128-gcm", "chacha20-poly1305") in encryption */
+    VL_PROTO_VMESS,
+/* a feed entry senko cannot run (tuic, ssr, a bad field), kept as a named row
    so the list shows everything the panel sent. never dialed */
     VL_PROTO_UNSUPPORTED
 } vl_proto_t;
+
+/* vless and vmess name their user by uuid; every dial path parses it for both */
+static inline int cfg_proto_uses_uuid(vl_proto_t p) {
+    return p == VL_PROTO_VLESS || p == VL_PROTO_VMESS;
+}
 
 /* fixed storage avoids heap ownership ambiguity on old ios */
 typedef struct {
@@ -114,9 +122,14 @@ const char *vl_sec_name(vl_sec_t s);
 cfg_status_t cfg_parse_link(const char *uri, vl_server_t *out);
 
 /* the same, with why set to a short name of what could not be carried
-   ("vmess", "httpupgrade transport", "shadowsocks plugin obfs-local") when the
+   ("tuic", "httpupgrade transport", "shadowsocks plugin obfs-local") when the
    result is CFG_ERR_UNSUPPORTED. core/share_link.c */
 cfg_status_t cfg_parse_link_ex(const char *uri, vl_server_t *out, char *why, size_t why_cap);
+
+/* the base64 json body of a v2rayn vmess:// link, everything after the scheme
+   up to a '#' or '?'. core/config.c, called from the share link parser */
+cfg_status_t cfg_parse_vmess_json(const char *body, size_t len, vl_server_t *out,
+                                  char *why, size_t why_cap);
 
 /* 1 when h can be a dns name: an sni or a tls host */
 int cfg_sni_text_ok(const char *h);
@@ -203,7 +216,7 @@ void cfg_node_ss_method(vl_server_t *s, const char *method);
    security */
 void cfg_node_finish(vl_server_t *s);
 
-/* "skipped 3: vmess 2, tuic 1", or "" when nothing was skipped. the four most
+/* "skipped 3: tuic 2, ssr 1", or "" when nothing was skipped. the four most
    common kinds are named, the rest summed as "other" */
 void cfg_import_stats_text(const cfg_import_stats_t *stats, char *out, size_t cap);
 

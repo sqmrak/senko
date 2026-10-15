@@ -182,17 +182,30 @@ int cfg_validate_server(const vl_server_t *s, char *reason, size_t reason_cap) {
         return 1;
     }
 
-    if (s->proto != VL_PROTO_VLESS) {
+    /* vmess shares every transport and security vless has; only the id, the
+       body cipher and the absence of flow differ. xray runs any cipher name it
+       does not know as auto, so the name is not checked here either */
+    if (s->proto == VL_PROTO_VMESS) {
+        if (!uuid_text_ok(s->uuid)) {
+            cfg_reason(reason, reason_cap, "invalid vmess id");
+            return 0;
+        }
+        if (s->flow[0]) {
+            cfg_reason(reason, reason_cap, "vmess does not use flow");
+            return 0;
+        }
+    } else if (s->proto != VL_PROTO_VLESS) {
         cfg_reason(reason, reason_cap, "unsupported protocol");
         return 0;
-    }
-    if (!uuid_text_ok(s->uuid)) {
-        cfg_reason(reason, reason_cap, "invalid vless id");
-        return 0;
-    }
-    if (s->encryption[0] && strcmp(s->encryption, "none") != 0) {
-        cfg_reason(reason, reason_cap, "vless encryption");
-        return 0;
+    } else {
+        if (!uuid_text_ok(s->uuid)) {
+            cfg_reason(reason, reason_cap, "invalid vless id");
+            return 0;
+        }
+        if (s->encryption[0] && strcmp(s->encryption, "none") != 0) {
+            cfg_reason(reason, reason_cap, "vless encryption");
+            return 0;
+        }
     }
     if (s->net != VL_NET_TCP && s->net != VL_NET_WS &&
         s->net != VL_NET_GRPC && s->net != VL_NET_XHTTP) {
@@ -545,6 +558,9 @@ static int take_link(const char *link, vl_server_t *out, size_t max, size_t *cou
     char remark[256], host[256];
     uint16_t port = 0;
     if (*count >= max) return 0;
+    /* a routing profile is not a node: the daemon reads it from the same body
+       (routing_find), so it must not be counted as a link that failed to open */
+    if (strncasecmp(link, "happ://routing/", 15) == 0) return 0;
     if (strncasecmp(link, "happ://", 7) == 0) {
         char plain[8192];
         size_t before = *count;
@@ -819,6 +835,68 @@ static void link_fields(const char *link, char *remark, size_t remark_cap,
     }
 }
 
+static int json_flag_on(const cJSON *obj, const char *key);
+
+/* the v2rayn body of a vmess:// link: base64 of a flat json object whose
+   "type" is the tcp header, the grpc mode or the xhttp mode depending on net */
+cfg_status_t cfg_parse_vmess_json(const char *body, size_t len, vl_server_t *out,
+                                  char *why, size_t why_cap) {
+    unsigned char plain[4096];
+    size_t n = 0;
+    char id[64] = "", net[24] = "", type[24] = "", tls[24] = "";
+    cJSON *root;
+    if (b64_decode(body, len, plain, sizeof plain - 1, &n) != 0 || n == 0)
+        return CFG_ERR_NO_AT;
+    root = cJSON_ParseWithLength((const char *)plain, n);
+    if (!cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return CFG_ERR_NO_AT;
+    }
+    out->proto = VL_PROTO_VMESS;
+    if (jstr_copy(root, "add", out->host, sizeof out->host) != 0 || !out->host[0]) {
+        cJSON_Delete(root);
+        return CFG_ERR_NO_HOST;
+    }
+    if (j_port(root, "port", &out->port) != 0) {
+        cJSON_Delete(root);
+        return CFG_ERR_BAD_PORT;
+    }
+    if (jstr_copy(root, "id", id, sizeof id) != 0 || !id[0]) {
+        cJSON_Delete(root);
+        return CFG_ERR_NO_AT;
+    }
+    cfg_node_vless_id(out, id);
+    if (jstr_copy(root, "scy", out->encryption, sizeof out->encryption) != 0 ||
+        !out->encryption[0])
+        snprintf(out->encryption, sizeof out->encryption, "auto");
+    (void)jstr_copy(root, "ps", out->remark, sizeof out->remark);
+    (void)jstr_copy(root, "net", net, sizeof net);
+    (void)jstr_copy(root, "type", type, sizeof type);
+    (void)jstr_copy(root, "tls", tls, sizeof tls);
+    (void)jstr_copy(root, "host", out->ws_host, sizeof out->ws_host);
+    (void)jstr_copy(root, "path", out->path, sizeof out->path);
+    (void)jstr_copy(root, "sni", out->sni, sizeof out->sni);
+    (void)jstr_copy(root, "fp", out->fp, sizeof out->fp);
+    (void)jstr_copy(root, "pbk", out->pbk, sizeof out->pbk);
+    (void)jstr_copy(root, "sid", out->sid, sizeof out->sid);
+    (void)jstr_copy(root, "mode", out->mode, sizeof out->mode);
+    out->insecure = json_flag_on(root, "allowInsecure") || json_flag_on(root, "insecure");
+    cJSON_Delete(root);
+
+    int is_tcp = !net[0] || strcasecmp(net, "tcp") == 0 || strcasecmp(net, "raw") == 0;
+    if (cfg_node_transport(out, net, is_tcp ? type : NULL, why, why_cap) != 0 ||
+        cfg_node_security(out, tls, why, why_cap) != 0)
+        return CFG_ERR_UNSUPPORTED;
+    if (out->net == VL_NET_GRPC && strcasecmp(type, "multi") == 0) out->grpc_multi = 1;
+    if (out->net == VL_NET_XHTTP && !out->mode[0] && type[0] && strcasecmp(type, "none") != 0)
+        snprintf(out->mode, sizeof out->mode, "%s", type);
+    /* a websocket host only means something on transports that send it */
+    if (out->net != VL_NET_WS && out->net != VL_NET_HTTP && out->net != VL_NET_XHTTP)
+        out->ws_host[0] = '\0';
+    cfg_node_finish(out);
+    return CFG_OK;
+}
+
 /* sing-box gates tls and reality on their own boolean, and a block that is
    present but disabled means plain tcp, not tls */
 static int json_flag_on(const cJSON *obj, const char *key) {
@@ -977,6 +1055,15 @@ static int xray_node(const cJSON *ob, vl_server_t *s, char *why, size_t cap) {
         (void)jstr_copy(user, "flow", s->flow, sizeof s->flow);
         if (jstr_copy(user, "encryption", s->encryption, sizeof s->encryption) != 0)
             snprintf(s->encryption, sizeof s->encryption, "none");
+    } else if (strcmp(proto, "vmess") == 0) {
+        char id[64] = "";
+        ep = xray_endpoint(settings, "vnext");
+        user = xray_user(ep);
+        s->proto = VL_PROTO_VMESS;
+        if (jstr_copy(user, "id", id, sizeof id) != 0) goto malformed;
+        cfg_node_vless_id(s, id);
+        if (jstr_copy(user, "security", s->encryption, sizeof s->encryption) != 0)
+            snprintf(s->encryption, sizeof s->encryption, "auto");
     } else if (strcmp(proto, "trojan") == 0 || strcmp(proto, "shadowsocks") == 0) {
         ep = xray_endpoint(settings, "servers");
         if (jstr_copy(ep, "password", s->pass, sizeof s->pass) != 0) goto malformed;
@@ -1101,6 +1188,13 @@ static int singbox_node(const cJSON *ob, vl_server_t *s, char *why, size_t cap) 
         cfg_node_vless_id(s, id);
         (void)jstr_copy(ob, "flow", s->flow, sizeof s->flow);
         snprintf(s->encryption, sizeof s->encryption, "none");
+    } else if (strcmp(type, "vmess") == 0) {
+        char id[64] = "";
+        s->proto = VL_PROTO_VMESS;
+        if (jstr_copy(ob, "uuid", id, sizeof id) != 0) goto malformed;
+        cfg_node_vless_id(s, id);
+        if (jstr_copy(ob, "security", s->encryption, sizeof s->encryption) != 0)
+            snprintf(s->encryption, sizeof s->encryption, "auto");
     } else if (strcmp(type, "trojan") == 0 || strcmp(type, "hysteria2") == 0) {
         s->proto = type[0] == 't' ? VL_PROTO_TROJAN : VL_PROTO_HYSTERIA2;
         if (jstr_copy(ob, "password", s->pass, sizeof s->pass) != 0) goto malformed;
@@ -1131,6 +1225,7 @@ static int singbox_node(const cJSON *ob, vl_server_t *s, char *why, size_t cap) 
 
     switch (s->proto) {
     case VL_PROTO_VLESS:
+    case VL_PROTO_VMESS:
     case VL_PROTO_TROJAN:
         if (singbox_transport(ob, s, why, cap) != 0) return -1;
         singbox_tls(ob, s);
@@ -1383,6 +1478,9 @@ static cfg_status_t parse_body(const char *blob, size_t blob_len, vl_server_t *o
 
     if (depth > 3) return CFG_OK;
     /* one happ link can carry a whole feed: a list, base64 or json */
+    if (blob_len >= 15 && strncasecmp(blob, "happ://routing/", 15) == 0 &&
+        !memchr(blob, '\n', blob_len))
+        return CFG_OK;
     if (looks_like_happ(blob, blob_len) && !memchr(blob, '\n', blob_len)) {
         char tmp[8192];
         char plain[16384];

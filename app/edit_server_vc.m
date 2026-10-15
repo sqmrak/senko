@@ -120,12 +120,16 @@
         _lblUuid.text = SenkoLocalizedText(@"PASSWORD");
         _lblFlow.text = SenkoLocalizedText(@"CIPHER");
         if (![_flow.text length]) _flow.text = @"aes-256-gcm";
+    } else if (p == 3) {
+        _lblUuid.text = SenkoLocalizedText(@"UUID");
+        _lblFlow.text = SenkoLocalizedText(@"CIPHER");
+        if (![_flow.text length]) _flow.text = @"auto";
     }
     [self layoutEditForm];
 }
 
 - (void)cancelPressed {
-    [self dismissViewControllerAnimated:YES completion:nil];
+    SenkoDismissModal(self, nil);
 }
 
 - (void)savePressed {
@@ -161,13 +165,16 @@
         return;
     }
 
+    /* vmess shares the vless form; its cipher field goes out as encryption= */
+    BOOL vmess = _proto.selectedSegmentIndex == 3;
     NSArray *securityValues = [NSArray arrayWithObjects:@"none", @"tls", @"reality", nil];
     NSArray *transportValues = [NSArray arrayWithObjects:@"tcp", @"ws", @"xhttp", @"grpc", nil];
     NSString *security = [securityValues objectAtIndex:_security.selectedSegmentIndex];
     NSString *transport = [transportValues objectAtIndex:_transport.selectedSegmentIndex];
-    NSMutableString *uri = [NSMutableString stringWithFormat:@"vless://%@@%@:%@?security=%@&type=%@",
+    NSMutableString *uri = [NSMutableString stringWithFormat:@"%@://%@@%@:%@?security=%@&type=%@",
+                            vmess ? @"vmess" : @"vless",
                             uuid, address, port, [security lowercaseString], [transport lowercaseString]];
-    NSArray *keys = [NSArray arrayWithObjects:@"flow", @"sni", @"fp", @"path", nil];
+    NSArray *keys = [NSArray arrayWithObjects:vmess ? @"encryption" : @"flow", @"sni", @"fp", @"path", nil];
     NSArray *values = [NSArray arrayWithObjects:_flow.text, _sni.text, _fingerprint.text, _path.text, nil];
     for (NSUInteger i = 0; i < [keys count]; ++i) {
         NSString *value = [values objectAtIndex:i];
@@ -213,7 +220,7 @@
     y += rowH;
 
     NSInteger p = _proto.selectedSegmentIndex;
-    if (p == 0) {
+    if (p == 0 || p == 3) {
         _transport.hidden = NO;
         _lblFlow.hidden = NO; _flow.hidden = NO;
         _lblPath.hidden = NO; _path.hidden = NO;
@@ -318,7 +325,11 @@
 
     _lblProto = [self makeLabel:SenkoLocalizedText(@"PROTOCOL")];
     _proto = [[UISegmentedControl alloc] initWithItems:
-              [NSArray arrayWithObjects:@"VLESS", @"Trojan", @"Shadowsocks", nil]];
+              [NSArray arrayWithObjects:@"VLESS", @"Trojan", @"Shadowsocks", @"VMess", nil]];
+    /* four equal segments cut "Shadowsocks" on a 320 point screen; ios 4.3 has
+       no content apportioning and keeps the equal split */
+    if ([_proto respondsToSelector:@selector(setApportionsSegmentWidthsByContent:)])
+        _proto.apportionsSegmentWidthsByContent = YES;
     SenkoStyleGlassSegmented(_proto);
     [_proto addTarget:self action:@selector(protoChanged) forControlEvents:UIControlEventValueChanged];
 
@@ -415,15 +426,17 @@
              ([type isEqualToString:@"grpc"] ? 3 : 0));
         _remark.text = [url fragment];
     } else {
-        _proto.selectedSegmentIndex = 0;
+        BOOL vmess = [_link hasPrefix:@"vmess://"];
+        _proto.selectedSegmentIndex = vmess ? 3 : 0;
         _lblUuid.text = SenkoLocalizedText(@"UUID");
-        _lblFlow.text = SenkoLocalizedText(@"FLOW");
+        _lblFlow.text = SenkoLocalizedText(vmess ? @"CIPHER" : @"FLOW");
         NSURL *url = [NSURL URLWithString:_link];
         NSString *query = [url query] ? [url query] : @"";
         _address.text = [url host];
         _port.text = [[url port] stringValue];
         _uuid.text = [url user];
-        _flow.text = [self queryValue:@"flow" query:query];
+        _flow.text = [self queryValue:vmess ? @"encryption" : @"flow" query:query];
+        if (vmess && ![_flow.text length]) _flow.text = @"auto";
         _path.text = [self queryValue:@"path" query:query];
         NSString *type = [self queryValue:@"type" query:query];
         if ([type isEqualToString:@"grpc"] && ![_path.text length])

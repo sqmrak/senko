@@ -85,7 +85,7 @@ loop_status_t loop_init(loop_t *lp, uint16_t listen_port, int bind_public,
                         const uint8_t uuid[VLESS_UUID_LEN], const char *flow,
                         const char *user, const char *pass) {
     if (!lp || !vt || !dial) return LOOP_ERR_ARG;
-    if (proto == VL_PROTO_VLESS && !uuid) return LOOP_ERR_ARG;
+    if (cfg_proto_uses_uuid(proto) && !uuid) return LOOP_ERR_ARG;
     /* the 96 connection slots are 14 MB. clearing them here dirtied every page
        before the first connection and alone pushed senkod past the 18 MB
        jetsam limit ios 16 gives a launchd daemon. alloc_conn clears a slot when
@@ -420,13 +420,13 @@ static void reap_opening_conns(loop_t *lp) {
         sess_status_t ir;
         if (c->socks_greet_done) {
             ir = session_init_after_greet(&c->sess, c->open_vt, th, c->open_proto,
-                                          c->open_proto == VL_PROTO_VLESS ? c->open_uuid : NULL,
+                                          cfg_proto_uses_uuid(c->open_proto) ? c->open_uuid : NULL,
                                           c->open_flow[0] ? c->open_flow : NULL,
                                           c->open_user[0] ? c->open_user : NULL,
                                           c->open_pass[0] ? c->open_pass : NULL);
         } else {
             ir = session_init(&c->sess, c->open_vt, th, c->open_proto,
-                              c->open_proto == VL_PROTO_VLESS ? c->open_uuid : NULL,
+                              cfg_proto_uses_uuid(c->open_proto) ? c->open_uuid : NULL,
                               c->open_flow[0] ? c->open_flow : NULL,
                               c->open_user[0] ? c->open_user : NULL,
                               c->open_pass[0] ? c->open_pass : NULL);
@@ -473,7 +473,7 @@ loop_status_t loop_set_server(loop_t *lp, const transport_vt_t *vt,
                               const char *xhttp_mode, const char *peer_host,
                               int insecure) {
     if (!lp || !vt || !dial) return LOOP_ERR_ARG;
-    if (proto == VL_PROTO_VLESS && !uuid) return LOOP_ERR_ARG;
+    if (cfg_proto_uses_uuid(proto) && !uuid) return LOOP_ERR_ARG;
 
     /* drop connections before switching servers */
     drop_all_conns(lp);

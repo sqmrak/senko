@@ -13,6 +13,7 @@
 #include "http_client.h"
 #include "trojan_client.h"
 #include "shadowsocks_client.h"
+#include "vmess_client.h"
 #include "hy2_proto.h"
 
 #ifdef __cplusplus
@@ -28,6 +29,15 @@ typedef enum {
     SESS_CLOSED, /* drain client output after remote eof */
     SESS_ERROR /* close both sides after a protocol failure */
 } sess_state_t;
+
+/* what a failed session saw of the server's answer, for the probe's diagnosis */
+typedef enum {
+    SESS_FAIL_NONE = 0,
+    SESS_FAIL_DECRYPT,  /* the answer does not decrypt: wrong key or not this protocol */
+    SESS_FAIL_PROTOCOL, /* the answer breaks the protocol */
+    SESS_FAIL_WEBSITE,  /* the answer is http, the way a fallback website answers */
+    SESS_FAIL_LOGIN     /* a socks or http proxy refused the user name or password */
+} sess_fail_t;
 
 typedef enum {
     SESS_OK      =  0,
@@ -46,12 +56,14 @@ typedef struct {
 
     vl_proto_t            proto;
     int                   transparent_client;
+    sess_fail_t           fail;
     union {
         vless_conn_t         vc;
         socks5_client_t      s5c;
         http_client_t        hc;
         trojan_client_t      tc;
         shadowsocks_client_t sc;
+        vmess_client_t       mc;
         hy2_tcp_response_t   hy;
     } u;
 

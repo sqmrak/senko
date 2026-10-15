@@ -157,8 +157,6 @@ static void test_socks_and_hysteria(void) {
 }
 
 static void test_unsupported_schemes(void) {
-    ok("vmess is named",
-       refused_for("vmess://eyJ2IjoiMiIsImFkZCI6ImV4YW1wbGUuY29tIn0=", "vmess"));
     ok("tuic is named", refused_for("tuic://u:p@example.com:443#n", "tuic"));
     ok("ssr is named", refused_for("ssr://ZXhhbXBsZQ", "ssr"));
     ok("wireguard is named", refused_for("wireguard://k@example.com:51820#n", "wireguard"));
@@ -173,19 +171,19 @@ static void test_subscription(void) {
     const char body[] =
         "\xEF\xBB\xBF# profile-title: test\r\n"
         "vless://" UUID "@example.com:443?security=tls&type=tcp#one\r\n"
-        "vmess://eyJ2IjoiMiJ9\r\n"
-        "vmess://eyJ2IjoiMiJ9\r\n"
+        "ssr://ZXhhbXBsZQ\r\n"
+        "ssr://ZXhhbXBsZQ\r\n"
         "tuic://u:p@example.com:443#t\r\n"
         "trojan://pw@example.com:443?security=tls#two\r\n";
     ok("mixed body parses",
        cfg_parse_subscription_ex(body, sizeof body - 1, out, 16, &count, &stats) == CFG_OK &&
        count == 2 && stats.skipped == 3);
     ok("skips are grouped by what",
-       strcmp(stats.kinds[0].what, "vmess") == 0 && stats.kinds[0].count == 2 &&
+       strcmp(stats.kinds[0].what, "ssr") == 0 && stats.kinds[0].count == 2 &&
        strcmp(stats.kinds[1].what, "tuic") == 0 && stats.kinds[1].count == 1);
     char text[160];
     cfg_import_stats_text(&stats, text, sizeof text);
-    ok("the summary names them", strcmp(text, "skipped 3: vmess 2, tuic 1") == 0);
+    ok("the summary names them", strcmp(text, "skipped 3: ssr 2, tuic 1") == 0);
 
     static char longline[12000];
     memset(longline, 'a', sizeof longline - 1);
@@ -203,18 +201,18 @@ static void test_subscription(void) {
     cfg_import_stats_add(&late, "c");
     cfg_import_stats_add(&late, "d");
     cfg_import_stats_add(&late, "e");
-    for (int i = 0; i < 5; ++i) cfg_import_stats_add(&late, "vmess");
+    for (int i = 0; i < 5; ++i) cfg_import_stats_add(&late, "ssr");
     cfg_import_stats_text(&late, text, sizeof text);
-    ok("a late common kind is named first", strcmp(text, "skipped 10: vmess 5, a 1, b 1, c 1, other 2") == 0);
+    ok("a late common kind is named first", strcmp(text, "skipped 10: ssr 5, a 1, b 1, c 1, other 2") == 0);
 
     const char json[] =
         "[{\"remarks\":\"DE\",\"outbounds\":["
-        "{\"protocol\":\"vmess\",\"settings\":{}},"
+        "{\"protocol\":\"wireguard\",\"settings\":{}},"
         "{\"protocol\":\"freedom\"},"
         "{\"type\":\"tuic\",\"server\":\"example.com\",\"server_port\":443}]}]";
     ok("json outbounds senko cannot run are counted, plumbing is not",
        cfg_parse_subscription_ex(json, sizeof json - 1, out, 16, &count, &stats) == CFG_OK &&
-       count == 0 && stats.skipped == 2 && strcmp(stats.kinds[0].what, "vmess") == 0);
+       count == 0 && stats.skipped == 2 && strcmp(stats.kinds[0].what, "wireguard") == 0);
 
     /* base64 of the same kind of body, wrapped every 76 characters */
     const char wrapped[] =
@@ -377,7 +375,8 @@ static void test_json_outbounds(void) {
        strcmp(json_one("{\"protocol\":\"socks\",\"settings\":{\"servers\":[{\"address\":\"a.example\","
                        "\"port\":1080,\"users\":[{\"user\":\"u\",\"pass\":\"p\"}]}]}}", &n), "ok") == 0 &&
        n.proto == VL_PROTO_SOCKS5 && strcmp(n.pass, "p") == 0);
-    ok("xray vmess is named", strcmp(json_one("{\"protocol\":\"vmess\",\"settings\":{}}", NULL), "vmess") == 0);
+    ok("xray wireguard is named",
+       strcmp(json_one("{\"protocol\":\"wireguard\",\"settings\":{}}", NULL), "wireguard") == 0);
     ok("xray freedom is plumbing", strcmp(json_one("{\"protocol\":\"freedom\"}", NULL), "nothing") == 0);
     ok("xray vless without id",
        strcmp(json_one("{\"protocol\":\"vless\",\"settings\":{\"vnext\":[{\"address\":\"a.example\","
@@ -482,6 +481,62 @@ static void test_clash_nested_lists(void) {
 }
 
 /* what the parser reads must survive being saved and read back */
+/* v2rayn base64 json, the xtls share link form, and the json profile shapes */
+static void test_vmess_links(void) {
+    ok("v2rayn ws over tls",
+       usable("vmess://eyJ2IjoiMiIsInBzIjoianAgd3MiLCJhZGQiOiJqcC5leGFtcGxlIiwicG9ydCI6IjQ0MyIsImlkIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYWlkIjoiMCIsInNjeSI6ImNoYWNoYTIwLXBvbHkxMzA1IiwibmV0Ijoid3MiLCJ0eXBlIjoibm9uZSIsImhvc3QiOiJjZG4uZXhhbXBsZSIsInBhdGgiOiIvdm0iLCJ0bHMiOiJ0bHMiLCJzbmkiOiJzbmkuZXhhbXBsZSIsImZwIjoiY2hyb21lIn0=") && s.proto == VL_PROTO_VMESS &&
+       strcmp(s.uuid, UUID) == 0 && strcmp(s.encryption, "chacha20-poly1305") == 0 &&
+       strcmp(s.user, "chacha20-poly1305") == 0 && s.net == VL_NET_WS &&
+       strcmp(s.path, "/vm") == 0 && strcmp(s.ws_host, "cdn.example") == 0 &&
+       s.security == VL_SEC_TLS && strcmp(s.sni, "sni.example") == 0 &&
+       strcmp(s.fp, "chrome") == 0 && strcmp(s.remark, "jp ws") == 0);
+    ok("v2rayn numeric port, no cipher, no tls",
+       usable("vmess://eyJ2IjoiMiIsInBzIjoiIiwiYWRkIjoiMTAuMC4wLjEiLCJwb3J0Ijo4MDgwLCJpZCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsImFpZCI6MCwibmV0IjoidGNwIiwidHlwZSI6Im5vbmUiLCJ0bHMiOiIifQ==#named") && s.port == 8080 && s.net == VL_NET_TCP &&
+       s.security == VL_SEC_NONE && strcmp(s.encryption, "auto") == 0 &&
+       strcmp(s.remark, "named") == 0);
+    ok("v2rayn grpc multi",
+       usable("vmess://eyJ2IjoiMiIsInBzIjoiZyIsImFkZCI6ImcuZXhhbXBsZSIsInBvcnQiOiI0NDMiLCJpZCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsIm5ldCI6ImdycGMiLCJ0eXBlIjoibXVsdGkiLCJwYXRoIjoic3ZjIiwidGxzIjoidGxzIn0=") && s.net == VL_NET_GRPC && s.grpc_multi);
+    ok("v2rayn tcp http header is named",
+       refused_for("vmess://eyJ2IjoiMiIsInBzIjoiaCIsImFkZCI6ImguZXhhbXBsZSIsInBvcnQiOiI4MCIsImlkIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwibmV0IjoidGNwIiwidHlwZSI6Imh0dHAifQ==", "http header"));
+    ok("v2rayn kcp is named", refused_for("vmess://eyJ2IjoiMiIsInBzIjoiayIsImFkZCI6ImsuZXhhbXBsZSIsInBvcnQiOiI4MCIsImlkIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwibmV0Ijoia2NwIn0=", "kcp"));
+    ok("v2rayn body without an id", !usable("vmess://eyJ2IjoiMiIsInBzIjoibiIsImFkZCI6Im4uZXhhbXBsZSIsInBvcnQiOiI4MCJ9"));
+    ok("a body that is not base64", !usable("vmess://%%%%not-base64%%%%"));
+    ok("xtls share link form",
+       usable("vmess://" UUID "@example.com:443?encryption=aes-128-gcm&security=reality&pbk=" PBK
+              "&sid=ab&type=tcp#r") &&
+       s.proto == VL_PROTO_VMESS && s.security == VL_SEC_REALITY &&
+       strcmp(s.encryption, "aes-128-gcm") == 0 && strcmp(s.remark, "r") == 0);
+    ok("xtls form without encryption runs auto",
+       usable("vmess://" UUID "@example.com:80?type=ws&path=%2F#w") &&
+       strcmp(s.encryption, "auto") == 0 && s.net == VL_NET_WS);
+    ok("vmess carries no flow",
+       refused_for("vmess://" UUID "@example.com:443?security=tls&flow=xtls-rprx-vision#f", "flow"));
+    ok("vmess needs an id", !usable("vmess://@example.com:443?security=tls#f"));
+
+    vl_server_t n;
+    ok("xray vmess vnext",
+       strcmp(json_one("{\"protocol\":\"vmess\",\"settings\":{\"vnext\":[{\"address\":\"a.example\","
+                       "\"port\":443,\"users\":[{\"id\":\"" UUID "\",\"alterId\":0,"
+                       "\"security\":\"aes-128-gcm\"}]}]},\"streamSettings\":{\"network\":\"ws\","
+                       "\"security\":\"tls\",\"wsSettings\":{\"path\":\"/p\"}}}", &n), "ok") == 0 &&
+       n.proto == VL_PROTO_VMESS && strcmp(n.encryption, "aes-128-gcm") == 0 &&
+       n.net == VL_NET_WS && n.security == VL_SEC_TLS && strcmp(n.path, "/p") == 0);
+    ok("xray vmess flat settings",
+       strcmp(json_one("{\"protocol\":\"vmess\",\"settings\":{\"address\":\"a.example\","
+                       "\"port\":443,\"id\":\"" UUID "\"}}", &n), "ok") == 0 &&
+       n.proto == VL_PROTO_VMESS && strcmp(n.encryption, "auto") == 0);
+    ok("xray vmess without an id",
+       strcmp(json_one("{\"protocol\":\"vmess\",\"settings\":{\"vnext\":[{\"address\":\"a.example\","
+                       "\"port\":443,\"users\":[]}]}}", NULL), "malformed profile entry") == 0);
+    ok("sing-box vmess grpc over tls",
+       strcmp(json_one("{\"type\":\"vmess\",\"server\":\"a.example\",\"server_port\":443,"
+                       "\"uuid\":\"" UUID "\",\"security\":\"chacha20-poly1305\",\"alter_id\":0,"
+                       "\"transport\":{\"type\":\"grpc\",\"service_name\":\"svc\"},"
+                       "\"tls\":{\"enabled\":true,\"server_name\":\"b.example\"}}", &n), "ok") == 0 &&
+       n.proto == VL_PROTO_VMESS && n.net == VL_NET_GRPC && n.security == VL_SEC_TLS &&
+       strcmp(n.sni, "b.example") == 0 && strcmp(n.encryption, "chacha20-poly1305") == 0);
+}
+
 static void test_roundtrip(void) {
     static const char *const links[] = {
         "trojan://p%40s%3As%23s%2Fs%3Fs@example.com:443?security=tls&sni=example.com#t",
@@ -489,6 +544,8 @@ static void test_roundtrip(void) {
         "vless://my-user-7@example.com:443?security=tls&type=ws&path=%2Fp#v",
         "hysteria2://au%3Ath%40x@example.com:443?sni=example.com#h",
         "ss://YWVzLTI1Ni1nY206cGE6c3NAd29yZA@example.com:8388#ss",
+        "vmess://eyJ2IjoiMiIsInBzIjoianAgd3MiLCJhZGQiOiJqcC5leGFtcGxlIiwicG9ydCI6IjQ0MyIsImlkIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYWlkIjoiMCIsInNjeSI6ImNoYWNoYTIwLXBvbHkxMzA1IiwibmV0Ijoid3MiLCJ0eXBlIjoibm9uZSIsImhvc3QiOiJjZG4uZXhhbXBsZSIsInBhdGgiOiIvdm0iLCJ0bHMiOiJ0bHMiLCJzbmkiOiJzbmkuZXhhbXBsZSIsImZwIjoiY2hyb21lIn0=",
+        "vmess://my-user-7@example.com:443?encryption=aes-128-gcm&security=tls&type=grpc&serviceName=svc#g",
     };
     static store_t a, b;
     static char buf[64 * 1024];
@@ -509,6 +566,17 @@ static void test_roundtrip(void) {
     ok("socks login kept", strcmp(a.servers[1].user, "us:er") == 0 &&
                            strcmp(a.servers[1].pass, "pa@ss") == 0);
     ok("ss password with a colon kept", strcmp(a.servers[4].pass, "pa:ss@word") == 0);
+    for (size_t i = 5; i < 7 && i < b.n; ++i) {
+        const vl_server_t *x = &a.servers[i], *y = &b.servers[i];
+        ok("vmess kept as vmess", y->proto == VL_PROTO_VMESS && x->proto == VL_PROTO_VMESS);
+        ok("vmess transport and cipher kept",
+           x->net == y->net && x->security == y->security &&
+           strcmp(x->encryption, y->encryption) == 0 && strcmp(x->path, y->path) == 0 &&
+           strcmp(x->ws_host, y->ws_host) == 0 && strcmp(x->sni, y->sni) == 0 &&
+           strcmp(x->fp, y->fp) == 0 && x->grpc_multi == y->grpc_multi);
+    }
+    ok("vmess cipher survives", b.n > 6 && strcmp(b.servers[6].encryption, "aes-128-gcm") == 0 &&
+       b.servers[6].net == VL_NET_GRPC);
 }
 
 int main(void) {
@@ -517,6 +585,7 @@ int main(void) {
     test_trojan();
     test_shadowsocks();
     test_socks_and_hysteria();
+    test_vmess_links();
     test_unsupported_schemes();
     test_subscription();
     test_cut_body();

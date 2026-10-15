@@ -231,7 +231,7 @@ static NSString *SenkoCellRemark(NSString *raw) {
 }
 
 NSString *SenkoServerProtocolLabel(SenkoServer *server) {
-    if ([server->proto isEqualToString:@"vless"])
+    if ([server->proto isEqualToString:@"vless"] || [server->proto isEqualToString:@"vmess"])
         return [NSString stringWithFormat:@"%@/%@/%@",
                 server->proto ? server->proto : @"vless",
                 server->net ? server->net : @"tcp",

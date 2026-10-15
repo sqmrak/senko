@@ -159,14 +159,19 @@ static int entry_to_server(const prof_entry_t *e, vl_server_t *s, char *why, siz
     snprintf(s->host, sizeof s->host, "%s", host);
     if (name) snprintf(s->remark, sizeof s->remark, "%s", name);
 
-    if (ci_equal(type, "vless")) {
+    if (ci_equal(type, "vless") || ci_equal(type, "vmess")) {
         const char *uuid = entry_get_any(e, "uuid", "id");
         if (!uuid || !uuid[0]) return -1;
-        s->proto = VL_PROTO_VLESS;
         cfg_node_vless_id(s, uuid);
-        snprintf(s->encryption, sizeof s->encryption, "none");
-        {
+        if (ci_equal(type, "vmess")) {
+            const char *cipher = entry_get(e, "cipher");
+            s->proto = VL_PROTO_VMESS;
+            snprintf(s->encryption, sizeof s->encryption, "%s",
+                     cipher && cipher[0] ? cipher : "auto");
+        } else {
             const char *flow = entry_get(e, "flow");
+            s->proto = VL_PROTO_VLESS;
+            snprintf(s->encryption, sizeof s->encryption, "none");
             if (flow) snprintf(s->flow, sizeof s->flow, "%s", flow);
         }
         if (clash_transport(e, s, why, why_cap) != 0) return -1;
@@ -279,7 +284,7 @@ static int entry_to_server(const prof_entry_t *e, vl_server_t *s, char *why, siz
                                          sizeof s->port_hop, NULL);
         }
     } else {
-        /* vmess and the rest have no senko client */
+        /* tuic, hysteria v1 and the rest have no senko client */
         char text[32];
         size_t i = 0;
         for (; type[i] && i + 1 < sizeof text; ++i) text[i] = (char)tolower((unsigned char)type[i]);
@@ -533,6 +538,35 @@ static int surge_line_to_server(const char *name_s, const char *name_e,
         if (positional == 3) entry_put_span(&e, "username", fs, fe);
         else if (positional == 4) entry_put_span(&e, "password", fs, fe);
         ++positional;
+    }
+
+/* surge names the vmess id username= and its cipher encrypt-method=, while
+   shadowrocket writes the cipher and the id as the two positional fields; ws
+   is a flag with its own path and "Host:name" header fields in surge */
+    const char *kind = entry_get(&e, "type");
+    if (kind && ci_equal(kind, "vmess")) {
+        const char *user = entry_get(&e, "username");
+        const char *pw = entry_get(&e, "password");
+        const char *method = entry_get(&e, "encrypt-method");
+        if (!entry_get(&e, "uuid") && !(pw && pw[0]) && user && user[0])
+            entry_put_str(&e, "uuid", user);
+        if (!entry_get(&e, "cipher")) {
+            if (method && method[0]) entry_put_str(&e, "cipher", method);
+            else if (pw && pw[0] && user && user[0]) entry_put_str(&e, "cipher", user);
+        }
+        if (truthy(entry_get(&e, "ws"))) {
+            const char *path = entry_get(&e, "ws-path");
+            const char *headers = entry_get(&e, "ws-headers");
+            entry_put_str(&e, "network", "ws");
+            if (path) entry_put_str(&e, "ws-opts.path", path);
+            if (headers && (strncmp(headers, "Host:", 5) == 0 || strncmp(headers, "host:", 5) == 0)) {
+                const char *h = headers + 5;
+                const char *he = h + strcspn(h, "|");
+                while (h < he && (*h == ' ' || *h == '"')) ++h;
+                while (he > h && (he[-1] == ' ' || he[-1] == '"')) --he;
+                entry_put_span(&e, "ws-opts.headers.Host", h, he);
+            }
+        }
     }
 
 /* shadowrocket spells the vless credential and sni differently from clash */

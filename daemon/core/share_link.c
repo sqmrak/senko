@@ -368,7 +368,7 @@ static int ss_userinfo(const char *u, const char *ue, vl_server_t *s) {
 }
 
 static const struct { const char *scheme; const char *name; } k_unsupported[] = {
-    { "vmess", "vmess" }, { "tuic", "tuic" }, { "ssr", "ssr" },
+    { "tuic", "tuic" }, { "ssr", "ssr" },
     { "wireguard", "wireguard" }, { "wg", "wireguard" }, { "hysteria", "hysteria v1" },
     { "hy", "hysteria v1" }, { "anytls", "anytls" }, { "juicity", "juicity" },
     { "naive+https", "naive" }, { "naive+quic", "naive" }, { "mieru", "mieru" },
@@ -442,6 +442,20 @@ static cfg_status_t parse_link(const char *text, vl_server_t *out, char *why,
             return CFG_ERR_UNSUPPORTED;
         }
 
+    /* v2rayn writes vmess as base64 json; the xtls share link form has an '@'
+       in the authority and takes the vless path below */
+    if (strcmp(scheme, "vmess") == 0) {
+        const char *body = sep + 3;
+        size_t end = strcspn(body, "#?");
+        if (!memchr(body, '@', end)) {
+            cfg_status_t st = cfg_parse_vmess_json(body, end, out, why, why_cap);
+            const char *hash = strchr(body, '#');
+            if (st == CFG_OK && !out->remark[0] && hash && hash[1])
+                copy_remark(hash + 1, out->remark, sizeof out->remark);
+            return st;
+        }
+    }
+
     /* ss://BASE64(method:password@host:port)#name, the pre-sip002 form */
     if (strcmp(scheme, "ss") == 0) {
         const char *body = sep + 3;
@@ -468,6 +482,7 @@ static cfg_status_t parse_link(const char *text, vl_server_t *out, char *why,
 
     const char *sc = parts.scheme;
     if (strcmp(sc, "vless") == 0) out->proto = VL_PROTO_VLESS;
+    else if (strcmp(sc, "vmess") == 0) out->proto = VL_PROTO_VMESS;
     else if (strcmp(sc, "trojan") == 0) out->proto = VL_PROTO_TROJAN;
     else if (strcmp(sc, "ss") == 0) out->proto = VL_PROTO_SHADOWSOCKS;
     else if (strcmp(sc, "hysteria2") == 0 || strcmp(sc, "hy2") == 0) out->proto = VL_PROTO_HYSTERIA2;
@@ -519,11 +534,15 @@ static cfg_status_t parse_link(const char *text, vl_server_t *out, char *why,
     }
 
     switch (out->proto) {
-    case VL_PROTO_VLESS: {
+    case VL_PROTO_VLESS:
+    case VL_PROTO_VMESS: {
         char id[128];
         if (!user[0]) return CFG_ERR_NO_AT;
         if (url_percent_decode(user, strlen(user), id, sizeof id) < 0) return CFG_ERR_TOO_LONG;
         cfg_node_vless_id(out, id);
+        /* the xtls share link names the vmess body cipher in encryption= */
+        if (out->proto == VL_PROTO_VMESS && !out->encryption[0])
+            snprintf(out->encryption, sizeof out->encryption, "auto");
         break;
     }
     /* the whole userinfo is one token: hysteria2 auth commonly holds a colon */
@@ -573,8 +592,8 @@ static cfg_status_t parse_link(const char *text, vl_server_t *out, char *why,
     }
     }
 
-    if (out->proto == VL_PROTO_VLESS || out->proto == VL_PROTO_TROJAN ||
-        out->proto == VL_PROTO_SHADOWSOCKS) {
+    if (out->proto == VL_PROTO_VLESS || out->proto == VL_PROTO_VMESS ||
+        out->proto == VL_PROTO_TROJAN || out->proto == VL_PROTO_SHADOWSOCKS) {
         if (cfg_node_transport(out, x.type, x.header, why, why_cap) != 0) return CFG_ERR_UNSUPPORTED;
         if (cfg_node_security(out, x.security, why, why_cap) != 0) return CFG_ERR_UNSUPPORTED;
         if (out->proto == VL_PROTO_TROJAN && !x.security[0]) out->security = VL_SEC_TLS;
@@ -620,6 +639,12 @@ void cfg_node_finish(vl_server_t *out) {
     if (out->proto == VL_PROTO_SHADOWSOCKS) {
         out->security = VL_SEC_NONE;
         if (!out->user[0]) cfg_node_ss_method(out, "chacha20-ietf-poly1305");
+    }
+    /* sessions take the vmess body cipher from user, as they take the
+       shadowsocks method */
+    if (out->proto == VL_PROTO_VMESS) {
+        if (!out->encryption[0]) snprintf(out->encryption, sizeof out->encryption, "auto");
+        snprintf(out->user, sizeof out->user, "%s", out->encryption);
     }
 }
 

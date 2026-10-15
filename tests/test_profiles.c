@@ -56,7 +56,7 @@ static const char kClash[] =
 "    cipher: aes-128-gcm\n"
 "    password: secret\n"
 "  - name: unrunnable node\n"
-"    type: vmess\n"
+"    type: tuic\n"
 "    server: 198.51.100.5\n"
 "    port: 8389\n"
 "  - name: hy2 node\n"
@@ -83,7 +83,7 @@ static const char kSurge[] =
 "runnable trojan = trojan, t.example.org, 443, password=x\n"
 "hy2 = hysteria2, hy.example.org, 44300, password=hy2pw, obfs=salamander, "
 "obfs-password=obfspw, sni=hy2.sni.example, ports=45000-46000\n"
-"broken = vmess, v.example.org, 443, username=x\n"
+"broken = tuic, v.example.org, 443, username=x\n"
 "[Rule]\n"
 "FINAL,PROXY\n";
 
@@ -188,6 +188,63 @@ int main(void) {
     ok("surge through subscription parser",
        cfg_parse_subscription(kSurge, sizeof kSurge - 1, servers, 16, &n) == CFG_OK &&
        n == 4);
+
+    /* vmess as mihomo, surge and shadowrocket write it */
+    {
+        static const char clash[] =
+            "proxies:\n"
+            "  - name: vm ws\n"
+            "    type: vmess\n"
+            "    server: vm.example.com\n"
+            "    port: 443\n"
+            "    uuid: 12345678-1234-4234-8234-123456789abc\n"
+            "    alterId: 0\n"
+            "    cipher: chacha20-poly1305\n"
+            "    tls: true\n"
+            "    servername: edge.example.com\n"
+            "    network: ws\n"
+            "    ws-opts:\n"
+            "      path: /vm\n"
+            "      headers:\n"
+            "        Host: cdn.example.com\n"
+            "  - {name: vm plain, type: vmess, server: 192.0.2.9, port: 10086, uuid: 12345678-1234-4234-8234-123456789abc}\n";
+        static const char surge[] =
+            "[Proxy]\n"
+            "surge vm = vmess, s.example.org, 443, username=12345678-1234-4234-8234-123456789abc, "
+            "ws=true, ws-path=/sv, ws-headers=Host:\"cdn.example.org\", tls=true, sni=s.example.org, "
+            "vmess-aead=true\n"
+            "rocket vm = vmess, r.example.org, 8443, aes-128-gcm, 12345678-1234-4234-8234-123456789abc, "
+            "obfs=websocket, obfs-uri=/rv, tls=1, peer=r.example.org\n";
+        memset(servers, 0, sizeof servers);
+        n = profiles_parse_clash(clash, sizeof clash - 1, servers, 16);
+        ok("clash vmess nodes", n == 2);
+        if (n == 2) {
+            ok("clash vmess ws", servers[0].proto == VL_PROTO_VMESS &&
+               servers[0].net == VL_NET_WS && strcmp(servers[0].path, "/vm") == 0 &&
+               strcmp(servers[0].ws_host, "cdn.example.com") == 0 &&
+               servers[0].security == VL_SEC_TLS &&
+               strcmp(servers[0].sni, "edge.example.com") == 0 &&
+               strcmp(servers[0].encryption, "chacha20-poly1305") == 0);
+            ok("clash vmess without a cipher runs auto",
+               servers[1].proto == VL_PROTO_VMESS && servers[1].net == VL_NET_TCP &&
+               servers[1].security == VL_SEC_NONE && strcmp(servers[1].encryption, "auto") == 0);
+        }
+        memset(servers, 0, sizeof servers);
+        n = profiles_parse_surge(surge, sizeof surge - 1, servers, 16);
+        ok("surge and shadowrocket vmess nodes", n == 2);
+        if (n == 2) {
+            ok("surge vmess", servers[0].proto == VL_PROTO_VMESS &&
+               strcmp(servers[0].uuid, "12345678-1234-4234-8234-123456789abc") == 0 &&
+               servers[0].net == VL_NET_WS && strcmp(servers[0].path, "/sv") == 0 &&
+               strcmp(servers[0].ws_host, "cdn.example.org") == 0 &&
+               servers[0].security == VL_SEC_TLS && strcmp(servers[0].encryption, "auto") == 0);
+            ok("shadowrocket vmess", servers[1].proto == VL_PROTO_VMESS &&
+               strcmp(servers[1].uuid, "12345678-1234-4234-8234-123456789abc") == 0 &&
+               strcmp(servers[1].encryption, "aes-128-gcm") == 0 &&
+               servers[1].net == VL_NET_WS && strcmp(servers[1].path, "/rv") == 0 &&
+               servers[1].security == VL_SEC_TLS && strcmp(servers[1].sni, "r.example.org") == 0);
+        }
+    }
 
     /* classification the ui turns into "unknown content type" */
     {
