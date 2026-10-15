@@ -6,7 +6,7 @@
 #import "control_client.h"
 
 #define SENKO_SOCK @"/var/tmp/senkod.sock"
-#define SENKO_VERSION @"v3.1.1-stable"
+#define SENKO_VERSION @"v4.0.0-stable"
 /* quick connect: the connect button dials whichever server answers fastest */
 #define SENKO_AUTO_SERVER_KEY @"SenkoAutoServer"
 #define SENKO_PINNED_SUB_URL_KEY @"SenkoPinnedSubscriptionURL"
@@ -132,14 +132,14 @@ void SenkoRelocalizeAllWindows(void);
 @interface AboutVC : UIViewController
 @end
 
-@interface LogsVC : UIViewController
+@interface LogsVC : UIViewController <UISearchBarDelegate, UIActionSheetDelegate>
 @end
 
 /* the tunnel session and subscription usage, read from the daemon on its own */
-@interface StatsVC : UIViewController <UITableViewDataSource, UITableViewDelegate>
+@interface StatsVC : UIViewController
 @end
 
-@interface SubscriptionInfoVC : UITableViewController
+@interface SubscriptionInfoVC : UIViewController
 - (id)initWithSubscription:(SenkoSub *)sub;
 @end
 
