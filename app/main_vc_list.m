@@ -399,8 +399,8 @@ static NSString *SenkoCollapseNameKey(NSString *name) {
     return [[kept componentsJoinedByString:@" "] lowercaseString];
 }
 
-/* rows that reduce to the same name (same country, different transport or
-   host) collapse into one: the first one keeps the row and remembers the
+/* rows of one protocol that reduce to the same name (same country, different
+   transport or host) collapse into one: the first one keeps the row and remembers the
    rest in dupIndexes, so connecting to it can try them in turn instead of the
    list showing several identical-looking entries for what the user reads as
    one server. */
@@ -416,7 +416,11 @@ static NSString *SenkoCollapseNameKey(NSString *name) {
         NSNumber *indexKey = [NSNumber numberWithInt:sv->index];
         if ([name length]) [rowNames setObject:name forKey:indexKey];
         if (![name length]) { [out addObject:sv]; continue; }
-        NSString *key = SenkoCollapseNameKey(name);
+/* a hysteria2 row under a vless row of the same name would be connected as
+   whichever of the two pings better, so tapping hysteria could bring up vless.
+   only rows of one protocol stand in for each other */
+        NSString *key = [SenkoCollapseNameKey(name) stringByAppendingFormat:@"\n%@",
+                         sv->proto ? [sv->proto lowercaseString] : @""];
 /* a red placeholder folded under a working row would hide it and hand connect
    a member it can only fail on */
         if (!sv->supported) key = [key stringByAppendingString:@"\n-unsupported"];
