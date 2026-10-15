@@ -50,6 +50,13 @@ static int awg_tunnel_running(const ctl_server_t *s) {
     return s->awg_busy && s->awg_busy(s->apply_ctx);
 }
 
+/* a server tunnel and an amneziawg tunnel with rules both read the ruleset on
+   their own thread, so it stays as it is until they stop */
+static int tunnel_reads_rules(const ctl_server_t *s) {
+    return s->engine.state == CTL_STATE_CONNECTED || s->engine.state == CTL_STATE_CONNECTING ||
+           awg_tunnel_running(s);
+}
+
 static void set_nonblock(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);
     if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
@@ -1772,8 +1779,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         int restore = cmd.kind == CTL_CMD_RESTORE;
 /* a restore replaces the whole catalog, ruleset included, and the running tunnel
    reads that ruleset (and the geo sets bound into it) on its own thread */
-        if (restore && (s->engine.state == CTL_STATE_CONNECTED ||
-                        s->engine.state == CTL_STATE_CONNECTING)) {
+        if (restore && tunnel_reads_rules(s)) {
             if (ctl_build_err("disconnect before restoring a backup", reply, sizeof reply,
                               &rn) == CTL_OK)
                 client_write(c, reply, rn);
@@ -1797,8 +1803,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         cmd.kind == CTL_CMD_DEL_RULE) {
         char reply[128];
         size_t reply_len = 0;
-        if (s->engine.state == CTL_STATE_CONNECTED ||
-            s->engine.state == CTL_STATE_CONNECTING) {
+        if (tunnel_reads_rules(s)) {
             if (ctl_build_err("disconnect before changing rules", reply,
                               sizeof reply, &reply_len) == CTL_OK)
                 client_write(c, reply, reply_len);
@@ -1899,8 +1904,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         const char *text = sub < 0 ? "routing is off" : "routing profile switched on";
         char message[128];
         snprintf(message, sizeof message, "%s%s", text,
-                 s->engine.state == CTL_STATE_CONNECTED || s->engine.state == CTL_STATE_CONNECTING
-                     ? ", it applies after the next connect" : "");
+                 tunnel_reads_rules(s) ? ", it applies after the next connect" : "");
         if (ctl_build_ok(message, reply, sizeof reply, &rn) == CTL_OK)
             client_write(c, reply, rn);
         return;
@@ -2078,8 +2082,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         reason[0] = '\0';
         if (strcmp(cmd.name, "rules") == 0) {
 /* a running tunnel reads the ruleset on its own thread */
-            if (s->engine.state == CTL_STATE_CONNECTED ||
-                s->engine.state == CTL_STATE_CONNECTING) {
+            if (tunnel_reads_rules(s)) {
                 if (ctl_build_err("disconnect before changing rules", reply,
                                   sizeof reply, &rn) == CTL_OK)
                     client_write(c, reply, rn);

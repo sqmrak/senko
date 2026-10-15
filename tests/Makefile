@@ -107,6 +107,8 @@ HOST_TESTS += test_tun_udp_policy
 HOST_TESTS += test_tun_udp_wait
 HOST_TESTS += test_helper_jobs
 HOST_TESTS += test_awg_link
+HOST_TESTS += test_flow_split
+HOST_TESTS += test_awg_split
 HOST_TESTS += test_sub_links
 HOST_TESTS += test_net_diag test_senko_clock
 HOST_TESTS += test_real_probe
@@ -204,6 +206,8 @@ test: $(HOST_TESTS)
 	./test_tun_udp_wait
 	./test_helper_jobs
 	./test_awg_link
+	./test_flow_split
+	./test_awg_split
 	./test_sub_links
 
 test_tun_udp: test_tun_udp.c packet_fixture.h $(DAEMON)/tun_udp.c \
@@ -347,6 +351,20 @@ test_awg_link: test_awg_link.c $(DAEMON)/awg_link.c $(DAEMON)/awg_link.h $(CORE)
 	      $(DAEMON)/utun_device.c $(CORE)/utun_frame.c $(CORE)/awg_tunnel.c $(CORE)/awg_handshake.c \
 	      $(CORE)/awg_config.c $(CORE)/b64.c $(CORE)/reality_crypto.c $(MLKEM768_SRC) $(TIME) \
 	      -o $@ $(TLS_LDFLAGS) $(THREAD_LDFLAGS)
+
+test_flow_split: test_flow_split.c packet_fixture.h $(CORE)/flow_split.c $(CORE)/flow_split.h
+	$(CC) $(CFLAGS) -I. test_flow_split.c $(CORE)/flow_split.c -o $@
+
+AWG_SPLIT_SRC = $(DAEMON)/awg_split.c $(DAEMON)/awg_link.c $(DAEMON)/tun_tcp.c $(DAEMON)/tun_udp.c \
+                $(DAEMON)/tun_opener.c $(DAEMON)/tun_loop.c $(DAEMON)/utun_device.c \
+                $(DAEMON)/tun_stack.c $(CORE)/tun_nat.c $(CORE)/utun_frame.c $(CORE)/vless_udp.c \
+                $(CORE)/flow_split.c $(CORE)/dns_msg.c $(CORE)/rules.c $(CORE)/geo.c \
+                $(CORE)/awg_tunnel.c $(CORE)/awg_handshake.c $(CORE)/awg_config.c $(CORE)/b64.c \
+                $(TUN_POLICY_SRC) $(TUN_SESSION_SRC) $(CORE)/transport_tcp.c $(CORE)/transport_tls.c
+
+test_awg_split: test_awg_split.c packet_fixture.h $(AWG_SPLIT_SRC) $(DAEMON)/awg_split.h $(LWIP_SRC)
+	$(CC) $(CFLAGS) $(LWIP_CFLAGS) $(TLS_CFLAGS) $(THREAD_CFLAGS) -DSENKO_RELEASE -I$(DAEMON) -I. \
+	      test_awg_split.c $(AWG_SPLIT_SRC) $(LWIP_SRC) -o $@ $(TLS_LDFLAGS) $(THREAD_LDFLAGS)
 
 test_awg_tunnel: test_awg_tunnel.c $(CORE)/awg_tunnel.c $(CORE)/awg_tunnel.h \
                  $(CORE)/awg_handshake.c $(CORE)/awg_config.c $(CORE)/b64.c $(CORE)/reality_crypto.c $(MLKEM768_SRC)

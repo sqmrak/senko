@@ -92,6 +92,9 @@ void daemon_ctl_set_store(daemon_ctl_t *d, store_t *store, const char *geo_dir) 
 /* what the running tunnel reads out of the ruleset: the loaded geo sets and the
    owner lookup. both go only after the tunnel that used them has stopped */
 static void release_routing(daemon_ctl_t *d) {
+    /* a running amneziawg tunnel reads the same ruleset and owner lookup, and
+       its own stop releases them */
+    if (awg_backend_busy(&d->awg)) return;
     if (d->rules) ruleset_release_geo(d->rules);
     app_owner_close(d->owner);
     d->owner = NULL;
@@ -132,9 +135,10 @@ void daemon_ctl_shutdown(daemon_ctl_t *d) {
     senko_core_backend_stop(&d->senko_core);
     app_proxy_stop(&d->app_proxy);
     utun_backend_destroy(&d->embedded_utun);
-    release_routing(d);
-    /* the profile stays recorded: the next senkod brings the tunnel back */
+    /* the profile stays recorded: the next senkod brings the tunnel back. the
+       tunnel goes first because it reads the rules release_routing frees */
     awg_backend_destroy(&d->awg);
+    release_routing(d);
     pthread_mutex_destroy(&d->probe_route_lock);
     OPENSSL_cleanse(&d->started, sizeof d->started);
     d->started_set = 0;
@@ -2051,6 +2055,19 @@ int daemon_ctl_check(void *ctx, const char *mode, const vl_server_t *server,
     return ms;
 }
 
+/* the tunnel reads the routing profile's rules and the owner lookup until it is
+   stopped, so the previous run is joined before they are rebuilt */
+static int awg_begin(daemon_ctl_t *d, const char *path, char *why, size_t why_cap) {
+    awg_backend_stop(&d->awg, 0);
+    release_routing(d);
+    prepare_routing(d);
+    int started = awg_backend_start(&d->awg, path, d->settings.dns_upstream, d->rules,
+                                    d->owner ? app_owner_policy_lookup : NULL, d->owner,
+                                    why, why_cap);
+    if (started != 0) release_routing(d);
+    return started;
+}
+
 int daemon_ctl_awg_busy(void *ctx) {
     daemon_ctl_t *d = (daemon_ctl_t *)ctx;
     return d ? awg_backend_busy(&d->awg) : 0;
@@ -2073,6 +2090,7 @@ int daemon_ctl_awg(void *ctx, const char *flag, const char *path, char *out, siz
     }
     if (strcmp(flag, "--awg-stop") == 0) {
         awg_backend_stop(&d->awg, 1);
+        release_routing(d);
         snprintf(out, cap, "idle");
         return 0;
     }
@@ -2107,7 +2125,7 @@ int daemon_ctl_awg(void *ctx, const char *flag, const char *path, char *out, siz
         return ok ? 0 : 1;
     }
     if (strcmp(flag, "--awg") == 0) {
-        if (awg_backend_start(&d->awg, path, d->settings.dns_upstream, why, sizeof why) != 0) {
+        if (awg_begin(d, path, why, sizeof why) != 0) {
             fprintf(stderr, "senkod: amneziawg not started: %s\n", why);
             snprintf(out, cap, "error %s", why);
             return 1;
@@ -2123,7 +2141,7 @@ int daemon_ctl_awg_restore(daemon_ctl_t *d) {
     char path[256];
     if (!d || !awg_backend_saved_profile(path, sizeof path)) return 0;
     char why[224];
-    if (awg_backend_start(&d->awg, path, d->settings.dns_upstream, why, sizeof why) != 0) {
+    if (awg_begin(d, path, why, sizeof why) != 0) {
         fprintf(stderr, "senkod: the amneziawg profile left running could not restart: %s\n", why);
         return 0;
     }

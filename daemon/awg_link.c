@@ -104,6 +104,24 @@ static void add_bytes(awg_link_t *link, uint64_t up, uint64_t down) {
     if (link->stats_lock) pthread_mutex_unlock(link->stats_lock);
 }
 
+/* 0 when the packet was sent or dropped for a reason that spares the link, -1
+   when the udp socket is dead */
+static int seal_and_send(awg_link_t *link, const uint8_t *packet, size_t packet_len) {
+    size_t wire_len = 0;
+    if (awg_tunnel_seal(&link->current, packet, packet_len, link->wire,
+                        sizeof link->wire, &wire_len) != AWG_TUN_OK) {
+        ++link->dropped;
+        return 0;
+    }
+    return send_datagram(link, link->wire, wire_len);
+}
+
+int awg_link_send_packet(awg_link_t *link, const uint8_t *packet, size_t packet_len) {
+    if (seal_and_send(link, packet, packet_len) != 0) return -1;
+    add_bytes(link, packet_len, 0);
+    return 0;
+}
+
 /* device to server. -1 when the device failed */
 static int pump_device(awg_link_t *link, uint64_t *up, int *udp_dead) {
     for (int i = 0; i < AWG_LINK_BURST; ++i) {
@@ -120,13 +138,7 @@ static int pump_device(awg_link_t *link, uint64_t *up, int *udp_dead) {
             ++link->dropped;
             continue;
         }
-        size_t wire_len = 0;
-        if (awg_tunnel_seal(&link->current, packet, packet_len, link->wire,
-                            sizeof link->wire, &wire_len) != AWG_TUN_OK) {
-            ++link->dropped;
-            continue;
-        }
-        if (send_datagram(link, link->wire, wire_len) != 0) {
+        if (seal_and_send(link, packet, packet_len) != 0) {
             *udp_dead = 1;
             return 0;
         }
@@ -193,8 +205,11 @@ static int pump_udp(awg_link_t *link, uint64_t *down, int *device_dead) {
             ++link->dropped;
             continue;
         }
-        utun_device_status_t st = utun_device_write_frame(link->device, link->frame,
-                                                          UTUN_FRAME_HEADER_LEN + inner_len);
+        if (link->on_inbound) link->on_inbound(link->inbound_ctx, inner, inner_len);
+        utun_device_status_t st = link->write_frame
+            ? link->write_frame(link->write_ctx, link->frame, UTUN_FRAME_HEADER_LEN + inner_len)
+            : utun_device_write_frame(link->device, link->frame,
+                                      UTUN_FRAME_HEADER_LEN + inner_len);
         if (st == UTUN_DEVICE_OK) {
             *down += inner_len;
         } else if (st == UTUN_DEVICE_AGAIN || st == UTUN_DEVICE_ERR_SHORT) {
@@ -220,44 +235,79 @@ static void start_renewal(awg_link_t *link, int64_t now) {
     ++link->rekey_attempts;
 }
 
-awg_link_status_t awg_link_run(awg_link_t *link, char *reason, size_t reason_cap) {
+awg_link_status_t awg_link_begin(awg_link_t *link, char *reason, size_t reason_cap) {
     if (reason && reason_cap) reason[0] = '\0';
     if (pick_timers(link) != 0) {
         if (reason && reason_cap)
             snprintf(reason, reason_cap, "amneziawg timer random generation failed");
         return AWG_LINK_ERR_EXPIRED;
     }
+    return AWG_LINK_RUNNING;
+}
+
+/* key renewal, expiry and keepalives; the part of a pass that needs no descriptor */
+static awg_link_status_t run_timers(awg_link_t *link, char *reason, size_t reason_cap) {
+    int64_t now = senko_now_ms();
+    if (now - link->handshake_ms >= link->reject_after_ms) {
+        set_reason(reason, reason_cap,
+                   "the server has not answered a new handshake for %d s",
+                   (int)(link->reject_after_ms / 1000));
+        return AWG_LINK_ERR_EXPIRED;
+    }
+    if (now - link->handshake_ms >= link->rekey_after_ms &&
+        (!link->rekey_pending || now - link->rekey_sent_ms >= link->rekey_retry_ms) &&
+        link->rekey_attempts < link->max_handshake_attempts)
+        start_renewal(link, now);
+    if (link->rekey_attempts >= link->max_handshake_attempts &&
+        now - link->rekey_sent_ms >= link->rekey_retry_ms) {
+        set_reason(reason, reason_cap, "amneziawg handshake failed after %d attempts",
+                   (int)link->max_handshake_attempts);
+        return AWG_LINK_ERR_EXPIRED;
+    }
+    if (link->cfg->timers[AWG_TIMER_KEEPALIVE].max &&
+        now - link->last_rx_ms < link->keepalive_timeout_ms &&
+        now - link->last_tx_ms >= link->keepalive_timeout_ms &&
+        send_keepalive(link) != 0) {
+        set_reason(reason, reason_cap, "the udp socket to the server failed (errno %d)", errno);
+        return AWG_LINK_ERR_UDP;
+    }
+    if (link->cfg->persistent_keepalive &&
+        now - link->last_tx_ms >= (int64_t)link->cfg->persistent_keepalive * 1000 &&
+        send_keepalive(link) != 0) {
+        set_reason(reason, reason_cap, "the udp socket to the server failed (errno %d)", errno);
+        return AWG_LINK_ERR_UDP;
+    }
+    return AWG_LINK_RUNNING;
+}
+
+awg_link_status_t awg_link_service(awg_link_t *link, int udp_readable,
+                                   char *reason, size_t reason_cap) {
+    if (reason && reason_cap) reason[0] = '\0';
+    awg_link_status_t timers = run_timers(link, reason, reason_cap);
+    if (timers != AWG_LINK_RUNNING) return timers;
+    if (udp_readable) {
+        uint64_t down = 0;
+        int device_dead = 0;
+        int udp_dead = pump_udp(link, &down, &device_dead) != 0;
+        add_bytes(link, 0, down);
+        if (device_dead) {
+            set_reason(reason, reason_cap, "the utun device failed (errno %d)",
+                       link->device->last_errno);
+            return AWG_LINK_ERR_DEVICE;
+        }
+        if (udp_dead) {
+            set_reason(reason, reason_cap, "the udp socket to the server failed (errno %d)", errno);
+            return AWG_LINK_ERR_UDP;
+        }
+    }
+    return AWG_LINK_RUNNING;
+}
+
+awg_link_status_t awg_link_run(awg_link_t *link, char *reason, size_t reason_cap) {
+    if (awg_link_begin(link, reason, reason_cap) != AWG_LINK_RUNNING) return AWG_LINK_ERR_EXPIRED;
     for (;;) {
-        int64_t now = senko_now_ms();
-        if (now - link->handshake_ms >= link->reject_after_ms) {
-            set_reason(reason, reason_cap,
-                       "the server has not answered a new handshake for %d s",
-                       (int)(link->reject_after_ms / 1000));
-            return AWG_LINK_ERR_EXPIRED;
-        }
-        if (now - link->handshake_ms >= link->rekey_after_ms &&
-            (!link->rekey_pending || now - link->rekey_sent_ms >= link->rekey_retry_ms) &&
-            link->rekey_attempts < link->max_handshake_attempts)
-            start_renewal(link, now);
-        if (link->rekey_attempts >= link->max_handshake_attempts &&
-            now - link->rekey_sent_ms >= link->rekey_retry_ms) {
-            set_reason(reason, reason_cap, "amneziawg handshake failed after %d attempts",
-                       (int)link->max_handshake_attempts);
-            return AWG_LINK_ERR_EXPIRED;
-        }
-        if (link->cfg->timers[AWG_TIMER_KEEPALIVE].max &&
-            now - link->last_rx_ms < link->keepalive_timeout_ms &&
-            now - link->last_tx_ms >= link->keepalive_timeout_ms &&
-            send_keepalive(link) != 0) {
-            set_reason(reason, reason_cap, "the udp socket to the server failed (errno %d)", errno);
-            return AWG_LINK_ERR_UDP;
-        }
-        if (link->cfg->persistent_keepalive &&
-            now - link->last_tx_ms >= (int64_t)link->cfg->persistent_keepalive * 1000 &&
-            send_keepalive(link) != 0) {
-            set_reason(reason, reason_cap, "the udp socket to the server failed (errno %d)", errno);
-            return AWG_LINK_ERR_UDP;
-        }
+        awg_link_status_t timers = run_timers(link, reason, reason_cap);
+        if (timers != AWG_LINK_RUNNING) return timers;
 
         struct pollfd pfd[3];
         pfd[0].fd = link->device->fd; pfd[0].events = POLLIN; pfd[0].revents = 0;

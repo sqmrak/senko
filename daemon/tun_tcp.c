@@ -517,6 +517,10 @@ static void start_opening(tun_tcp_t *tcp, relay_t *relay) {
         start_direct(tcp, relay);
         return;
     }
+    if (!tcp->opener_running) {
+        refuse_flow(tcp, relay, "this tunnel carries no flow through a server");
+        return;
+    }
     relay->state = RELAY_OPENING;
     if (tun_opener_submit(tcp->opener, relay->flow_id) != TUN_OPENER_OK)
         refuse_flow(tcp, relay, "too many server connections are opening at once");
@@ -621,6 +625,8 @@ static void on_command(void *ctx, tun_stack_t *stack, const tun_loop_command_t *
 static int on_start(void *ctx, tun_stack_t *stack, char *error, size_t error_cap) {
     tun_tcp_t *tcp = ctx;
     tcp->stack = stack;
+    /* no transport: only the flows the rules send direct can be served */
+    if (!tcp->config.vt) return 0;
     if (tcp->config.use_shared_tls) {
         tcp->shared_tls = transport_tls_shared_create(&tcp->config.tls);
         if (!tcp->shared_tls) {
@@ -767,11 +773,12 @@ static void on_stop(void *ctx) {
 
 tun_tcp_status_t tun_tcp_init(tun_tcp_t *tcp, const tun_tcp_config_t *config,
                               tun_loop_config_t *loop_config) {
-    if (!tcp || !config || !loop_config || !config->vt || !config->dial ||
+    if (!tcp || !config || !loop_config || !config->vt != !config->dial ||
         (config->dns_upstream_len != 0 && config->dns_upstream_len != 4 &&
          config->dns_upstream_len != 16))
         return TUN_TCP_ERR_ARG;
-    if (config->opener_threads == 0 || config->opener_threads > TUN_OPENER_THREADS_MAX)
+    if (config->vt && (config->opener_threads == 0 ||
+                       config->opener_threads > TUN_OPENER_THREADS_MAX))
         return TUN_TCP_ERR_ARG;
     memset(tcp, 0, tcp_part());
     tcp->config = *config;

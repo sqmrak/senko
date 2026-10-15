@@ -86,6 +86,7 @@ static void *run(void *arg) {
     int stopped = 0;
     int status_on = 0;
     awg_link_t *link = NULL;
+    awg_split_t *split = NULL;
     awg_handshake_t hs;
     memset(&hs, 0, sizeof hs);
 
@@ -191,9 +192,40 @@ static void *run(void *arg) {
     }
     awg_link_init(link, &b->cfg, &b->device, b->udp_fd, b->wake[0], &hs, senko_now_ms());
     link->stats_lock = &b->lock;
+    size_t rule_count = b->rules ? b->rules->count : 0;
+    if (!awg_split_wanted(b->rules))
+        fprintf(stderr, "senkod: amneziawg carries everything through the tunnel, %zu rule(s)"
+                        " and none sends traffic out of it\n", rule_count);
+    if (awg_split_wanted(b->rules)) {
+        awg_split_config_t sc;
+        memset(&sc, 0, sizeof sc);
+        sc.link = link;
+        sc.device = &b->device;
+        sc.rules = b->rules;
+        sc.app_of = b->app_of;
+        sc.app_ctx = b->app_ctx;
+        sc.direct = iface;
+        sc.wake_fd = b->wake[0];
+        sc.mtu = address.mtu;
+        if (inet_pton(AF_INET, dns, sc.dns) != 1) {
+            snprintf(why, sizeof why, "the dns address %.60s is not a numeric IPv4 address", dns);
+            goto done;
+        }
+        split = awg_split_open(&sc, why, sizeof why);
+        if (!split) goto done;
+        fprintf(stderr, "senkod: amneziawg sorts packets by %zu rule(s), unmatched traffic goes %s,"
+                        " app rules %s\n", rule_count,
+                b->rules->fallback == RULE_ACTION_PROXY ? "through the tunnel" : "straight out",
+                b->app_of ? "can be decided" : "cannot be decided");
+        size_t blocks = awg_split_unenforced(b->rules);
+        if (blocks)
+            fprintf(stderr, "senkod: amneziawg cannot enforce %zu domain block rule(s),"
+                            " the lookup travels the tunnel\n", blocks);
+    }
     pthread_mutex_lock(&b->lock);
     snprintf(b->dns_state, sizeof b->dns_state, "%s", dns_state);
     b->link = link;
+    b->split = split;
     b->state = AWG_BACKEND_CONNECTED;
     b->connected_ms = senko_now_ms();
     pthread_mutex_unlock(&b->lock);
@@ -203,7 +235,9 @@ static void *run(void *arg) {
             b->device.ifname, endpoint, (unsigned)b->cfg.endpoint_port,
             input.physical_ifname);
 
-    if (awg_link_run(link, why, sizeof why) == AWG_LINK_STOPPED) stopped = 1;
+    awg_link_status_t ended = split ? awg_split_run(split, why, sizeof why)
+                                    : awg_link_run(link, why, sizeof why);
+    if (ended == AWG_LINK_STOPPED) stopped = 1;
 
 done:
     /* dns first: configd hands the primary interface back to wifi before the
@@ -219,6 +253,11 @@ done:
             utun_leftovers_forget();
         b->routes_active = 0;
     }
+    /* describe reads the split under the lock, so it is hidden before it goes */
+    pthread_mutex_lock(&b->lock);
+    b->split = NULL;
+    pthread_mutex_unlock(&b->lock);
+    awg_split_close(split);
     utun_device_close(&b->device);
     if (b->udp_fd >= 0) close(b->udp_fd);
     b->udp_fd = -1;
@@ -273,6 +312,7 @@ int awg_backend_saved_profile(char *path, size_t cap) {
 }
 
 int awg_backend_start(awg_backend_t *backend, const char *path, const char *dns_fallback,
+                      ruleset_t *rules, tun_policy_app_fn app_of, void *app_ctx,
                       char *reason, size_t reason_cap) {
     if (reason && reason_cap) reason[0] = '\0';
     if (!backend || !backend->initialized || !path) return -1;
@@ -307,6 +347,9 @@ int awg_backend_start(awg_backend_t *backend, const char *path, const char *dns_
     snprintf(backend->dns_fallback, sizeof backend->dns_fallback, "%s",
              dns_fallback ? dns_fallback : "");
     backend->thread_done = 0;
+    backend->rules = rules;
+    backend->app_of = app_of;
+    backend->app_ctx = app_ctx;
     pthread_mutex_unlock(&backend->lock);
     save_profile(path);
     if (pthread_create(&backend->thread, NULL, run, backend) != 0) {
@@ -395,7 +438,8 @@ void awg_backend_stats(awg_backend_t *backend, uint64_t *up, uint64_t *down) {
 
 int awg_backend_describe(awg_backend_t *backend, int index, char *key, size_t key_cap,
                          char *value, size_t value_cap) {
-    static const char *keys[] = { "awg.state", "awg.profile", "awg.route", "awg.dns", "awg.link" };
+    static const char *keys[] = { "awg.state", "awg.profile", "awg.route", "awg.dns", "awg.link",
+                                  "awg.rules" };
     const int count = (int)(sizeof keys / sizeof keys[0]);
     if (!backend || !backend->initialized || index < 0 || index >= count) return count;
     snprintf(key, key_cap, "%s", keys[index]);
@@ -417,6 +461,17 @@ int awg_backend_describe(awg_backend_t *backend, int index, char *key, size_t ke
         break;
     case 3:
         snprintf(value, value_cap, "%s", backend->dns_state[0] ? backend->dns_state : "untouched");
+        break;
+    case 5:
+        if (backend->split) {
+            awg_split_counts_t counts;
+            awg_split_counts(backend->split, &counts);
+            snprintf(value, value_cap, "%u flow(s) through the tunnel, %u sent out locally,"
+                     " %u forgotten", (unsigned)counts.tunnel_flows,
+                     (unsigned)counts.local_flows, (unsigned)counts.forgotten);
+        } else {
+            snprintf(value, value_cap, "no rule sends traffic out of the tunnel");
+        }
         break;
     default:
         if (backend->link)

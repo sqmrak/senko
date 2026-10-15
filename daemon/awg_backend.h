@@ -6,8 +6,11 @@
 #include <stdint.h>
 
 #include "core/awg_config.h"
+#include "core/rules.h"
+#include "core/tun_policy.h"
 #include "core/tun_plan.h"
 #include "awg_link.h"
+#include "awg_split.h"
 #include "utun_device.h"
 #include "utun_dns.h"
 
@@ -48,6 +51,10 @@ typedef struct {
     char endpoint[64];
     char dns_state[192];
     awg_link_t *link;          /* while connected; its counters use lock */
+    awg_split_t *split;        /* while connected with rules that send traffic out; uses lock */
+    ruleset_t *rules;          /* borrowed from start until the thread is joined */
+    tun_policy_app_fn app_of;  /* how app rules learn a flow's owner, may be NULL */
+    void *app_ctx;
     uint64_t bytes_up;         /* totals of links that already ended */
     uint64_t bytes_down;
     uint64_t connected_ms;     /* senko_now_ms() when the link came up */
@@ -65,8 +72,12 @@ int awg_backend_init(awg_backend_t *backend);
 void awg_backend_destroy(awg_backend_t *backend);
 
 /* checks that path names a readable profile senko can run, then connects in
-   the background. dns_fallback is used when the profile names no ipv4 dns */
+   the background. dns_fallback is used when the profile names no ipv4 dns.
+   rules may be NULL; when they send anything out of the tunnel the link sorts
+   packets by them (awg_split.h). rules and the owner lookup must stay valid
+   until awg_backend_stop returns */
 int awg_backend_start(awg_backend_t *backend, const char *path, const char *dns_fallback,
+                      ruleset_t *rules, tun_policy_app_fn app_of, void *app_ctx,
                       char *reason, size_t reason_cap);
 
 /* takes the tunnel down and waits for it. forget drops the profile from

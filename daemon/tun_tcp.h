@@ -37,7 +37,7 @@ extern "C" {
 #define TUN_TCP_CMD_OPENED (TUN_LOOP_CMD_OWNER + 1)
 
 typedef struct {
-    const transport_vt_t *vt;
+    const transport_vt_t *vt;    /* NULL with dial NULL: only direct flows are served */
     transport_tls_cfg_t   tls;   /* borrowed: the strings must outlive the bridge */
     vl_proto_t            proto;
     uint8_t               uuid[VLESS_UUID_LEN];

@@ -25,6 +25,7 @@ extern "C" {
 #define AWG_LINK_REJECT_AFTER_MS 180000
 
 typedef enum {
+    AWG_LINK_RUNNING     =  1, /* a step found nothing to end the link */
     AWG_LINK_STOPPED     =  0, /* the owner asked through wake_fd */
     AWG_LINK_ERR_DEVICE  = -1, /* the utun descriptor failed */
     AWG_LINK_ERR_UDP     = -2, /* the server socket failed */
@@ -37,6 +38,14 @@ typedef struct {
     int udp_fd;  /* nonblocking, connected to the server */
     int wake_fd; /* readable when the owner wants the link to stop */
     pthread_mutex_t *stats_lock; /* guards bytes_up and bytes_down, may be NULL */
+
+    /* where packets from the server go. NULL writes them to the device; an
+       owner that shares the device with another writer supplies its own */
+    utun_device_status_t (*write_frame)(void *ctx, const uint8_t *frame, size_t len);
+    void *write_ctx;
+    /* sees every packet the server sent, before it is written. may be NULL */
+    void (*on_inbound)(void *ctx, const uint8_t *packet, size_t len);
+    void *inbound_ctx;
 
     awg_tunnel_t current;
     /* the keys before the last renewal: the server keeps sending with them
@@ -72,6 +81,18 @@ void awg_link_init(awg_link_t *link, const awg_config_t *cfg, utun_device_t *dev
 
 /* runs until wake_fd is readable or the link fails; reason says why it ended */
 awg_link_status_t awg_link_run(awg_link_t *link, char *reason, size_t reason_cap);
+
+/* the same link driven by an owner that has its own event loop: begin once,
+   then service after every wait. the owner reads the device itself and hands
+   each packet to send_packet, and waits on udp_fd and wake_fd as it sees fit.
+   service runs the timers and, when udp_readable, takes the server's packets.
+   AWG_LINK_RUNNING while the link lives, else why it ended, with a reason */
+awg_link_status_t awg_link_begin(awg_link_t *link, char *reason, size_t reason_cap);
+awg_link_status_t awg_link_service(awg_link_t *link, int udp_readable,
+                                   char *reason, size_t reason_cap);
+
+/* seals one ip packet toward the server. -1 when the udp socket is dead */
+int awg_link_send_packet(awg_link_t *link, const uint8_t *packet, size_t packet_len);
 
 /* wipes every key the link holds */
 void awg_link_clear(awg_link_t *link);

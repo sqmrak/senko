@@ -83,15 +83,26 @@ static int set_flags(int fd) {
 
 /* ---- the device, as the stack sees it ---------------------------------- */
 
-static tun_stack_write_t loop_write(void *ctx, const uint8_t *frame, size_t len,
-                                    int *out_errno) {
-    tun_loop_t *loop = ctx;
-    *out_errno = 0;
+utun_device_status_t tun_loop_write_frame(tun_loop_t *loop, const uint8_t *frame, size_t len) {
     pthread_mutex_lock(&loop->lock);
     utun_device_status_t status = utun_device_write_frame(loop->device, frame, len);
     int saved_errno = loop->device->last_errno;
     pthread_mutex_unlock(&loop->lock);
-    switch (status) {
+    if (status != UTUN_DEVICE_OK && status != UTUN_DEVICE_AGAIN &&
+        status != UTUN_DEVICE_ERR_SHORT) {
+        /* a descriptor that fails a write will fail the next one too; the
+           loop ends instead of dropping every packet one at a time */
+        loop->device_failed = 1;
+        loop->device_errno = saved_errno;
+    }
+    return status;
+}
+
+static tun_stack_write_t loop_write(void *ctx, const uint8_t *frame, size_t len,
+                                    int *out_errno) {
+    tun_loop_t *loop = ctx;
+    *out_errno = 0;
+    switch (tun_loop_write_frame(loop, frame, len)) {
     case UTUN_DEVICE_OK:
         return TUN_STACK_WRITE_DONE;
     case UTUN_DEVICE_AGAIN:
@@ -99,11 +110,7 @@ static tun_stack_write_t loop_write(void *ctx, const uint8_t *frame, size_t len,
     case UTUN_DEVICE_ERR_SHORT:
         return TUN_STACK_WRITE_SHORT;
     default:
-        /* a descriptor that fails a write will fail the next one too; the
-           loop ends instead of dropping every packet one at a time */
-        *out_errno = saved_errno;
-        loop->device_failed = 1;
-        loop->device_errno = saved_errno;
+        *out_errno = loop->device_errno;
         return TUN_STACK_WRITE_FAILED;
     }
 }
@@ -346,6 +353,9 @@ tun_loop_status_t tun_loop_run(tun_loop_t *loop, tun_loop_result_t *out_result) 
                 }
                 /* a bad frame is counted and explained by the stack; one bad
                    packet is no reason to stop the tunnel */
+                if (loop->config.frame_filter &&
+                    loop->config.frame_filter(loop->config.filter_ctx, loop->frame, len))
+                    continue;
                 (void)tun_stack_input_frame(loop->stack, loop->frame, len);
                 if (loop->device_failed) break;
             }

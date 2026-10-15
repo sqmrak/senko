@@ -72,6 +72,7 @@ struct tun_udp {
     uint64_t next_tag;
     tun_opener_t *opener;
     int opener_running;
+    int running;  /* the relay is started and not yet stopped */
     transport_tls_shared_t *shared_tls;
     tun_loop_hooks_t previous_hooks;
     tun_loop_command_fn previous_command;
@@ -530,7 +531,7 @@ static association_t *find_association(tun_udp_t *udp, assoc_kind_t kind,
 static int on_udp(void *ctx, const tun_flow_key_t *key,
                   const uint8_t *payload, size_t len) {
     tun_udp_t *udp = ctx;
-    if (!udp->opener_running || !key ||
+    if (!udp->running || !key ||
         (key->address_len != 4 && key->address_len != 16) ||
         !payload || len == 0 || len > VLESS_UDP_PAYLOAD_MAX)
         return refuse(udp, "a UDP datagram is empty, too large, or the relay is stopped");
@@ -582,6 +583,9 @@ static int on_udp(void *ctx, const tun_flow_key_t *key,
         if (!find_association(udp, kind, key))
             trace_verdict(key, kind == ASSOC_DIRECT ? "direct" : "proxy", why);
     }
+
+    if (kind != ASSOC_DIRECT && !udp->opener_running)
+        return refuse(udp, "this tunnel carries no datagram through a server");
 
     association_t *assoc = find_association(udp, kind, key);
     int fresh = assoc == NULL;
@@ -672,6 +676,11 @@ static int on_start(void *ctx, tun_stack_t *stack, char *error, size_t error_cap
         snprintf(error, error_cap, "the UDP relay has no tunnel loop to wake");
         return -1;
     }
+    /* no transport: only the traffic the rules send direct can be served */
+    if (!udp->config.vt) {
+        udp->running = 1;
+        return 0;
+    }
     if (udp->config.use_shared_tls) {
         udp->shared_tls = transport_tls_shared_create(&udp->config.tls);
         if (!udp->shared_tls) {
@@ -694,6 +703,7 @@ static int on_start(void *ctx, tun_stack_t *stack, char *error, size_t error_cap
         return -1;
     }
     udp->opener_running = 1;
+    udp->running = 1;
     return 0;
 }
 
@@ -776,6 +786,7 @@ static void on_command(void *ctx, tun_stack_t *stack,
 
 static void on_stop(void *ctx) {
     tun_udp_t *udp = ctx;
+    udp->running = 0;
     if (udp->opener_running) {
         tun_opener_stop(udp->opener);
         udp->opener_running = 0;
@@ -792,9 +803,9 @@ static void on_stop(void *ctx) {
 
 int tun_udp_init(tun_udp_t *udp, const tun_udp_config_t *config,
                  tun_loop_config_t *loop_config) {
-    if (!udp || !config || !loop_config || !config->vt || !config->dial ||
-        config->opener_threads == 0 ||
-        config->opener_threads > TUN_OPENER_THREADS_MAX ||
+    if (!udp || !config || !loop_config || !config->vt != !config->dial ||
+        (config->vt && (config->opener_threads == 0 ||
+                        config->opener_threads > TUN_OPENER_THREADS_MAX)) ||
         (config->dns_upstream_len != 4 && config->dns_upstream_len != 16) ||
         loop_config->stack.udp_packet) return -1;
     memset(udp, 0, udp_part());

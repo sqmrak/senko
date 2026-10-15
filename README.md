@@ -40,7 +40,8 @@ subscriptions: uri lists, base64, happ, xray/sing-box json, clash yaml, shadowro
 - profile applies at the next connect; unmatched traffic follows `GlobalProxy`
 - geosite and geoip: `Geoipurl` and `Geositeurl` of the profile, loyalsoldier by default, kept per tag in `/var/root/Library/Preferences/senko-geo`
 - not matched: `regexp:` and `ext:` entries, dns fields of the profile
-- app rules: utun backend only, the app is the process that holds the socket, safari pages on ios 8 and later are not caught
+- app rules: utun backend and amneziawg, the app is the process that holds the socket, safari pages on ios 8 and later are not caught
+- amneziawg with rules: direct and blocked flows leave through the local stack, domain block rules do not apply
 - app rules skip senko-core (auto picks utun); geo rules reach it through the geosite.dat and geoip.dat of the geo directory
 
 ## features

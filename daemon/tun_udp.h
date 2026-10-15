@@ -23,7 +23,7 @@ extern "C" {
 #define TUN_UDP_CMD_OPENED (TUN_LOOP_CMD_OWNER + 2)
 
 typedef struct {
-    const transport_vt_t *vt;
+    const transport_vt_t *vt; /* NULL with dial NULL: only direct traffic is served */
     transport_tls_cfg_t tls;
     vl_proto_t proto;      /* only vless carries udp; every protocol carries dns */
     uint8_t uuid[VLESS_UUID_LEN];

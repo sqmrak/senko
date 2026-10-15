@@ -38,7 +38,7 @@ CORE_SRC = core/vless.c core/b64.c core/config.c core/share_link.c core/rules.c 
            core/socks5_client.c core/http_client.c core/vision.c core/awg_config.c core/awg_handshake.c core/awg_tunnel.c \
            core/trojan_client.c core/shadowsocks_client.c core/vmess_client.c core/blake2b256.c core/hy2_proto.c \
            core/backend_state.c core/endpoint_pool.c core/probe_stats.c core/route_message.c \
-           core/tun_flow.c core/tun_nat.c core/tun_plan.c core/utun_frame.c core/vless_udp.c core/dns_policy.c core/tun_policy.c
+           core/tun_flow.c core/tun_nat.c core/tun_plan.c core/utun_frame.c core/vless_udp.c core/dns_policy.c core/tun_policy.c core/flow_split.c
 # vendored PQClean ml-kem-768 "clean" backend, plus its shared fips202.c and a
 # local randombytes.c shim over senko's own openssl rng; see core/third_party/mlkem768/LICENSE
 MLKEM768_SRC = core/third_party/mlkem768/kem.c core/third_party/mlkem768/indcpa.c \
@@ -52,7 +52,7 @@ DAEMON_SRC = app_owner.c dialer.c loop.c ctl_server.c daemon_ctl.c storefile.c s
              app_proxy.c egress.c senko_core_config.c senko_core_backend.c \
              awg_utun.c awg_route.c awg_pfroute.c legacy_ios.c proc_detach.c \
              route_socket.c tun_dialer.c tun_loop.c tun_opener.c tun_stack.c tun_tcp.c tun_udp.c \
-             hy2_engine.c utun_device.c utun_route.c vpn_conflict.c utun_dns.c utun_backend.c direct_socket.c direct_dns.c helper_jobs.c senkod_helper.c awg_link.c awg_backend.c main.c
+             hy2_engine.c utun_device.c utun_route.c vpn_conflict.c utun_dns.c utun_backend.c direct_socket.c direct_dns.c helper_jobs.c senkod_helper.c awg_link.c awg_split.c awg_backend.c main.c
 LWIP_DIR = third_party/lwip/src
 LWIP_SRC = $(wildcard $(LWIP_DIR)/core/*.c) $(wildcard $(LWIP_DIR)/core/ipv4/*.c) \
            $(wildcard $(LWIP_DIR)/core/ipv6/*.c) lwip_port/lwip_sys.c

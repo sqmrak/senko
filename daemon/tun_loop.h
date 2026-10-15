@@ -86,9 +86,17 @@ typedef struct {
     void *ctx;
 } tun_loop_hooks_t;
 
+/* runs on the loop thread for every frame read from the device, before the
+   stack sees it. nonzero means the owner took the frame, so the stack never
+   does and may not be handed the same buffer again. the frame keeps its
+   family header */
+typedef int (*tun_loop_filter_fn)(void *ctx, uint8_t *frame, size_t frame_len);
+
 typedef struct {
     tun_stack_config_t stack;
     tun_loop_hooks_t   hooks;
+    tun_loop_filter_fn frame_filter; /* NULL hands every frame to the stack */
+    void              *filter_ctx;
     uint64_t generation;          /* the run this loop is; commands must match it */
     size_t   command_capacity;    /* 0 picks TUN_LOOP_COMMAND_MAX */
     tun_loop_command_fn on_command;
@@ -124,6 +132,11 @@ void tun_loop_request_stop(tun_loop_t *loop);
 /* after tun_loop_run() has returned, or when it never ran: closes the device
    if nothing did, and releases the queue's pipe and lock. safe to call twice */
 void tun_loop_destroy(tun_loop_t *loop);
+
+/* one frame the owner writes to the device itself, on the loop thread. it
+   takes the same lock and ends the loop on a broken descriptor the way the
+   stack's own writes do, but it is never queued: a busy device refuses it */
+utun_device_status_t tun_loop_write_frame(tun_loop_t *loop, const uint8_t *frame, size_t len);
 
 /* the stack, for the owner's callbacks on the loop thread */
 tun_stack_t *tun_loop_stack(tun_loop_t *loop);
