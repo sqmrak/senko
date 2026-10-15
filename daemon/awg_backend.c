@@ -9,6 +9,7 @@
 #include "status.h"
 #include "utun_backend.h"
 #include "utun_route.h"
+#include "vpn_conflict.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -160,6 +161,7 @@ static void *run(void *arg) {
                                   &routes) != UTUN_ROUTE_OK) {
         snprintf(why, sizeof why, "%.200s", routes.failed_message[0]
                  ? routes.failed_message : "the tunnel routes could not be installed");
+        vpn_conflict_explain(why, sizeof why, b->device.ifname);
         goto done;
     }
     b->routes_active = 1;
@@ -193,6 +195,7 @@ static void *run(void *arg) {
     snprintf(b->dns_state, sizeof b->dns_state, "%s", dns_state);
     b->link = link;
     b->state = AWG_BACKEND_CONNECTED;
+    b->connected_ms = senko_now_ms();
     pthread_mutex_unlock(&b->lock);
     status_set_on(input.physical_ifname);
     status_on = 1;
@@ -363,6 +366,16 @@ int awg_backend_busy(awg_backend_t *backend) {
                backend->state == AWG_BACKEND_CONNECTED;
     pthread_mutex_unlock(&backend->lock);
     return busy;
+}
+
+long awg_backend_uptime(awg_backend_t *backend) {
+    if (!backend || !backend->initialized) return -1;
+    pthread_mutex_lock(&backend->lock);
+    long seconds = -1;
+    if (backend->state == AWG_BACKEND_CONNECTED)
+        seconds = (long)((senko_now_ms() - backend->connected_ms) / 1000);
+    pthread_mutex_unlock(&backend->lock);
+    return seconds;
 }
 
 void awg_backend_stats(awg_backend_t *backend, uint64_t *up, uint64_t *down) {

@@ -333,6 +333,20 @@ int main(void) {
     ok("the short write message says how much went",
        strstr(error.message, "only 10 of") != NULL);
 
+    /* a lookup with no route is a missing route, and says what usually causes
+       it instead of blaming the socket */
+    route_message_spec_t missing = pin_spec(ROUTE_MESSAGE_GET);
+    fake_init(&fake);
+    fake.write_errno = ESRCH;
+    io = io_for(&fake);
+    ok("a lookup with no route fails the write",
+       route_socket_transact(&io, &missing, 1000, &reply, &error) ==
+       ROUTE_SOCKET_ERR_WRITE);
+    ok("the lookup message names a missing route and another VPN",
+       strstr(error.message, "no route to it") != NULL &&
+       strstr(error.message, "another VPN") != NULL &&
+       error.kernel_errno == ESRCH);
+
     /* a message that cannot be built says so before anything is sent */
     route_message_spec_t bad = pin_spec(ROUTE_MESSAGE_ADD);
     bad.prefix = 33;

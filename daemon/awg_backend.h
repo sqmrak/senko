@@ -50,6 +50,7 @@ typedef struct {
     awg_link_t *link;          /* while connected; its counters use lock */
     uint64_t bytes_up;         /* totals of links that already ended */
     uint64_t bytes_down;
+    uint64_t connected_ms;     /* senko_now_ms() when the link came up */
 
     /* owned by the tunnel thread */
     awg_config_t cfg;
@@ -78,6 +79,8 @@ void awg_backend_status(awg_backend_t *backend, char *out, size_t cap);
 /* connecting or connected */
 int awg_backend_busy(awg_backend_t *backend);
 
+/* seconds the link has been up, -1 while it is not connected */
+long awg_backend_uptime(awg_backend_t *backend);
 void awg_backend_stats(awg_backend_t *backend, uint64_t *up, uint64_t *down);
 
 /* the profile a previous senkod left running, or 0 when there is none */

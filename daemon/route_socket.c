@@ -221,8 +221,15 @@ route_socket_status_t route_socket_transact(const route_io_t *io,
         return ROUTE_SOCKET_ALREADY_GONE;
     }
     if (wrote < 0) {
-        snprintf(text, sizeof text, "cannot %s route %s: writing to the routing"
-                 " socket failed", verb, what);
+        /* darwin answers a lookup with no matching route by failing the write
+           itself, so this is a missing route rather than a socket fault */
+        int missing = request.type == ROUTE_MESSAGE_GET &&
+                      (io_errno == ESRCH || io_errno == ENETUNREACH ||
+                       io_errno == EHOSTUNREACH);
+        snprintf(text, sizeof text, "cannot %s route %s: %s", verb, what,
+                 missing ? "the device has no route to it, wifi or cellular is"
+                           " down or another VPN took the default route"
+                         : "writing to the routing socket failed");
         route_errno_append(text, sizeof text, io_errno);
         set_error(out_error, ROUTE_SOCKET_ERR_WRITE, io_errno, text);
         return ROUTE_SOCKET_ERR_WRITE;
