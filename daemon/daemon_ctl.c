@@ -273,6 +273,37 @@ static int resolve_ipv4_addresses(const char *host, char *first_ip, size_t first
     return ok > 0 && first_ip[0] ? 0 : -1;
 }
 
+/* the probe address is resolved before the tunnel exists. a system resolver
+   that does not answer (an ios 12 device where an earlier tunnel never came up)
+   left the verify with nothing to dial, and the user was told the server name
+   did not resolve. the physical resolver answers it the way a subscription
+   fetch does when the system one has failed */
+static void resolve_probe_physical(daemon_ctl_t *d) {
+    direct_socket_iface_t iface;
+    char address[INET_ADDRSTRLEN];
+    memset(&iface, 0, sizeof iface);
+    if (egress_snapshot(iface.ifname, sizeof iface.ifname, address, sizeof address) != 0) return;
+    iface.ifindex = if_nametoindex(iface.ifname);
+    if (!iface.ifindex) return;
+    uint32_t addresses[DNS_MSG_MAX_IPV4];
+    size_t count = 0;
+    if (direct_dns_ipv4(&iface, d->settings.dns_upstream, 53, "example.com", 2000,
+                        addresses, DNS_MSG_MAX_IPV4, &count) != 0)
+        return;
+    for (size_t i = 0; i < count; ++i) {
+        struct sockaddr_in sin;
+        memset(&sin, 0, sizeof sin);
+        sin.sin_family = AF_INET;
+        sin.sin_addr.s_addr = addresses[i];
+        if (!net_addr_allowed((struct sockaddr *)&sin)) continue;
+        if (inet_ntop(AF_INET, &sin.sin_addr, d->probe_ip, sizeof d->probe_ip)) {
+            fprintf(stderr, "senkod: probe address %s came from the physical resolver\n",
+                    d->probe_ip);
+            return;
+        }
+    }
+}
+
 int daemon_ctl_native_config(void *ctx, const vl_server_t *server, char *buf,
                              size_t cap, size_t *len) {
     daemon_ctl_t *d = (daemon_ctl_t *)ctx;
@@ -374,6 +405,7 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
             if (!d->probe_ip[0])
                 (void)resolve_ipv4_addresses("example.com", d->probe_ip,
                                              sizeof d->probe_ip, NULL, 0, 1);
+            if (!d->probe_ip[0]) resolve_probe_physical(d);
 
             char backend_reason[160];
             backend_reason[0] = '\0';
