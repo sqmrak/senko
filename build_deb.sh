@@ -50,7 +50,7 @@ PAYLOAD="${STAGE}${JBROOT}"
 APP_RESOURCES=(
   Icon.png Icon@2x.png Icon-72.png Icon-72@2x.png
   Icon-60@2x.png Icon-60@3x.png Icon-76.png Icon-76@2x.png
-  Icon-83.5@2x.png sqmrak.jpg boykisser.png senko-fall.png
+  Icon-83.5@2x.png sqmrak.jpg boykisser.png senko-fall.png senko-jealous.png
   meow.caf meow.wav ouch.wav miside-bg.jpg frutiger-bg.jpg frutiger-bg-dark.jpg frutiger-bg-dark-wide.jpg
   server-placeholder.png ios26-bg-light.jpg ios26-bg-dark.jpg
   Default.png Default@2x.png Default-568h@2x.png Default-667h@2x.png
@@ -110,7 +110,8 @@ bash "${ROOT}/scripts/build_openssl_arm64.sh"
 echo "==> quic (ngtcp2, nghttp3)"
 bash "${ROOT}/scripts/build_quic.sh"
 
-if [[ ! -f "${MBED}/lib/libmbedtls-armv7.a" || \
+if [[ ! -f "${MBED}/.senko-ios-min-4.3" || \
+      ! -f "${MBED}/lib/libmbedtls-armv7.a" || \
       ! -f "${MBED}/lib/libmbedx509-armv7.a" || \
       ! -f "${MBED}/lib/libmbedcrypto-armv7.a" || \
       ! -f "${MBED}/lib/libmbedtls-arm64.a" || \
@@ -139,7 +140,7 @@ make -C "${ROOT}/daemon" -f Makefile.ios clean \
 make -C "${ROOT}/daemon" -f Makefile.ios \
   THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
   TRIPLE=arm-apple-darwin11 SDK="${SDK_V7}" \
-  ARCH="-arch armv7 -miphoneos-version-min=5.0" OSSL="${OSSL_V7}" QUIC="${QUIC_ROOT}/armv7" \
+  ARCH="-arch armv7 -miphoneos-version-min=4.3" OSSL="${OSSL_V7}" QUIC="${QUIC_ROOT}/armv7" \
   CRT="${CRT_V7}" \
   IOS_BINDIR=build/ios-armv7 all
 cp "${ROOT}/daemon/build/ios-armv7/senkod" "${SLICE}/armv7/senkod"
@@ -169,7 +170,7 @@ make -C "${ROOT}/app" clean \
 make -C "${ROOT}/app" \
   THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
   TRIPLE=arm-apple-darwin11 SDK="${SDK_V7}" \
-  ARCH="-arch armv7 -miphoneos-version-min=5.0" \
+  ARCH="-arch armv7 -miphoneos-version-min=4.3" \
   CRT="${CRT_V7}" \
   OBJDIR=build/obj-armv7 BIN=build/senko-armv7
 cp "${ROOT}/app/build/senko-armv7" "${SLICE}/senko-armv7"
@@ -193,7 +194,7 @@ make -C "${ROOT}/senkotlsfix" -f Makefile.ios clean \
 make -C "${ROOT}/senkotlsfix" -f Makefile.ios \
   THEOS="${THEOS}" TC="${TC}" LDID="${TC}/ldid" \
   TRIPLE=arm-apple-darwin11 SDK="${SDK_V7}" \
-  ARCH="-arch armv7 -miphoneos-version-min=5.0" \
+  ARCH="-arch armv7 -miphoneos-version-min=4.3" \
   MBED="${MBED}" MBEDLIBS="${MBED}/lib/libmbedtls-armv7.a ${MBED}/lib/libmbedx509-armv7.a ${MBED}/lib/libmbedcrypto-armv7.a" \
   OUT=senkotlsfix-armv7.dylib
 cp "${ROOT}/senkotlsfix/senkotlsfix-armv7.dylib" "${SLICE}/"
@@ -227,7 +228,7 @@ strip_local_symbols "${SLICE}/senkotlsfix.dylib"
 echo "==> senkostatus armv7"
 "${TC}/clang" -target arm-apple-darwin11 -B "${TC}" \
   -fno-objc-arc -Wall -Wextra -O2 -fPIC \
-  -arch armv7 -miphoneos-version-min=5.0 -isysroot "${SDK_V7}" \
+  -arch armv7 -miphoneos-version-min=4.3 -isysroot "${SDK_V7}" \
   "${ROOT}/status/senko_status.m" \
   -o "${SLICE}/senkostatus-armv7.dylib" \
   -dynamiclib \

@@ -31,8 +31,25 @@ remove_rootful_app_bundle() {
   rm -rf "$target_path" 2>/dev/null || true
 }
 
+# postinst puts real copies in /usr/bin when the system refuses the payload binaries; the marker says they are ours
+remove_rootful_copies() {
+  mark=${ROOTFUL_COPY_MARK:-/var/root/Library/Preferences/com.senko.rootful-copy}
+  bin_dir=${ROOTFUL_BIN:-/usr/bin}
+  [ -f "$mark" ] || return 0
+  for name in senkod senkoctl; do
+    if [ -f "${bin_dir}/${name}" ] && [ ! -L "${bin_dir}/${name}" ]; then
+      rm -f "${bin_dir}/${name}"
+    fi
+  done
+  if [ -f /usr/lib/senko-core ] && [ ! -L /usr/lib/senko-core ]; then
+    rm -f /usr/lib/senko-core
+  fi
+  rm -f "$mark"
+}
+
 remove_rootful_layout() {
   [ -z "$JBROOT" ] || return 0
+  remove_rootful_copies
   for name in senkod senkoctl; do
     remove_rootful_link "/usr/bin/${name}" "${PAYLOAD_ROOT}/usr/bin/${name}"
   done
@@ -95,6 +112,8 @@ if [ "$1" = "purge" ]; then
   rm -f /var/mobile/Library/Preferences/com.senko.hwid >/dev/null 2>&1 || true
   rm -f /var/mobile/Library/Preferences/senko.cfg >/dev/null 2>&1 || true
   rm -f /var/root/Library/Preferences/senko.cfg >/dev/null 2>&1 || true
+  # the per tag geo sets a routing profile downloaded; a profile fetches them again
+  rm -rf /var/root/Library/Preferences/senko-geo >/dev/null 2>&1 || true
   rm -f /var/log/senkod.log /var/log/senkoawgd.log /var/log/senko-system.log >/dev/null 2>&1 || true
   rm -f /var/log/senko-core.log >/dev/null 2>&1 || true
 fi

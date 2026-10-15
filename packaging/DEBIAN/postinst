@@ -35,6 +35,11 @@ LAUNCHCTL=${JBROOT}/bin/launchctl
 STATUS_STATE=/var/mobile/Library/Preferences/com.senko.status.state
 AWG_ACTIVE=/var/run/senkod-amnezia.config
 CFG=/var/root/Library/Preferences/senko.cfg
+# where the rootful layout puts its binaries, and the file that says this package put real copies there
+ROOTFUL_BIN=/usr/bin
+ROOTFUL_COPY_MARK=/var/root/Library/Preferences/com.senko.rootful-copy
+# the ldid a device may carry, in the order they are tried
+LDID_CANDIDATES="/var/jb/usr/bin/ldid /usr/bin/ldid /usr/local/bin/ldid"
 LEGACY_CFG=/var/mobile/Library/Preferences/senko.cfg
 
 install_rootful_link() {
@@ -59,7 +64,19 @@ install_rootful_app_bundle() {
   target_path=/Applications/Senko.app
   [ -d "$source_path" ] || return 0
   rm -rf "${target_path}.dpkg-new" 2>/dev/null || true
-  cp -R "$source_path" "${target_path}.dpkg-new" || return 1
+  # the 25 MB senko-core in PlugIns is an arm64 ios 12 binary that senkod runs from the payload link, so
+  # a copy on the system volume only fills it: ios 9 cp failed with "No space left on device" there.
+  # the old bundle loses its PlugIns first, so an upgrade does not hold two bundles at once
+  rm -rf "${target_path}/PlugIns" 2>/dev/null || true
+  mkdir "${target_path}.dpkg-new" || return 1
+  for entry in "$source_path"/* "$source_path"/.[!.]*; do
+    [ -e "$entry" ] || continue
+    [ "${entry##*/}" = PlugIns ] && continue
+    cp -R "$entry" "${target_path}.dpkg-new/" || {
+      rm -rf "${target_path}.dpkg-new" 2>/dev/null || true
+      return 1
+    }
+  done
   : > "${target_path}.dpkg-new/.senko-rootful-copy"
   [ -L "$target_path" ] && rm -f "$target_path"
   rm -rf "$target_path" 2>/dev/null || true
@@ -141,6 +158,83 @@ install_rootful_layout() {
   if [ ! -e /usr/bin/head ] && [ -e "${PAYLOAD_ROOT}/usr/lib/senko/head" ]; then
     install_rootful_link "${PAYLOAD_ROOT}/usr/lib/senko/head" "/usr/bin/head" || true
   fi
+}
+
+# the kernel kills a program it refuses at exec: status 137, no output, no crash report. a program that
+# starts, or fails any other way, was let through. senkod and senkoctl print their usage and exit 2 when
+# they get no arguments, so running them bare is a safe test
+binary_starts() {
+  "$1" >/dev/null 2>&1 </dev/null
+  [ "$?" -ne 137 ]
+}
+
+find_device_ldid() {
+  for candidate in $LDID_CANDIDATES; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+stage_rootful_copy() {
+  rm -f "$2" 2>/dev/null || true
+  cp "$1" "$2" 2>/dev/null || return 1
+  chmod 755 "$2" 2>/dev/null || return 1
+  chown root:wheel "$2" 2>/dev/null || true
+}
+
+# a rootful ios 12 device (iPhone7,2, 12.5) killed senkod with status 137 from /var/jb/usr/bin/senkod and
+# from the link to it, and a rootful ios 10.3.3 launchd (iPhone9,4) ran the link as exit 78 with no output
+# while a shell started the same file. the daemon and its control tool therefore run from a real copy on the
+# system volume, as before 3.0 (fourth argument "always"). the core keeps its payload path unless the system
+# kills it. a copy that is killed is signed again by the ldid on the device, which writes the hash types
+# that jailbreak accepts. a copy stays only when the program starts afterwards
+heal_rootful_binary() {
+  name=$1
+  payload="${2:-${PAYLOAD_ROOT}/usr/bin/${name}}"
+  bin_dir="${3:-$ROOTFUL_BIN}"
+  target="${bin_dir}/${name}"
+  stage="${bin_dir}/.${name}.senko-new"
+  [ -x "$payload" ] || return 0
+  if [ "$4" != always ]; then
+    binary_starts "$payload" && return 0
+    postinst_log "heal: ${payload} is killed at exec with status 137"
+  fi
+  method=
+  if stage_rootful_copy "$payload" "$stage" && binary_starts "$stage"; then
+    method="a real copy on the system volume"
+  else
+    ldid_tool="$(find_device_ldid)" || ldid_tool=
+    if [ -n "$ldid_tool" ]; then
+      for flags in "-S" "-Hsha1 -S"; do
+        stage_rootful_copy "$payload" "$stage" || break
+        # the flags are a fixed pair of words, so splitting them is the intent
+        "$ldid_tool" $flags "$stage" >/dev/null 2>&1 || continue
+        if binary_starts "$stage"; then
+          method="a copy signed again by ${ldid_tool} ${flags}"
+          break
+        fi
+      done
+    else
+      postinst_log "heal: no ldid on the device to sign ${name} again"
+    fi
+  fi
+  if [ -z "$method" ]; then
+    rm -f "$stage" 2>/dev/null || true
+    postinst_log "heal: no remedy for ${name}"
+    return 1
+  fi
+  rm -f "$target" 2>/dev/null || true
+  if ! mv "$stage" "$target"; then
+    rm -f "$stage" 2>/dev/null || true
+    postinst_log "heal: cannot put the copy of ${name} in place"
+    return 1
+  fi
+  mkdir -p "${ROOTFUL_COPY_MARK%/*}" 2>/dev/null || true
+  : > "$ROOTFUL_COPY_MARK" 2>/dev/null || true
+  postinst_log "heal: ${name} runs as ${method}"
 }
 
 # senko before 3.0 redirected traffic with pf or ipfw. a daemon that died under
@@ -231,6 +325,30 @@ probe_senkod_exec() {
   postinst_log "diag exec $path: status $status, $(printf '%s' "$reply" | sed -n '1p')"
 }
 
+# a real copy of a binary run from another volume. the data volume holds the payload, and a kill with
+# status 137 and no text from every path to it does not say whether the file or the volume is refused
+probe_senkod_copy() {
+  source_path=$1
+  copy_path=$2
+  [ -e "$source_path" ] || return 0
+  rm -f "$copy_path" 2>/dev/null || true
+  if ! cp "$source_path" "$copy_path" 2>/dev/null || ! chmod 755 "$copy_path" 2>/dev/null; then
+    postinst_log "diag copy $copy_path: cannot be written"
+    rm -f "$copy_path" 2>/dev/null || true
+    return 0
+  fi
+  probe_senkod_exec "$copy_path"
+  rm -f "$copy_path" 2>/dev/null || true
+}
+
+# what the kernel said about a kill: a code signature or a memory limit leaves no text for the process itself
+log_kernel_kills() {
+  dmesg_tool=/sbin/dmesg
+  [ -x "$dmesg_tool" ] || dmesg_tool=/usr/sbin/dmesg
+  [ -x "$dmesg_tool" ] || return 0
+  "$dmesg_tool" 2>/dev/null | grep -i -E 'senkod|senkoctl|amfi|code sign|codesign|jetsam|memorystatus' | tail -n 8 | postinst_log_lines kernel
+}
+
 # a launchd that lists senkod while the log stays empty never ran main(): the first line
 # senkod writes comes before anything that can fail. this records the facts that tell the
 # causes apart, none of them needs a shell on the device
@@ -241,6 +359,13 @@ diagnose_senkod() {
   launchctl_cmd list com.senko.senkod 2>&1 | postinst_log_lines launchctl
   probe_senkod_exec "${PAYLOAD_ROOT}/usr/bin/senkod"
   [ -z "$JBROOT" ] && probe_senkod_exec /usr/bin/senkod
+  # senkoctl is signed like senkod: if it starts, the signature scheme is not the refusal
+  probe_senkod_exec "${PAYLOAD_ROOT}/usr/bin/senkoctl"
+  if [ -z "$JBROOT" ]; then
+    probe_senkod_copy "${PAYLOAD_ROOT}/usr/bin/senkod" /usr/bin/.senkod-probe
+  fi
+  probe_senkod_copy "${PAYLOAD_ROOT}/usr/bin/senkod" /var/root/.senkod-probe
+  log_kernel_kills
   count=0
   for report in /var/mobile/Library/Logs/CrashReporter/senkod* /var/mobile/Library/Logs/CrashReporter/Retired/senkod*; do
     [ -e "$report" ] || continue
@@ -250,12 +375,21 @@ diagnose_senkod() {
   done
 }
 
+# rootful systems run the copy or the link in ${ROOTFUL_BIN}, which is the payload binary that starts
+senkoctl_path() {
+  if [ -z "$JBROOT" ] && [ -x "${ROOTFUL_BIN}/senkoctl" ]; then
+    printf '%s\n' "${ROOTFUL_BIN}/senkoctl"
+  else
+    printf '%s\n' "${PAYLOAD_ROOT}/usr/bin/senkoctl"
+  fi
+}
+
 # senkoctl exits non-zero for "STATE error", which is still an answer: a saved tunnel
 # that failed to restore left every install half-configured
 senkod_answers() {
   attempt=0
   while [ "$attempt" -lt 8 ]; do
-    reply="$("${PAYLOAD_ROOT}/usr/bin/senkoctl" status 2>/dev/null)"
+    reply="$("$(senkoctl_path)" status 2>/dev/null)"
     case "$reply" in
       *"STATE "*) return 0 ;;
     esac
@@ -494,6 +628,8 @@ rm -f "${JBROOT}/usr/bin/redsocks-senko" "${PAYLOAD_ROOT}/usr/bin/redsocks-senko
 mkdir -p "${TLSFIX_DIR}/roots" || true
 
 IOS_MAJOR="$(firmware_major)"
+# a status hook that never loads leaves no trace on a device without a shell, so the choice is logged
+postinst_log "hooks: ios ${IOS_MAJOR}, tlsfix $(tlsfix_installed && echo yes || echo no), substrate $(substrate_installed && echo yes || echo no), dir ${SUBSTRATE_DIR}"
 if [ "$IOS_MAJOR" -ge 12 ] 2>/dev/null; then
   # modern ios has system tls and native status handling, so these hooks only add crash surface
   disable_senkotlsfix_hooks
@@ -509,6 +645,10 @@ elif substrate_installed; then
 else
   disable_senkotlsfix_hooks
   disable_senkostatus_hooks
+  postinst_log "hooks: no substrate found, the status badge and the tls shim stay off"
+fi
+if [ -e "${SUBSTRATE_DIR}/senkostatus.dylib" ]; then
+  postinst_log "hooks: senkostatus linked in ${SUBSTRATE_DIR}"
 fi
 
 mkdir -p /var/mobile/Library/Preferences || true
@@ -532,6 +672,14 @@ touch /var/log/senko-system.log >/dev/null 2>&1 || true
 # current one's; a marker shows where this install begins
 installed="$(dpkg-query -W -f='${Version}' com.senko.daemon 2>/dev/null || true)"
 printf 'postinst: senko %s installed\n' "${installed:-unknown}" >> /var/log/senko-system.log 2>/dev/null || true
+# a binary the system refuses to run would leave the daemon dead with no word about it
+if [ -z "$JBROOT" ]; then
+  heal_rootful_binary senkod "" "" always || true
+  heal_rootful_binary senkoctl "" "" always || true
+  # a copy from an older install would shadow the payload core the daemon should run now
+  rm -f /usr/lib/senko-core 2>/dev/null || true
+  heal_rootful_binary senko-core "${PAYLOAD_ROOT}/usr/lib/senko-core" /usr/lib || true
+fi
 chown root:mobile /var/log/senko-system.log >/dev/null 2>&1 || true
 chmod 640 /var/log/senko-system.log >/dev/null 2>&1 || true
 touch /var/log/senkotlsfix.log >/dev/null 2>&1 || true

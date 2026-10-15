@@ -10,6 +10,8 @@ else
 fi
 PLIST=${JBROOT}/Library/LaunchDaemons/com.senko.senkod.plist
 SENKOCTL=/var/jb/usr/bin/senkoctl
+# a rootful install may run a copy of its own in /usr/bin when the system refused the payload one
+[ -z "$JBROOT" ] && [ -x /usr/bin/senkoctl ] && SENKOCTL=/usr/bin/senkoctl
 KILLALL=${JBROOT}/usr/bin/killall
 [ -x "$KILLALL" ] || KILLALL=/usr/bin/killall
 [ -x "$KILLALL" ] || KILLALL=/bin/killall

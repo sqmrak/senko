@@ -294,5 +294,134 @@ sleep() { :; }
         self.assertEqual((self.base / 'kills').read_text().splitlines()[0], '-TERM senkod')
 
 
+class RootfulHealTests(unittest.TestCase):
+    """a payload binary the system kills at exec is run from a copy that starts, or the daemon would never come up"""
+
+    FUNCTIONS = ['binary_starts', 'find_device_ldid', 'stage_rootful_copy', 'heal_rootful_binary']
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='senko-heal-')
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+        self.payload = self.base / 'jb/usr/bin'
+        self.rootful = self.base / 'bin'
+        self.payload.mkdir(parents=True)
+        self.rootful.mkdir()
+        self.log = self.base / 'log'
+
+    def program(self, path, killed_in):
+        # a program the fixture "kernel" kills when it runs from a path that contains killed_in
+        path.write_text('#!/bin/sh\ncase "$0" in *%s*) kill -9 $$ ;; esac\nexit 2\n' % killed_in)
+        path.chmod(0o755)
+
+    def run_heal(self, name='senkod', ldid=None, args=''):
+        functions = '\n'.join(shell_function(POSTINST, f) for f in self.FUNCTIONS)
+        env_ldid = ''
+        if ldid:
+            env_ldid = 'LDID_CANDIDATES="%s"\n' % ldid
+        else:
+            env_ldid = 'LDID_CANDIDATES=""\n'
+        script = ('PAYLOAD_ROOT="%s"\nROOTFUL_BIN="%s"\nROOTFUL_COPY_MARK="%s"\nJBROOT=\n%s'
+                  'postinst_log() { echo "$*" >> "%s"; }\n%s\nheal_rootful_binary %s %s\n' %
+                  (self.base / 'jb', self.rootful, self.base / 'mark', env_ldid, self.log, functions, name, args))
+        return subprocess.run(['/bin/sh', '-c', script], capture_output=True, text=True)
+
+    def log_text(self):
+        return self.log.read_text() if self.log.exists() else ''
+
+    def test_working_payload_is_left_alone(self):
+        self.program(self.payload / 'senkod', 'nothing-matches-this')
+        self.assertEqual(self.run_heal().returncode, 0)
+        self.assertFalse((self.rootful / 'senkod').exists())
+        self.assertFalse((self.base / 'mark').exists())
+        self.assertEqual(self.log_text(), '')
+
+    def test_always_copies_a_payload_that_starts(self):
+        self.program(self.payload / 'senkod', 'nothing-matches-this')
+        (self.rootful / 'senkod').symlink_to(self.payload / 'senkod')
+        self.assertEqual(self.run_heal(args='"" "" always').returncode, 0)
+        copy = self.rootful / 'senkod'
+        self.assertTrue(copy.is_file() and not copy.is_symlink())
+        self.assertEqual(subprocess.run([str(copy)]).returncode, 2)
+        self.assertTrue((self.base / 'mark').exists())
+
+    def test_killed_payload_is_replaced_by_a_copy_on_the_system_volume(self):
+        self.program(self.payload / 'senkod', 'jb/usr/bin')
+        (self.rootful / 'senkod').symlink_to(self.payload / 'senkod')
+        self.assertEqual(self.run_heal().returncode, 0)
+        copy = self.rootful / 'senkod'
+        self.assertTrue(copy.is_file() and not copy.is_symlink())
+        self.assertEqual(subprocess.run([str(copy)]).returncode, 2)
+        self.assertTrue((self.base / 'mark').exists())
+        self.assertIn('real copy on the system volume', self.log_text())
+        self.assertFalse((self.rootful / '.senkod.senko-new').exists())
+
+    def test_a_copy_that_is_killed_too_is_signed_again(self):
+        self.program(self.payload / 'senkod', '')
+        ldid = self.base / 'ldid'
+        # the fixture ldid makes the staged file a program the kernel accepts
+        ldid.write_text('#!/bin/sh\nfor last; do :; done\nprintf "#!/bin/sh\\nexit 2\\n" > "$last"\n')
+        ldid.chmod(0o755)
+        result = self.run_heal(ldid=str(ldid))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(subprocess.run([str(self.rootful / 'senkod')]).returncode, 2)
+        self.assertIn('signed again', self.log_text())
+        self.assertTrue((self.base / 'mark').exists())
+
+    def test_a_killed_core_is_copied_into_the_directory_it_is_given(self):
+        lib = self.base / 'jb/usr/lib'
+        lib.mkdir(parents=True)
+        self.program(lib / 'senko-core', 'jb/usr/lib')
+        syslib = self.base / 'lib'
+        syslib.mkdir()
+        result = self.run_heal(name='senko-core', args='"%s" "%s"' % (lib / 'senko-core', syslib))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(subprocess.run([str(syslib / 'senko-core')]).returncode, 2)
+        self.assertFalse((syslib / '.senko-core.senko-new').exists())
+        self.assertFalse((self.rootful / 'senko-core').exists())
+
+    def test_the_second_ldid_form_is_tried_when_the_first_does_not_help(self):
+        self.program(self.payload / 'senkod', '')
+        ldid = self.base / 'ldid'
+        # only the form with -Hsha1 produces a program that starts
+        ldid.write_text('#!/bin/sh\ncase "$*" in *-Hsha1*) for last; do :; done; '
+                        'printf "#!/bin/sh\\nexit 2\\n" > "$last";; esac\nexit 0\n')
+        ldid.chmod(0o755)
+        self.assertEqual(self.run_heal(ldid=str(ldid)).returncode, 0)
+        self.assertEqual(subprocess.run([str(self.rootful / 'senkod')]).returncode, 2)
+        self.assertIn('-Hsha1', self.log_text())
+
+    def test_no_remedy_leaves_nothing_behind(self):
+        self.program(self.payload / 'senkod', '')
+        (self.rootful / 'senkod').symlink_to(self.payload / 'senkod')
+        result = self.run_heal()
+        self.assertEqual(result.returncode, 1)
+        # the link stays, the staged file and the marker do not
+        self.assertTrue((self.rootful / 'senkod').is_symlink())
+        self.assertFalse((self.rootful / '.senkod.senko-new').exists())
+        self.assertFalse((self.base / 'mark').exists())
+        self.assertIn('no remedy', self.log_text())
+
+    def test_removal_takes_only_the_copies_this_package_made(self):
+        postrm = ROOT / 'packaging/DEBIAN/postrm'
+        function = shell_function(postrm, 'remove_rootful_copies')
+        (self.rootful / 'senkod').write_text('copy')
+        (self.rootful / 'senkoctl').symlink_to(self.payload)
+        script = 'ROOTFUL_BIN="%s"\nROOTFUL_COPY_MARK="%s"\n%s\nremove_rootful_copies\n' % (self.rootful, self.base / 'mark', function)
+        # without the marker nothing of the system's is touched
+        self.assertEqual(subprocess.run(['/bin/sh', '-c', script]).returncode, 0)
+        self.assertTrue((self.rootful / 'senkod').exists())
+        (self.base / 'mark').write_text('')
+        self.assertEqual(subprocess.run(['/bin/sh', '-c', script]).returncode, 0)
+        self.assertFalse((self.rootful / 'senkod').exists())
+        # a link is the layout's own, and its removal is another function's business
+        self.assertTrue((self.rootful / 'senkoctl').is_symlink())
+        self.assertFalse((self.base / 'mark').exists())
+
+    def test_a_missing_payload_binary_is_not_an_error(self):
+        self.assertEqual(self.run_heal('senkoctl').returncode, 0)
+        self.assertEqual(self.log_text(), '')
+
+
 if __name__ == '__main__':
     unittest.main()
