@@ -52,42 +52,47 @@ void StyleNavBarClassic(UINavigationController *nav) {
 /* an opaque bar prevents old navigation controllers from covering the first section */
     bar.translucent = NO;
     if ([bar respondsToSelector:@selector(setBackgroundImage:forBarMetrics:)]) {
-        CGSize sz = CGSizeMake(2, 44);
+/* from ios 7 the bar image also fills the status bar strip, and a 44 point
+   image stretched over 64 smears the gradient into a bright band under the
+   clock with a hard seam under it */
+        CGFloat top = GetTopOffset();
+        CGFloat h = 44.0f + top;
+        CGSize sz = CGSizeMake(2, h);
         UIGraphicsBeginImageContextWithOptions(sz, YES, 0);
         CGContextRef ctx = UIGraphicsGetCurrentContext();
         if (material) {
 /* the app bar is one flat colour: the primary on the light baseline, a
    surface a step above the page on the dark one */
             CGContextSetFillColorWithColor(ctx, kChromeHi.CGColor);
-            CGContextFillRect(ctx, CGRectMake(0, 0, 2, 44));
+            CGContextFillRect(ctx, CGRectMake(0, 0, 2, h));
         } else if (miside) {
             CGContextSetRGBFillColor(ctx, 0.12f, 0.04f, 0.14f, 1.0f);
-            CGContextFillRect(ctx, CGRectMake(0, 0, 2, 44));
+            CGContextFillRect(ctx, CGRectMake(0, 0, 2, h));
             CGContextSetRGBFillColor(ctx, 1.00f, 0.36f, 0.70f, 0.50f);
-            CGContextFillRect(ctx, CGRectMake(0, 43, 2, 1));
+            CGContextFillRect(ctx, CGRectMake(0, h - 1, 2, 1));
         } else if (flat) {
             if (SenkoThemeIsIos16()) {
                 if (light) {
                     CGContextSetRGBFillColor(ctx, 0.98f, 0.96f, 0.99f, 1.0f);
-                    CGContextFillRect(ctx, CGRectMake(0, 0, 2, 44));
+                    CGContextFillRect(ctx, CGRectMake(0, 0, 2, h));
                     CGContextSetRGBFillColor(ctx, 0.88f, 0.84f, 0.94f, 1.0f);
-                    CGContextFillRect(ctx, CGRectMake(0, 43, 2, 1));
+                    CGContextFillRect(ctx, CGRectMake(0, h - 1, 2, 1));
                 } else {
                     CGContextSetRGBFillColor(ctx, 0.08f, 0.05f, 0.14f, 1.0f);
-                    CGContextFillRect(ctx, CGRectMake(0, 0, 2, 44));
+                    CGContextFillRect(ctx, CGRectMake(0, 0, 2, h));
                     CGContextSetRGBFillColor(ctx, 0.22f, 0.16f, 0.32f, 1.0f);
-                    CGContextFillRect(ctx, CGRectMake(0, 43, 2, 1));
+                    CGContextFillRect(ctx, CGRectMake(0, h - 1, 2, 1));
                 }
             } else if (light) {
                 CGContextSetRGBFillColor(ctx, 0.96f, 0.96f, 0.97f, 1.0f);
-                CGContextFillRect(ctx, CGRectMake(0, 0, 2, 44));
+                CGContextFillRect(ctx, CGRectMake(0, 0, 2, h));
                 CGContextSetRGBFillColor(ctx, 0.78f, 0.78f, 0.80f, 1.0f);
-                CGContextFillRect(ctx, CGRectMake(0, 43, 2, 1));
+                CGContextFillRect(ctx, CGRectMake(0, h - 1, 2, 1));
             } else {
                 CGContextSetRGBFillColor(ctx, 0.12f, 0.13f, 0.15f, 1.0f);
-                CGContextFillRect(ctx, CGRectMake(0, 0, 2, 44));
+                CGContextFillRect(ctx, CGRectMake(0, 0, 2, h));
                 CGContextSetRGBFillColor(ctx, 0.22f, 0.22f, 0.24f, 1.0f);
-                CGContextFillRect(ctx, CGRectMake(0, 43, 2, 1));
+                CGContextFillRect(ctx, CGRectMake(0, h - 1, 2, 1));
             }
         } else {
             CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
@@ -111,7 +116,11 @@ void StyleNavBarClassic(UINavigationController *nav) {
             }
             CGFloat locs[] = { 0, 0.5, 1 };
             CGGradientRef gr = CGGradientCreateWithColorComponents(cs, comps, locs, 3);
-            CGContextDrawLinearGradient(ctx, gr, CGPointMake(0, 0), CGPointMake(0, 44), 0);
+            if (top > 0.0f) {
+                CGContextSetRGBFillColor(ctx, comps[0], comps[1], comps[2], comps[3]);
+                CGContextFillRect(ctx, CGRectMake(0, 0, 2, top));
+            }
+            CGContextDrawLinearGradient(ctx, gr, CGPointMake(0, top), CGPointMake(0, h), 0);
             CGGradientRelease(gr);
             CGColorSpaceRelease(cs);
         }
@@ -153,9 +162,30 @@ void StyleNavBarClassic(UINavigationController *nav) {
 #pragma clang diagnostic pop
         [bar setTitleTextAttributes:attrs];
     }
-    if ([bar respondsToSelector:@selector(setTintColor:)]) {
-        if (material)
-            bar.tintColor = light ? [UIColor whiteColor] : kAccentBlue;
+    if (![bar respondsToSelector:@selector(setBackgroundImage:forBarMetrics:)]) {
+/* ios 4.3 has no bar background or title attributes: the stock bar takes its
+   colour from the tint and always draws a white title, so the tint is the
+   theme chrome held dark enough to keep that title readable */
+        UIColor *fill = material ? kChromeHi : (miside
+            ? [UIColor colorWithRed:0.12f green:0.04f blue:0.14f alpha:1.0f]
+            : (boy ? [UIColor colorWithRed:1.0f green:0.38f blue:0.68f alpha:1.0f]
+                   : kAccentBlue));
+        CGFloat r, g, b, a;
+        if (SenkoColorComponents(fill, &r, &g, &b, &a) &&
+            0.299f * r + 0.587f * g + 0.114f * b > 0.55f)
+            fill = SenkoShadeColor(fill, -0.40f);
+        bar.tintColor = fill;
+    } else if ([bar respondsToSelector:@selector(setTintColor:)]) {
+        if (material) {
+/* before ios 7 the tint colours the bezel of every bar button, so white made
+   the back and done buttons white pills on the blue bar. from ios 7 it is the
+   text colour and white is right */
+            BOOL bezels = ![bar respondsToSelector:@selector(setBarTintColor:)];
+            if (light)
+                bar.tintColor = bezels ? kChromeHi : [UIColor whiteColor];
+            else
+                bar.tintColor = kAccentBlue;
+        }
         else if (miside)
             bar.tintColor = [UIColor colorWithRed:1.0 green:0.55 blue:0.80 alpha:1.0];
         else if (boy)
