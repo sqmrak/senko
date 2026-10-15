@@ -3,6 +3,8 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -160,24 +162,55 @@ static NSString * const kSenkoItemOwners[] = {
     @"SBStatusBarDataManager"
 };
 
-static BOOL SenkoInstallItemHook(void) {
+static SEL gSenkoItemSel = NULL;
+
+/* the item method is not named the same on every firmware and no ios 10
+   springboard is at hand to read it from, so the class is asked for a void
+   method of no arguments with VPN in its name. the first run also logs every
+   such name, which is what a missing badge report needs */
+static Method SenkoFindItemMethod(Class cls, NSString *owner) {
     static const char *names[] = { "_updateVPNItem", "updateVPNItem", NULL };
+    for (size_t n = 0; names[n]; ++n) {
+        Method method = class_getInstanceMethod(cls, sel_registerName(names[n]));
+        if (!method) continue;
+        const char *types = method_getTypeEncoding(method);
+        if (types && types[0] != 'v') continue;
+        return method;
+    }
+    unsigned count = 0;
+    Method *list = class_copyMethodList(cls, &count);
+    Method found = NULL;
+    NSMutableString *seen = [NSMutableString string];
+    for (unsigned i = 0; list && i < count; ++i) {
+        const char *name = sel_getName(method_getName(list[i]));
+        if (!strcasestr(name, "vpn")) continue;
+        [seen appendFormat:@" %s", name];
+        if (found || method_getNumberOfArguments(list[i]) != 2) continue;
+        char ret[4] = "";
+        method_getReturnType(list[i], ret, sizeof ret);
+        if (ret[0] == 'v' && (strcasestr(name, "update") || strcasestr(name, "refresh")))
+            found = list[i];
+    }
+    free(list);
+    if ([seen length])
+        SenkoWriteStatus([NSString stringWithFormat:@"%@ vpn methods:%@", owner, seen]);
+    return found;
+}
+
+static BOOL SenkoInstallItemHook(void) {
     if (gSenkoOrigUpdateVPNItem) return YES;
     for (size_t i = 0; i < sizeof kSenkoItemOwners / sizeof kSenkoItemOwners[0]; ++i) {
         Class cls = NSClassFromString(kSenkoItemOwners[i]);
         if (!cls) continue;
-        for (size_t n = 0; names[n]; ++n) {
-            Method method = class_getInstanceMethod(cls, sel_registerName(names[n]));
-            if (!method) continue;
-            const char *types = method_getTypeEncoding(method);
-            if (types && types[0] != 'v') continue;
-            gSenkoOrigUpdateVPNItem = (void (*)(id, SEL))
-                method_setImplementation(method, (IMP)SenkoUpdateVPNItem);
-            SenkoWriteStatus([NSString stringWithFormat:
-                @"badge scoped to -[%@ %s]; wifi glyph untouched",
-                kSenkoItemOwners[i], names[n]]);
-            return YES;
-        }
+        Method method = SenkoFindItemMethod(cls, kSenkoItemOwners[i]);
+        if (!method) continue;
+        gSenkoItemSel = method_getName(method);
+        gSenkoOrigUpdateVPNItem = (void (*)(id, SEL))
+            method_setImplementation(method, (IMP)SenkoUpdateVPNItem);
+        SenkoWriteStatus([NSString stringWithFormat:
+            @"badge scoped to -[%@ %s]; wifi glyph untouched",
+            kSenkoItemOwners[i], sel_getName(gSenkoItemSel)]);
+        return YES;
     }
     return NO;
 }
@@ -348,8 +381,7 @@ static BOOL SenkoApplyStatus(BOOL enabled) {
                                           @selector(sharedInstance),
                                           @selector(sharedAggregator));
         if (!aggregator) continue;
-        if (SenkoCallVoid(aggregator, NSSelectorFromString(@"_updateVPNItem")) ||
-            SenkoCallVoid(aggregator, NSSelectorFromString(@"updateVPNItem"))) {
+        if (SenkoCallVoid(aggregator, gSenkoItemSel)) {
             refreshed = YES;
             via = kSenkoAggregators[i];
         }
@@ -360,8 +392,7 @@ static BOOL SenkoApplyStatus(BOOL enabled) {
         id data = SenkoSharedObject(@"SBStatusBarDataManager",
                                     @selector(sharedDataManager),
                                     @selector(sharedInstance));
-        if (SenkoCallVoid(data, NSSelectorFromString(@"_updateVPNItem")) ||
-            SenkoCallVoid(data, NSSelectorFromString(@"updateVPNItem"))) {
+        if (SenkoCallVoid(data, gSenkoItemSel)) {
             refreshed = YES;
             via = @"SBStatusBarDataManager";
         }
@@ -458,6 +489,8 @@ static void SenkoStatusInit(void) {
     @autoreleasepool {
         NSString *bundle = [[NSBundle mainBundle] bundleIdentifier];
         if (![bundle isEqualToString:@"com.apple.springboard"]) return;
+        SenkoWriteStatus([NSString stringWithFormat:@"loaded in springboard ios=%@",
+                          SenkoOSVersion()]);
 
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
                                         NULL,

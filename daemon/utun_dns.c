@@ -93,7 +93,7 @@ int utun_dns_publish(utun_dns_t *dns, const char *ifname, const char *local4,
        manual scutil session would otherwise block every later publish */
     remove_keys(store);
 
-    int primary_service = senko_ios_major() < 12;
+    int primary_service = senko_ios_major() < 10;
     CFMutableDictionaryRef ipv4 = primary_service
         ? CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
             &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks)
@@ -112,8 +112,9 @@ int utun_dns_publish(utun_dns_t *dns, const char *ifname, const char *local4,
     if (resolver) {
         put(resolver, "ServerAddresses", cf_one(dns_server));
         put(resolver, "InterfaceName", cf_text(ifname));
-        /* ios 12 springboard hides wifi when utun becomes PrimaryInterface;
-           an empty match domain selects tunnel dns without changing it */
+        /* springboard on ios 10 and later hides the wifi glyph when utun becomes
+           PrimaryInterface; an empty match domain selects tunnel dns without
+           changing it */
         if (!primary_service)
             put(resolver, "SupplementalMatchDomains", cf_one(""));
     }
