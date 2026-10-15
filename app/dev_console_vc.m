@@ -71,7 +71,8 @@ static NSString *const kConsoleHints =
     _input.delegate = self;
     _input.autocorrectionType = UITextAutocorrectionTypeNo;
     _input.autocapitalizationType = UITextAutocapitalizationTypeNone;
-    _input.spellCheckingType = UITextSpellCheckingTypeNo;
+    if ([_input respondsToSelector:@selector(setSpellCheckingType:)])
+        _input.spellCheckingType = UITextSpellCheckingTypeNo;
     _input.clearButtonMode = UITextFieldViewModeWhileEditing;
     _input.returnKeyType = UIReturnKeySend;
     _input.placeholder = @"status";

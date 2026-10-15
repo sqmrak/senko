@@ -17,14 +17,9 @@ void SenkoThemeFlushImageCaches(void) {
 /* the tint has to be part of the key: two themes hand out different colors at
    the same address once the old palette object is released */
 static NSString *IconKey(NSString *name, CGFloat side, UIColor *tint) {
-    CGFloat r = 0, g = 0, b = 0, a = 1;
-    if (![tint respondsToSelector:@selector(getRed:green:blue:alpha:)] ||
-        ![tint getRed:&r green:&g blue:&b alpha:&a]) {
-        CGFloat w = 0;
-        if ([tint respondsToSelector:@selector(getWhite:alpha:)] &&
-            [tint getWhite:&w alpha:&a])
-            r = g = b = w;
-    }
+    CGFloat r, g, b, a;
+    if (!SenkoColorComponents(tint, &r, &g, &b, &a))
+        return [NSString stringWithFormat:@"%@|%.1f|%@", name, side, [tint description]];
     return [NSString stringWithFormat:@"%@|%.1f|%.3f,%.3f,%.3f,%.3f",
             name, side, r, g, b, a];
 }

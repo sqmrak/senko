@@ -32,7 +32,7 @@ cp "${DEB}" "${WORK}/pkg.deb"
 
   deps="$(awk -F': ' '$1 == "Depends" { print $2 }' control/control)"
   case "${deps}" in
-    "firmware (>= 5.0)"|"firmware (>= 5.0), mobilesubstrate") ;;
+    "firmware (>= 4.3)"|"firmware (>= 4.3), mobilesubstrate") ;;
     *)
       echo "unexpected Depends: ${deps:-<none>}" >&2
       exit 1

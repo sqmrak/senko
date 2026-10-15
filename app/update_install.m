@@ -46,7 +46,10 @@
     if (p < 0.0f) p = 0.0f;
     if (p > 1.0f) p = 1.0f;
     if (p < _progressFloor) p = _progressFloor;
-    [_bar setProgress:p animated:animated];
+    if ([_bar respondsToSelector:@selector(setProgress:animated:)])
+        [_bar setProgress:p animated:animated];
+    else
+        _bar.progress = p;
 }
 
 - (void)stopCreep {
@@ -149,7 +152,7 @@
 /* exit; running image cannot replace itself */
         exit(0);
     }
-    [self dismissViewControllerAnimated:YES completion:nil];
+    SenkoDismissModal(self, nil);
 }
 
 - (void)layoutInstall {

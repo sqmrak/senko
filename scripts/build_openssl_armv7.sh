@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# static OpenSSL for the iOS 5 armv7 daemon slice
+# static OpenSSL for the iOS 4.3 armv7 daemon slice
 set -euo pipefail
 
 THEOS="${THEOS:?set THEOS to theos root}"
@@ -8,11 +8,11 @@ BLD="${SENKO_OPENSSL_BLD7:-${PREFIX}/build-armv7-ios5}"
 TC="${SENKO_TC:-${THEOS}/toolchain/linux/iphone/bin}"
 ARMV7_CLANG="${BLD}/armv7-clang"
 SDK="${SENKO_SDK_V7:?set SENKO_SDK_V7 to the armv7 sdk}"
-MARKER="${PREFIX}/.senko-ios-min-5.0"
+MARKER="${PREFIX}/.senko-ios-min-4.3"
 
 if [[ -f "${PREFIX}/lib/libssl.a" && -f "${PREFIX}/lib/libcrypto.a" &&
       -f "${MARKER}" ]]; then
-  echo "openssl armv7 ios5 already at ${PREFIX}"
+  echo "openssl armv7 ios 4.3 already at ${PREFIX}"
   exit 0
 fi
 
@@ -38,7 +38,7 @@ cd "${BLD}"
   "CC=${ARMV7_CLANG}" "AR=${TC}/llvm-ar" "RANLIB=${TC}/llvm-ranlib" \
   no-asm no-shared no-dso no-tests no-engine no-ui-console \
   -DBROKEN_CLANG_ATOMICS -O2 -fno-strict-aliasing \
-  --prefix="${PREFIX}" -miphoneos-version-min=5.0 -isysroot "${SDK}"
+  --prefix="${PREFIX}" -miphoneos-version-min=4.3 -isysroot "${SDK}"
 make -j"$(nproc)" build_libs
 
 mkdir -p "${PREFIX}/lib" "${PREFIX}/include"
@@ -48,4 +48,4 @@ mkdir -p "${PREFIX}/include/openssl"
 cp -rn "${SRC}/include/openssl/." "${PREFIX}/include/openssl/" 2>/dev/null || true
 cp -a include/openssl/configuration.h "${PREFIX}/include/openssl/" 2>/dev/null || true
 touch "${MARKER}"
-echo "openssl armv7 ios5 installed: ${PREFIX}"
+echo "openssl armv7 ios 4.3 installed: ${PREFIX}"

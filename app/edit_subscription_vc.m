@@ -150,7 +150,7 @@ static CGFloat SenkoSubscriptionEditorMaxWidth(CGRect bounds) {
 }
 
 - (void)cancelPressed {
-    [self dismissViewControllerAnimated:YES completion:nil];
+    SenkoDismissModal(self, nil);
 }
 
 - (void)savePressed {

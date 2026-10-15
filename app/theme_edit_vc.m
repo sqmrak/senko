@@ -53,11 +53,11 @@ static NSString * const kChannelNames[4] = { @"R", @"G", @"B", @"A" };
 }
 
 - (void)loadValuesFromColor:(UIColor *)color {
-    CGFloat comps[4] = { 0, 0, 0, 1 };
+    CGFloat comps[4];
     NSString *hex = SenkoHexFromColor(color);
     UIColor *parsed = SenkoColorFromHex(hex);
-    if ([parsed respondsToSelector:@selector(getRed:green:blue:alpha:)])
-        [parsed getRed:&comps[0] green:&comps[1] blue:&comps[2] alpha:&comps[3]];
+    if (!SenkoColorComponents(parsed, &comps[0], &comps[1], &comps[2], &comps[3]))
+        parsed = [UIColor blackColor];
     for (int i = 0; i < 4; ++i) {
         _sliders[i].value = (float)comps[i];
         _values[i].text = [NSString stringWithFormat:@"%d", (int)(comps[i] * 255.0f + 0.5f)];

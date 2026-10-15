@@ -78,29 +78,6 @@ static UIColor **SlotRef(SenkoThemeSlot slot) {
     }
 }
 
-/* uikit colors can live in the white colorspace, where getRed: fails on ios 5 */
-static BOOL ColorComponents(UIColor *color, CGFloat *r, CGFloat *g, CGFloat *b, CGFloat *a) {
-    if (!color) return NO;
-    if ([color respondsToSelector:@selector(getRed:green:blue:alpha:)] &&
-        [color getRed:r green:g blue:b alpha:a])
-        return YES;
-    CGColorRef cg = [color CGColor];
-    if (!cg) return NO;
-    size_t n = CGColorGetNumberOfComponents(cg);
-    const CGFloat *c = CGColorGetComponents(cg);
-    if (!c) return NO;
-    if (n >= 4) {
-        *r = c[0]; *g = c[1]; *b = c[2]; *a = c[3];
-        return YES;
-    }
-    if (n >= 2) {
-        *r = *g = *b = c[0];
-        *a = c[1];
-        return YES;
-    }
-    return NO;
-}
-
 static unsigned ClampByte(CGFloat v) {
     long n = lroundf((float)(v * 255.0f));
     if (n < 0) n = 0;
@@ -110,7 +87,7 @@ static unsigned ClampByte(CGFloat v) {
 
 NSString *SenkoHexFromColor(UIColor *color) {
     CGFloat r = 0, g = 0, b = 0, a = 1;
-    if (!ColorComponents(color, &r, &g, &b, &a)) return @"000000FF";
+    if (!SenkoColorComponents(color, &r, &g, &b, &a)) return @"000000FF";
     return [NSString stringWithFormat:@"%02X%02X%02X%02X",
             ClampByte(r), ClampByte(g), ClampByte(b), ClampByte(a)];
 }

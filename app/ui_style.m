@@ -791,13 +791,14 @@ void SenkoStyleGlassSegmented(UISegmentedControl *seg) {
            rightSegmentState:UIControlStateSelected
                   barMetrics:UIBarMetricsDefault];
     }
-    NSDictionary *titleN = [NSDictionary dictionaryWithObjectsAndKeys:
-                            kInk, UITextAttributeTextColor,
-                            [UIFont boldSystemFontOfSize:13], UITextAttributeFont, nil];
-    NSDictionary *titleS = [NSDictionary dictionaryWithObjectsAndKeys:
-                            [UIColor whiteColor], UITextAttributeTextColor,
-                            [UIFont boldSystemFontOfSize:13], UITextAttributeFont, nil];
+    /* the attribute keys are ios 5 symbols and read as null on ios 4.3 */
     if ([seg respondsToSelector:@selector(setTitleTextAttributes:forState:)]) {
+        NSDictionary *titleN = [NSDictionary dictionaryWithObjectsAndKeys:
+                                kInk, UITextAttributeTextColor,
+                                [UIFont boldSystemFontOfSize:13], UITextAttributeFont, nil];
+        NSDictionary *titleS = [NSDictionary dictionaryWithObjectsAndKeys:
+                                [UIColor whiteColor], UITextAttributeTextColor,
+                                [UIFont boldSystemFontOfSize:13], UITextAttributeFont, nil];
         [seg setTitleTextAttributes:titleN forState:UIControlStateNormal];
         [seg setTitleTextAttributes:titleS forState:UIControlStateSelected];
     }
@@ -814,8 +815,6 @@ void SenkoStyleSelectableCell(UITableViewCell *cell) {
     cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 }
 
-static void SenkoColorParts(UIColor *c, CGFloat *r, CGFloat *g, CGFloat *b, CGFloat *a);
-
 /* relative luminance of an sRGB channel, as the wcag contrast formula defines it */
 static double SenkoChannelLuminance(CGFloat c) {
     double v = c;
@@ -830,7 +829,7 @@ UIColor *SenkoPillLabelColor(UIColor *fill) {
    secondary is bright enough to pass a luma test and still gives white text
    a contrast of 1.6, which is what made its buttons vanish. black takes over
    below 3:1, the floor for large text and icons */
-        SenkoColorParts(fill, &r, &g, &b, &a);
+        if (!SenkoColorComponents(fill, &r, &g, &b, &a)) return [UIColor whiteColor];
         double lum = 0.2126 * SenkoChannelLuminance(r) + 0.7152 * SenkoChannelLuminance(g) +
                      0.0722 * SenkoChannelLuminance(b);
         double white = 1.05 / (lum + 0.05);
@@ -840,13 +839,7 @@ UIColor *SenkoPillLabelColor(UIColor *fill) {
    does: a bright accent under dark text was the one thing on the screen reading
    as a light control, and the screen is not a light one */
     if (!SenkoThemeIsLight()) return [UIColor whiteColor];
-    if (![fill respondsToSelector:@selector(getRed:green:blue:alpha:)] ||
-        ![fill getRed:&r green:&g blue:&b alpha:&a]) {
-        CGFloat w = 0;
-        if ([fill respondsToSelector:@selector(getWhite:alpha:)] &&
-            [fill getWhite:&w alpha:&a])
-            r = g = b = w;
-    }
+    if (!SenkoColorComponents(fill, &r, &g, &b, &a)) return [UIColor whiteColor];
 /* a light theme still picks by the fill, because a pale pill there needs dark
    text and a saturated one does not */
     CGFloat luma = 0.299f * r + 0.587f * g + 0.114f * b;
@@ -1043,21 +1036,38 @@ CGFloat SenkoTextWidth(NSString *text, UIFont *font) {
 /* a palette is free to hand over two nearly identical stops, which paints a
    flat slab where the design asks for a gradient. these derive the stops from
    one colour so every theme gets the same amount of relief */
-static void SenkoColorParts(UIColor *c, CGFloat *r, CGFloat *g, CGFloat *b, CGFloat *a) {
+BOOL SenkoColorComponents(UIColor *color, CGFloat *r, CGFloat *g, CGFloat *b, CGFloat *a) {
     *r = *g = *b = 0.0f;
     *a = 1.0f;
-    if ([c respondsToSelector:@selector(getRed:green:blue:alpha:)] &&
-        [c getRed:r green:g blue:b alpha:a])
-        return;
-    CGFloat w = 0.0f;
-    if ([c respondsToSelector:@selector(getWhite:alpha:)] && [c getWhite:&w alpha:a])
-        *r = *g = *b = w;
+    if (!color) return NO;
+    /* getRed: also converts colourspaces the CGColor path cannot read */
+    if ([color respondsToSelector:@selector(getRed:green:blue:alpha:)] &&
+        [color getRed:r green:g blue:b alpha:a])
+        return YES;
+    /* ios 4.3 has no getRed:, and ios 5 refuses it for white colourspace colours */
+    *r = *g = *b = 0.0f;
+    *a = 1.0f;
+    CGColorRef cg = [color CGColor];
+    const CGFloat *c = cg ? CGColorGetComponents(cg) : NULL;
+    if (!c) return NO;
+    CGColorSpaceModel model = CGColorSpaceGetModel(CGColorGetColorSpace(cg));
+    size_t n = CGColorGetNumberOfComponents(cg);
+    if (model == kCGColorSpaceModelRGB && n == 4) {
+        *r = c[0]; *g = c[1]; *b = c[2]; *a = c[3];
+        return YES;
+    }
+    if (model == kCGColorSpaceModelMonochrome && n == 2) {
+        *r = *g = *b = c[0];
+        *a = c[1];
+        return YES;
+    }
+    return NO;
 }
 
 UIColor *SenkoShadeColor(UIColor *base, CGFloat delta) {
     if (!base) return nil;
     CGFloat r, g, b, a;
-    SenkoColorParts(base, &r, &g, &b, &a);
+    if (!SenkoColorComponents(base, &r, &g, &b, &a)) return base;
     CGFloat target = delta > 0.0f ? 1.0f : 0.0f;
     CGFloat mix = delta < 0.0f ? -delta : delta;
     if (mix > 1.0f) mix = 1.0f;

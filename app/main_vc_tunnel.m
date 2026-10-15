@@ -497,7 +497,7 @@ static void senkoClearStatus(void) {
                                     initWithRootViewController:editor] autorelease];
     StyleNavBarClassic(nav);
     nav.modalPresentationStyle = UIModalPresentationFullScreen;
-    [self presentViewController:nav animated:YES completion:nil];
+    SenkoPresentModal(self, nav);
 }
 
 - (void)editAWGVC:(EditAWGVC *)vc saveConfig:(NSString *)config {
@@ -518,7 +518,7 @@ static void senkoClearStatus(void) {
         SetStatusDefault(_statusLabel, @"could not save amneziawg config");
         return;
     }
-    [vc dismissViewControllerAnimated:YES completion:nil];
+    SenkoDismissModal(vc, nil);
     if (_activeBackend == SenkoBackendAmneziaWG) {
         [_ctl stopAWG:^(NSString *status) {
             NSString *clean = [status stringByTrimmingCharactersInSet:

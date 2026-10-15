@@ -27,5 +27,5 @@ check() {
   echo "route message layout matches the sdk: ${arch}"
 }
 
-check armv7 arm-apple-darwin11 "${SDK_V7}" 5.0
+check armv7 arm-apple-darwin11 "${SDK_V7}" 4.3
 check arm64 arm64-apple-darwin "${SDK_V64}" 7.0

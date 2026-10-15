@@ -76,7 +76,7 @@ build_arch() {
   cp "${NGHTTP3}"/lib/includes/nghttp3/*.h "${dir}/include/nghttp3/"
 }
 
-build_arch armv7 arm-apple-darwin11 "${SDK_V7}" armv7 5.0 "${OSSL_V7}"
+build_arch armv7 arm-apple-darwin11 "${SDK_V7}" armv7 4.3 "${OSSL_V7}"
 build_arch arm64 arm64-apple-darwin "${SDK_V64}" arm64 7.0 "${OSSL_V64}"
 
 echo "${STAMP}" > "${MARKER}"

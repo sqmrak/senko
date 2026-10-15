@@ -12,6 +12,34 @@ static inline void SenkoScrollViewUseManualInsets(UIScrollView *scroll) {
     ((void (*)(id, SEL, NSInteger))[scroll methodForSelector:selector])(scroll, selector, 2);
 }
 
+/* ios 4.3 has only the modal calls that ios 5 replaced with completion blocks */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+static inline void SenkoPresentModal(UIViewController *host, UIViewController *vc) {
+    if ([host respondsToSelector:@selector(presentViewController:animated:completion:)])
+        [host presentViewController:vc animated:YES completion:nil];
+    else
+        [host presentModalViewController:vc animated:YES];
+}
+
+static inline void SenkoDismissModal(UIViewController *vc, void (^completion)(void)) {
+    if ([vc respondsToSelector:@selector(dismissViewControllerAnimated:completion:)]) {
+        [vc dismissViewControllerAnimated:YES completion:completion];
+        return;
+    }
+    /* ios 4.3 has no completion block, and a follow up presenting over a modal
+       still animating out is ignored, so that dismissal skips the animation */
+    [vc dismissModalViewControllerAnimated:completion ? NO : YES];
+    if (completion) completion();
+}
+
+static inline UIViewController *SenkoPresentedController(UIViewController *vc) {
+    if ([vc respondsToSelector:@selector(presentedViewController)])
+        return vc.presentedViewController;
+    return vc.modalViewController;
+}
+#pragma clang diagnostic pop
+
 /* the ios 5 SDK predates these Foundation and UIKit spelling aliases */
 #ifndef NS_ENUM
 #define NS_ENUM(_type, _name) _type _name; enum

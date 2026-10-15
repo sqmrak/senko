@@ -11,7 +11,7 @@ MBED    ?= $(if $(SENKO_MBED),$(SENKO_MBED),$(error set MBED=/path/to/mbedtls-ou
 
 TRIPLE  ?= arm-apple-darwin11
 CC      := $(TC)/clang -target $(TRIPLE) -B $(TC)
-ARCH    ?= -arch armv7 -miphoneos-version-min=5.0
+ARCH    ?= -arch armv7 -miphoneos-version-min=4.3
 CFLAGS  := -std=c99 -Wall -Wextra -O2 -fPIC $(EXTRA_CFLAGS) $(ARCH) -isysroot $(SDK) \
            -I../daemon \
            -I$(MBED)/include -DMBEDTLS_PLATFORM_MS_TIME_ALT

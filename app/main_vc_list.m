@@ -2053,8 +2053,8 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
         [_serverStatus setObject:[NSNumber numberWithInt:-3] forKey:key];
         [self reloadServerRowForIndex:index];
         [_ctl checkIndex:index mode:mode reply:^(int ms, NSString *error) {
-            (void)error;
             if (generation != _checkGeneration) return;
+            if (ms < 0 && [error length]) [self setLastErr:error];
             [_serverStatus setObject:[NSNumber numberWithInt:ms] forKey:key];
             if (_sheet == sheet)
                 [_sheet setPingResult:[NSNumber numberWithInt:ms]];
@@ -2072,7 +2072,7 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
                                             initWithRootViewController:editor] autorelease];
             StyleNavBarClassic(nav);
             nav.modalPresentationStyle = UIModalPresentationFullScreen;
-            [self presentViewController:nav animated:YES completion:nil];
+            SenkoPresentModal(self, nav);
         }];
         return;
     }
@@ -2097,7 +2097,7 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
                 reply ? reply : @"daemon offline: cannot update server"));
             return;
         }
-        [vc dismissViewControllerAnimated:YES completion:nil];
+        SenkoDismissModal(vc, nil);
         SetStatusRefresh(_statusLabel, @"server updated");
         [self refresh];
     }];

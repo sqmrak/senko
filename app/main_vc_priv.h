@@ -24,6 +24,7 @@
 #import "server_sheet.h"
 #import "update_install.h"
 #import "meow.h"
+#import "text_prompt.h"
 #import "empty_state.h"
 #import "app_common.h"
 

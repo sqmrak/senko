@@ -98,6 +98,8 @@ CGSize SenkoTextSize(NSString *text, UIFont *font, CGFloat width);
 /* blend a palette colour toward white (delta > 0) or black (delta < 0), so a
    two stop fill has relief whatever the theme supplies */
 UIColor *SenkoShadeColor(UIColor *base, CGFloat delta);
+/* rgba of a uikit colour; NO for a pattern colour, which leaves opaque black */
+BOOL SenkoColorComponents(UIColor *color, CGFloat *r, CGFloat *g, CGFloat *b, CGFloat *a);
 
 extern NSString * const SenkoThemeDidChangeNotification;
 extern NSString * const SenkoThemeIdKey;

@@ -7,7 +7,7 @@
 @implementation MainVC (Import)
 
 - (void)addPressed {
-    if (self.presentedViewController) return;
+    if (SenkoPresentedController(self)) return;
     [self dismissCurrentActionSheetAnimated:YES];
 /* one entry per source, not per format: the daemon parser decides what the
    content is, so there is no reason to make the user classify it first */
@@ -78,7 +78,7 @@
                                     initWithRootViewController:edit] autorelease];
     StyleNavBarClassic(nav);
     nav.modalPresentationStyle = UIModalPresentationFullScreen;
-    [self presentViewController:nav animated:YES completion:nil];
+    SenkoPresentModal(self, nav);
 }
 
 - (void)pinSubscriptionIndex:(int)subIdx {
@@ -152,7 +152,7 @@
             }
             [[NSUserDefaults standardUserDefaults] setObject:url forKey:SENKO_PINNED_SUB_URL_KEY];
             [[NSUserDefaults standardUserDefaults] synchronize];
-            [vc dismissViewControllerAnimated:YES completion:nil];
+            SenkoDismissModal(vc, nil);
             SetStatusRefresh(_statusLabel, @"subscription saved");
             [self refresh];
         }];
@@ -215,7 +215,7 @@
                     initWithSubscription:entry] autorelease];
                 UINavigationController *nav = [[[UINavigationController alloc]
                     initWithRootViewController:info] autorelease];
-                [self presentViewController:nav animated:YES completion:nil];
+                SenkoPresentModal(self, nav);
             }
         } else if (idx == first + 3) {
             [self editSubscriptionIndex:sub];
@@ -348,7 +348,7 @@
    per-link error text instead of the bulk import summary */
 static BOOL SenkoLooksLikeSingleServerLink(NSString *s) {
     if ([s rangeOfString:@"\n"].location != NSNotFound) return NO;
-    if ([s hasPrefix:@"vless://"] || [s hasPrefix:@"socks5://"] ||
+    if ([s hasPrefix:@"vless://"] || [s hasPrefix:@"vmess://"] || [s hasPrefix:@"socks5://"] ||
         [s hasPrefix:@"trojan://"] || [s hasPrefix:@"ss://"]) return YES;
     if (![s hasPrefix:@"http://"] && ![s hasPrefix:@"https://"]) return NO;
     NSURL *u = [NSURL URLWithString:s];
@@ -630,13 +630,24 @@ static BOOL SenkoLooksLikeSubscriptionURL(NSString *s) {
 
 - (void)promptSubscription {
     NSCharacterSet *ws = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    void (^import)(NSString *) = ^(NSString *text) {
+        if ([text length]) [self importText:[text stringByTrimmingCharactersInSet:ws]];
+    };
     if ([self promptTextWithTitle:@"Subscription"
                           message:@"paste a subscription URL or a server link"
                          keyboard:UIKeyboardTypeURL
-                          handler:^(NSString *text) {
-            [self importText:[text stringByTrimmingCharactersInSet:ws]];
-        }])
+                          handler:import])
         return;
+    if (![UIAlertView instancesRespondToSelector:@selector(setAlertViewStyle:)]) {
+        [SenkoTextPromptVC presentFrom:self
+                                 title:SenkoLocalizedText(@"Subscription")
+                               message:SenkoLocalizedText(@"paste a subscription URL or a server link")
+                                  text:nil
+                              keyboard:UIKeyboardTypeURL
+                               confirm:SenkoLocalizedText(@"Add")
+                               handler:import];
+        return;
+    }
     UIAlertView *av = [[[UIAlertView alloc] initWithTitle:@"Subscription"
                                                    message:@"paste a subscription URL or a server link"
                                                   delegate:self
@@ -653,19 +664,19 @@ static BOOL SenkoLooksLikeSubscriptionURL(NSString *s) {
                                     initWithRootViewController:files] autorelease];
     StyleNavBarClassic(nav);
     nav.modalPresentationStyle = UIModalPresentationFullScreen;
-    [self presentViewController:nav animated:YES completion:nil];
+    SenkoPresentModal(self, nav);
 }
 
 - (void)fileImportVCDidCancel:(FileImportVC *)vc {
     (void)vc;
-    [self dismissViewControllerAnimated:YES completion:nil];
+    SenkoDismissModal(self, nil);
 }
 
 - (void)fileImportVC:(FileImportVC *)vc didPickPath:(NSString *)path {
     (void)vc;
-    [self dismissViewControllerAnimated:YES completion:^{
+    SenkoDismissModal(self, ^{
         [self importFileAtPath:path];
-    }];
+    });
 }
 
 - (void)presentUpdateForPath:(NSString *)path {
@@ -674,7 +685,7 @@ static BOOL SenkoLooksLikeSubscriptionURL(NSString *s) {
                                                         packagePath:path] autorelease];
     vc.modalTransitionStyle = UIModalTransitionStyleCoverVertical;
     vc.modalPresentationStyle = UIModalPresentationFullScreen;
-    [self presentViewController:vc animated:YES completion:nil];
+    SenkoPresentModal(self, vc);
 }
 
 - (void)alertView:(UIAlertView *)av clickedButtonAtIndex:(NSInteger)idx {
@@ -712,11 +723,11 @@ static BOOL SenkoLooksLikeSubscriptionURL(NSString *s) {
                                     initWithRootViewController:scan] autorelease];
     StyleNavBarClassic(nav);
     nav.modalPresentationStyle = UIModalPresentationFullScreen;
-    [self presentViewController:nav animated:YES completion:nil];
+    SenkoPresentModal(self, nav);
 }
 
 - (void)qrScanner:(QRScanVC *)s didDecode:(NSString *)text {
-    [self dismissViewControllerAnimated:YES completion:nil];
+    SenkoDismissModal(self, nil);
     if ([text length]) [self importText:text];
     else {
         [self setLastErr:@"QR code is empty or unreadable"];
@@ -725,7 +736,7 @@ static BOOL SenkoLooksLikeSubscriptionURL(NSString *s) {
 }
 
 - (void)qrScannerDidCancel:(QRScanVC *)s {
-    [self dismissViewControllerAnimated:YES completion:nil];
+    SenkoDismissModal(self, nil);
 }
 
 

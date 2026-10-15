@@ -250,14 +250,9 @@ static NSString * const kRippleLayerName = @"senko.ripple";
 @end
 
 static BOOL RippleLight(UIColor *color) {
-    CGFloat r = 0, g = 0, b = 0, a = 0;
-    if ([color respondsToSelector:@selector(getRed:green:blue:alpha:)] &&
-        [color getRed:&r green:&g blue:&b alpha:&a])
-        return 0.299f * r + 0.587f * g + 0.114f * b > 0.7f;
-    CGFloat w = 0;
-    if ([color respondsToSelector:@selector(getWhite:alpha:)] && [color getWhite:&w alpha:&a])
-        return w > 0.7f;
-    return NO;
+    CGFloat r, g, b, a;
+    if (!SenkoColorComponents(color, &r, &g, &b, &a)) return NO;
+    return 0.299f * r + 0.587f * g + 0.114f * b > 0.7f;
 }
 
 /* ink at about a tenth over a light surface, white at a bit more over a dark

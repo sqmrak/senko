@@ -56,9 +56,11 @@ rm -rf "${OUT}"
 mkdir -p "${OUT}/lib"
 cp -a "${SRC}/include" "${OUT}/include"
 
-build_arch armv7 arm-apple-darwin11 "${SDK_V7}" armv7 5.0
+build_arch armv7 arm-apple-darwin11 "${SDK_V7}" armv7 4.3
 build_arch arm64 arm64-apple-darwin "${SDK_V64}" arm64 7.0
 build_arch arm64e arm64e-apple-darwin "${SDK_VE}" arm64e 12.0
+# build_deb.sh rebuilds when this is missing, so archives for an older armv7 target are not reused
+touch "${OUT}/.senko-ios-min-4.3"
 
 echo "mbedtls static archives ready: ${OUT}"
 ls -lh "${OUT}/lib/"

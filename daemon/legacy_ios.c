@@ -43,8 +43,9 @@ int senko_ios_major_from_darwin(const char *release) {
     if (!release) return 0;
     int darwin = parse_major(release);
     /* darwin 15 and later track the ios major exactly six versions behind.
-       below that the mapping is a table: darwin 14 covers both ios 7 and ios 8,
-       which share every branch this answer selects */
+       below that the mapping is a table: darwin 11 covers ios 4.3 and ios 5,
+       darwin 14 covers ios 7 and ios 8, and each pair shares every branch this
+       answer selects */
     switch (darwin) {
         case 0:  return 0;
         case 11: return 5;

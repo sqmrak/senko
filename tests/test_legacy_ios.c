@@ -28,6 +28,13 @@ int main(void) {
            "<key>ProductBuildVersion</key><string>9A334</string>\n"
            "</dict>", 5, "same-line ios 5.0");
 
+    /* ios 4.3 is the oldest supported firmware and must not read as unknown */
+    expect("<dict>\n"
+           "\t<key>ProductBuildVersion</key>\n\t<string>8J2</string>\n"
+           "\t<key>ProductName</key>\n\t<string>iPhone OS</string>\n"
+           "\t<key>ProductVersion</key>\n\t<string>4.3.3</string>\n"
+           "</dict>", 4, "multiline ios 4.3.3");
+
     expect("<key>ProductVersion</key>\n<string>10.3.4</string>", 10, "ios 10.3.4");
     expect("<key>ProductVersion</key>\n<string> 6.1 </string>", 6, "leading space in value");
     expect("<key>ProductVersion</key><string>12.5.7</string>", 12, "ios 12 same line");
@@ -42,7 +49,8 @@ int main(void) {
 
     /* the binary plist fallback: only the kernel version is readable there */
     struct { const char *release; int want; } darwin[] = {
-        { "11.0.0", 5 }, { "13.0.0", 6 }, { "14.0.0", 7 },
+        /* ios 4.3 and ios 5 share darwin 11; ios 4.2 (darwin 10) is unsupported */
+        { "10.4.0", 0 }, { "11.0.0", 5 }, { "13.0.0", 6 }, { "14.0.0", 7 },
         { "15.6.0", 9 }, { "16.7.0", 10 }, { "17.7.0", 11 },
         { "18.7.0", 12 }, { "19.6.0", 13 }, { "21.6.0", 15 },
         { "22.0.0", 16 }, { "22.6.0", 16 },
