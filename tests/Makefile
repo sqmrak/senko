@@ -118,6 +118,10 @@ HOST_TESTS += test_geo test_routing_profile test_geo_update test_routing_sync te
 
 all: test
 
+.PHONY: test-native
+test-native:
+	bash ../scripts/test_native_core.sh
+
 test: $(HOST_TESTS)
 	python3 test_launchd_install.py
 	python3 check_emoji_assets.py

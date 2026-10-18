@@ -105,6 +105,7 @@
     UIImageView       *_ios26Bg;
     BOOL               _ios26BgLight;
     NSMutableDictionary *_serverStatus;
+    NSMutableDictionary *_pingCache;
     NSInteger     _checkGeneration;
     NSInteger     _catalogGeneration;
     CGSize        _laidChromeSize;
@@ -216,7 +217,6 @@
 - (NSArray *)collapsedRows:(NSArray *)rows names:(NSMutableDictionary *)rowNames;
 - (NSArray *)sortedRows:(NSArray *)rows;
 - (NSNumber *)bestPingForServer:(SenkoServer *)sv;
-- (NSArray *)connectCandidatesForServerIndex:(int)index;
 - (SenkoServer *)serverAtIndexPath:(NSIndexPath *)ip;
 - (void)refresh;
 /* the status half of -refresh on its own: the catalog is expensive to list and
@@ -251,6 +251,7 @@
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip;
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip;
 - (void)selectServerIndex:(int)index;
+- (void)setPingResult:(int)ms forServerIndex:(int)index;
 - (SenkoServer *)serverByIndex:(int)index;
 - (NSString *)homeDetailText;
 - (void)showSortMenu;
@@ -299,8 +300,7 @@
 - (NSString *)nameForServer:(SenkoServer *)server;
 - (void)chooseServerIndex:(int)index;
 - (void)switchActiveServerIndex:(int)idx;
-- (void)connectTryingCandidates:(NSArray *)candidates offset:(NSUInteger)offset
-                           reply:(void (^)(NSString *reply))replyBlock;
+
 - (void)editAWGProfile;
 - (void)editAWGVC:(EditAWGVC *)vc saveConfig:(NSString *)config;
 - (void)startSavedAWGProfile;

@@ -8,10 +8,15 @@
 static NSString * const SenkoNativeProviderID = @"com.senko.app.tunnel";
 
 static BOOL SenkoNativeOSAvailable(void) {
+#if !defined(__LP64__)
+    /* the packaged Go extension has no armv7 slice */
+    return NO;
+#else
     NSString *version = [[UIDevice currentDevice] systemVersion];
     NSArray *parts = [version componentsSeparatedByString:@"."];
     NSInteger major = [parts count] ? [[parts objectAtIndex:0] integerValue] : 0;
     return major >= 9;
+#endif
 }
 
 static void SenkoNativeFinish(void (^block)(NSError *), NSError *error) {
@@ -141,6 +146,9 @@ static void SenkoNativeReadTraffic(id manager,
         ((void (*)(id, SEL, id))objc_msgSend)(protocol,
                                               @selector(setServerAddress:),
                                               @"198.18.0.2");
+        if ([protocol respondsToSelector:@selector(setDisconnectOnSleep:)])
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(protocol,
+                @selector(setDisconnectOnSleep:), NO);
         NSMutableDictionary *provider = [NSMutableDictionary dictionaryWithObject:json
                                                                                forKey:@"config"];
         if ([serverAddress length])
@@ -166,17 +174,25 @@ static void SenkoNativeReadTraffic(id manager,
                 SenkoNativeFinish(completion, saveError);
                 return;
             }
-            id connection = ((id (*)(id, SEL))objc_msgSend)(
-                manager, @selector(connection));
-            NSError *startError = nil;
-            BOOL started = ((BOOL (*)(id, SEL, NSError **))objc_msgSend)(
-                connection, @selector(startVPNTunnelAndReturnError:), &startError);
-            if (!started) {
-                SenkoNativeFinish(completion, startError ? startError :
-                                  SenkoNativeError(@"Network Extension refused to start"));
-                return;
-            }
-            SenkoNativeFinish(completion, nil);
+            /* a newly approved VPN has no usable connection until preferences reload */
+            save(manager, @selector(loadFromPreferencesWithCompletionHandler:),
+                 ^(NSError *reloadError) {
+                if (reloadError) {
+                    SenkoNativeFinish(completion, reloadError);
+                    return;
+                }
+                id connection = ((id (*)(id, SEL))objc_msgSend)(
+                    manager, @selector(connection));
+                NSError *startError = nil;
+                BOOL started = connection && ((BOOL (*)(id, SEL, NSError **))objc_msgSend)(
+                    connection, @selector(startVPNTunnelAndReturnError:), &startError);
+                if (!started) {
+                    SenkoNativeFinish(completion, startError ? startError :
+                                      SenkoNativeError(@"Network Extension refused to start"));
+                    return;
+                }
+                SenkoNativeFinish(completion, nil);
+            });
         });
     });
 }

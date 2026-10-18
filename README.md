@@ -80,6 +80,10 @@ make -C tests test
 
 needs `THEOS SENKO_SDK_V7 SENKO_SDK_V64 SENKO_SDK_VE SENKO_CRT_V7 SENKO_OSSL_V7 SENKO_OSSL_V64 SENKO_MBED SENKO_GO SENKO_CORE_SRC SENKO_NGTCP2_SRC SENKO_NGHTTP3_SRC SENKO_QUIC`, outputs `senko-v<version>.deb`.
 
+`make -C tests test-native` runs the Go TUN tests with the race detector. set `SENKO_GO` and `SENKO_CORE_SRC` to the pinned toolchain and core checkout. the package build runs these tests too.
+
+`scripts/patches/senko-core-tun-udp.patch` fixes the core's unbalanced gvisor packet clone, UDP deadlines, datagram sizes, queue bounds and flow teardown. builds apply it through a Go overlay without changing the core checkout.
+
 ## license
 
 [gpl v2](LICENSE). emoji: Twemoji, CC BY 4.0 (`app/emoji/`).

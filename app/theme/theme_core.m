@@ -3,6 +3,7 @@
 #import "../crash_report.h"
 
 #include <string.h>
+#include <objc/message.h>
 
 UIColor *kBG;
 UIColor *kBGBot;
@@ -375,6 +376,14 @@ void InitPalette(void) {
         def = SenkoThemeFind(SenkoThemeDefaultId());
         if ([d objectForKey:SenkoThemeLightKey])
             light = [d boolForKey:SenkoThemeLightKey];
+        else {
+            id screen = [UIScreen mainScreen];
+            if ([screen respondsToSelector:@selector(traitCollection)]) {
+                id traits = ((id (*)(id, SEL))objc_msgSend)(screen, @selector(traitCollection));
+                if ([traits respondsToSelector:@selector(userInterfaceStyle)])
+                    light = ((NSInteger (*)(id, SEL))objc_msgSend)(traits, @selector(userInterfaceStyle)) == 1;
+            }
+        }
     }
     if (!def) def = SenkoThemeFind(SenkoThemeDefaultId());
 

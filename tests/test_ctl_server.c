@@ -98,6 +98,8 @@ typedef struct {
     const char *gate_reason;
     const char *routing;    /* the routing response header the panel sends */
     int  routing_too_long;
+    int  body_cut;
+    size_t body_cap;
     int  hold_fd; /* when set, the fetch waits for a byte here like a slow panel */
 } fetch_rec_t;
 
@@ -108,12 +110,14 @@ static int mock_fetch(void *ctx, const char *url,
                       unsigned char *buf, size_t cap, size_t *len,
                       ctl_fetch_meta_t *meta) {
     (void)ctx;
+    g_fetch.body_cap = cap;
     if (g_fetch.hold_fd > 0) {
         char b;
         (void)read(g_fetch.hold_fd, &b, 1);
     }
     if (meta) {
         meta->expire = g_fetch.expire;
+        meta->body_cut = g_fetch.body_cut;
         meta->gated = g_fetch.gated;
         snprintf(meta->routing, sizeof meta->routing, "%s", g_fetch.routing ? g_fetch.routing : "");
         meta->routing_too_long = g_fetch.routing_too_long;
@@ -162,6 +166,17 @@ static int mock_tunnel_probe(void *ctx) {
     (void)ctx;
     g_tunnel_probe.calls++;
     return g_tunnel_probe.ret_ms;
+}
+
+static int g_native_fail;
+
+static int mock_native_config(void *ctx, const vl_server_t *server,
+                               char *buf, size_t cap, size_t *len) {
+    (void)ctx;
+    if (g_native_fail || !server || cap < 3) return -1;
+    memcpy(buf, "{}", 3);
+    *len = 2;
+    return 0;
 }
 
 static int mock_verify_ok(void *ctx, char *reason, size_t reason_cap) {
@@ -707,6 +722,42 @@ int main(void) {
         if (s.engine.store.group[i] == (int)sub) sub_servers++;
     ok("two sub-group servers", sub_servers == 2);
 
+    {
+        const char *saved_blob = g_fetch.blob;
+        size_t before = s.engine.store.n;
+        g_fetch.body_cut = 1;
+        write(cli, "REFRESH 0\n", 10);
+        exchange(&s, cli, buf, sizeof buf);
+        ok("a cut subscription is refused", strncmp(buf, "ERR ", 4) == 0 &&
+           strstr(buf, "too large") != NULL);
+        ok("a cut subscription keeps every saved server", s.engine.store.n == before);
+        g_fetch.body_cut = 0;
+
+        size_t padding = 600 * 1024;
+        char *large = malloc(padding + 2048);
+        ok("allocate large feed", large != NULL);
+        if (large) {
+            const char head[] = "[{\"remarks\":\"large\",\"padding\":\"";
+            memcpy(large, head, sizeof head - 1);
+            memset(large + sizeof head - 1, 'x', padding);
+            snprintf(large + sizeof head - 1 + padding, 2048,
+                "\",\"outbounds\":[{\"protocol\":\"vless\",\"settings\":{\"address\":\"late.example\","
+                "\"port\":443,\"id\":\"11111111-1111-4111-8111-111111111111\",\"encryption\":\"none\"}}]}]");
+            g_fetch.blob = large;
+            write(cli, "REFRESH 0\n", 10);
+            exchange(&s, cli, buf, sizeof buf);
+            ok("a node after 512 KB is imported", strncmp(buf, "OK ", 3) == 0 &&
+               strcmp(s.engine.store.servers[s.engine.store.n - 1].host, "late.example") == 0);
+            ok("subscription download stays bounded", g_fetch.body_cap == 8 * 1024 * 1024);
+            g_fetch.blob = saved_blob;
+            write(cli, "REFRESH 0\n", 10);
+            exchange(&s, cli, buf, sizeof buf);
+            ok("restore feed after the large download", strncmp(buf, "OK ", 3) == 0 &&
+               s.engine.store.n == before);
+            free(large);
+        }
+    }
+
     int fcalls = g_fetch.calls;
     write(cli, "REFRESH 9\n", 10);
     exchange(&s, cli, buf, sizeof buf);
@@ -983,6 +1034,47 @@ int main(void) {
     ok("list has subscription info", strstr(buf, "SUBINFO 0 ") != NULL);
     ok("list has subscription header", strstr(buf, "SUBHDR 0 Authorization:%20Bearer%20abc%2Btest\n") != NULL);
     ok("list has section order", strstr(buf, "SECTION 1 -1 0\n") != NULL);
+    {
+        char first[65] = {0}, renamed[65] = {0}, changed[65] = {0};
+        char *record = strstr(buf, "SRVID 0 ");
+        ok("list carries a stable server identity", record && sscanf(record, "SRVID 0 %64s", first) == 1 &&
+           strlen(first) == 64);
+        vl_server_t original = s.engine.store.servers[0];
+        snprintf(s.engine.store.servers[0].remark, sizeof original.remark, "renamed");
+        write(cli, "LIST\n", 5);
+        exchange(&s, cli, buf, sizeof buf);
+        record = strstr(buf, "SRVID 0 ");
+        ok("a renamed node keeps its measurements", record &&
+           sscanf(record, "SRVID 0 %64s", renamed) == 1 && strcmp(first, renamed) == 0);
+        snprintf(s.engine.store.servers[0].path, sizeof original.path, "/different");
+        write(cli, "LIST\n", 5);
+        exchange(&s, cli, buf, sizeof buf);
+        record = strstr(buf, "SRVID 0 ");
+        ok("a different path at the same endpoint has its own identity", record &&
+           sscanf(record, "SRVID 0 %64s", changed) == 1 && strcmp(first, changed) != 0);
+        s.engine.store.servers[0] = original;
+    }
+
+    {
+        int selected = s.engine.store.selected;
+        int saves = g_persist.calls;
+        ctl_persist_fn saved_persist = s.persist;
+        ctl_server_set_persist(&s, mock_persist);
+        ctl_server_set_native_config(&s, mock_native_config);
+        send_line(cli, "NATIVE_CONFIG 1\n");
+        exchange(&s, cli, buf, sizeof buf);
+        ok("native config has a complete reply", strstr(buf, "NCFGEND 2\n") != NULL);
+        ok("native VPN remembers the chosen server", s.engine.store.selected == 1 &&
+           g_persist.calls == saves + 1);
+        g_native_fail = 1;
+        send_line(cli, "NATIVE_CONFIG 0\n");
+        exchange(&s, cli, buf, sizeof buf);
+        ok("a failed native config keeps selection", strncmp(buf, "ERR ", 4) == 0 &&
+           s.engine.store.selected == 1 && g_persist.calls == saves + 1);
+        g_native_fail = 0;
+        store_select(&s.engine.store, selected);
+        ctl_server_set_persist(&s, saved_persist);
+    }
 
     /* test fetch streaming */
     g_fetch.blob = "hello fetch";

@@ -20,6 +20,7 @@
     [host release];
     [remark release];
     [link release];
+    [identity release];
     [dupIndexes release];
     [super dealloc];
 }
@@ -932,7 +933,7 @@ static BOOL tokenIsSecurity(NSString *s) {
 /* parse old server rows */
 static SenkoServer *parseSRV(NSString *line) {
     NSArray *t = [line componentsSeparatedByString:@" "];
-    if ([t count] < 7) return nil;
+    if ([t count] < 8) return nil;
     if (![[t objectAtIndex:0] isEqualToString:@"SRV"]) return nil;
     SenkoServer *sv = [[[SenkoServer alloc] init] autorelease];
     sv->index    = [[t objectAtIndex:1] intValue];
@@ -1061,6 +1062,17 @@ static SenkoSub *parseSUB(NSString *line) {
                 NSArray *t = [ln componentsSeparatedByString:@" "];
                 for (NSUInteger i = 1; i < [t count]; ++i)
                     [order addObject:[NSNumber numberWithInt:[[t objectAtIndex:i] intValue]]];
+                continue;
+            }
+            if ([ln hasPrefix:@"SRVID "]) {
+                NSArray *parts = [ln componentsSeparatedByString:@" "];
+                if ([parts count] == 3 && [[parts objectAtIndex:2] length] == 64) {
+                    for (SenkoServer *server in srvs) {
+                        if (server->index != [[parts objectAtIndex:1] intValue]) continue;
+                        server->identity = [[parts objectAtIndex:2] copy];
+                        break;
+                    }
+                }
                 continue;
             }
             if (![ln hasPrefix:@"SRV "]) continue; /* skip interleaved events */

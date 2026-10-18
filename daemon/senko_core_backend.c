@@ -59,13 +59,16 @@ static const char *core_binary(void) {
 /* ios 12 to 14 lack SecTrustCopyCertificateChain, which go's system verifier
    binds lazily, so the first server certificate check kills senko-core with a
    dyld symbol error. those systems verify against the bundled roots instead */
-static int core_roots_file(const char **file) {
+int senko_core_roots_file(const char *bundle, const char **file) {
+    if (!file) return -1;
     *file = NULL;
+    if (!bundle) return -1;
 #ifdef __APPLE__
-    static const char bundle[] = SENKO_USR_LIB "/senko/cacert.pem";
     static const char security_path[] = "/System/Library/Frameworks/Security.framework/Security";
     void *security = dlopen(security_path, RTLD_LAZY);
-    if (security && dlsym(security, "SecTrustCopyCertificateChain")) return 0;
+    int system_roots = security && dlsym(security, "SecTrustCopyCertificateChain");
+    if (security) dlclose(security);
+    if (system_roots) return 0;
     if (access(bundle, R_OK) != 0) return -1;
     *file = bundle;
 #endif
@@ -142,7 +145,7 @@ int senko_core_backend_start(senko_core_backend_t *backend, const vl_server_t *s
         set_reason(reason, reason_cap, "the bundled senko-core is missing or not executable");
         return -1;
     }
-    if (core_roots_file(&roots) != 0) {
+    if (senko_core_roots_file(SENKO_USR_LIB "/senko/cacert.pem", &roots) != 0) {
         set_reason(reason, reason_cap, "the bundled TLS roots are missing, senko-core cannot verify servers on this ios");
         return -1;
     }

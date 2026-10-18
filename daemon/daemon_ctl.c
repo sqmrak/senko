@@ -308,6 +308,7 @@ int daemon_ctl_native_config(void *ctx, const vl_server_t *server, char *buf,
                              size_t cap, size_t *len) {
     daemon_ctl_t *d = (daemon_ctl_t *)ctx;
     char endpoint[INET_ADDRSTRLEN];
+    const char *ca_file = NULL;
     if (len) *len = 0;
     if (!d || !server || !buf || cap < 2 || !len)
         return -1;
@@ -315,9 +316,12 @@ int daemon_ctl_native_config(void *ctx, const vl_server_t *server, char *buf,
     if (resolve_ipv4_addresses(server->host, endpoint, sizeof endpoint,
                                NULL, 0, 0) != 0)
         return -1;
+    if (senko_core_roots_file(SENKO_JBROOT
+            "/Applications/Senko.app/PlugIns/SenkoTunnel.appex/cacert.pem", &ca_file) != 0)
+        return -1;
     /* the extension cannot read the daemon's geo directory, so geo rules stay out */
     if (senko_core_config_render_rules(server, endpoint, "utun", d->rules, NULL,
-                               NULL, buf, cap) != 0)
+                               ca_file, buf, cap) != 0)
         return -1;
     *len = strlen(buf);
     return *len > 0 ? 0 : -1;
@@ -1187,7 +1191,7 @@ static void fetch_error_text(subfetch_status_t r, const char *host, int http_sta
         case SUBFETCH_ERR_TRANSPORT:
             snprintf(e, ec, "tls or connection to %.96s failed", host); break;
         case SUBFETCH_ERR_HTTP:
-            if (http_status)
+            if (http_status && (http_status < 200 || http_status >= 300))
                 snprintf(e, ec, "%.96s answered HTTP %d", host, http_status);
             else
                 snprintf(e, ec, "%.96s sent a response senko cannot read", host);
@@ -1238,6 +1242,15 @@ int daemon_ctl_fetch(void *ctx, const char *url,
         const char *host = url && url_parse(url, &eu) == URL_OK ? eu.host : "the server";
         if (meta) fetch_error_text(r, host, info.http_status, "subscription",
                                    meta->error, sizeof meta->error);
+        if (meta && info.timed_out) {
+            if (info.http_status)
+                snprintf(meta->error, sizeof meta->error,
+                         "%.96s timed out after HTTP %d (%zu body bytes)",
+                         host, info.http_status, info.received);
+            else
+                snprintf(meta->error, sizeof meta->error,
+                         "%.96s timed out before the HTTP response", host);
+        }
         const char *why = "unknown";
         switch (r) {
             case SUBFETCH_ERR_ARG:       why = "bad arg"; break;
@@ -1252,8 +1265,9 @@ int daemon_ctl_fetch(void *ctx, const char *url,
 /* redaction prevents subscription credentials from reaching system logs */
         url_t u;
         if (url && url_parse(url, &u) == URL_OK)
-            fprintf(stderr, "senkod: subfetch failed: %s (rc=%d, http %d) %s://%s:%u/...\n",
-                    why, (int)r, info.http_status, u.is_https ? "https" : "http", u.host,
+            fprintf(stderr, "senkod: subfetch failed: %s (rc=%d, http %d, body %zu, timeout %d) %s://%s:%u/...\n",
+                    why, (int)r, info.http_status, info.received, info.timed_out,
+                    u.is_https ? "https" : "http", u.host,
                     (unsigned)u.port);
         else
             fprintf(stderr, "senkod: subfetch failed: %s (rc=%d)\n", why, (int)r);

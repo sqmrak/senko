@@ -60,10 +60,13 @@ typedef struct {
    routing_too_long means the header did not fit and was dropped */
     char routing[20 * 1024];
     int  routing_too_long;
-/* the non-2xx status that ended the fetch, 0 when there was none */
+/* HTTP status of a failed response, including a stalled 2xx body, 0 on success */
     int  http_status;
+/* retain progress when the response stalls before its framing is complete */
+    int timed_out;
+    size_t received;
 /* the body did not fit body_cap: the buffer holds its first body_cap bytes
-   and the caller decides whether a prefix is usable. only reported through
+   for diagnostics. only reported through
    subfetch_get_info; subfetch_get still fails such a body with TOOBIG */
     int  body_cut;
 } subfetch_info_t;

@@ -5,14 +5,10 @@
 #import <QuartzCore/QuartzCore.h>
 
 /* plates that refit their relief whenever uikit resizes them */
-@interface SenkoReliefControl : UIControl {
-    CGSize _reliefSize;
-}
+@interface SenkoReliefControl : UIControl
 @end
 
-@interface SenkoReliefButton : UIButton {
-    CGSize _reliefSize;
-}
+@interface SenkoReliefButton : UIButton
 @end
 
 /* the power control with a dot circling its rim. the dot turns on the render

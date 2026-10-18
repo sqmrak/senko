@@ -31,6 +31,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/un.h>
+#include <openssl/sha.h>
 #ifdef __APPLE__
 #include <mach/mach_time.h>
 #else
@@ -688,12 +689,11 @@ static const char *server_sec_name(const vl_server_t *sv) {
 }
 
 #define FETCH_CHUNK_RAW 384
-#define FETCH_BODY_MAX (512 * 1024)
+#define FETCH_BODY_MAX (8 * 1024 * 1024)
+/* two downloads leave room for JSON parsing below the daemon's 64 MB limit */
+#define FETCH_ACTIVE_MAX 2
 
-/* every request goes out as happ, because panels that filter on the client name
-   answer that one. public aggregator feeds run to several megabytes; their first
-   512 KB already carries more nodes than the store holds, so a cut body keeps
-   its whole entries instead of failing the subscription */
+/* happ json repeats routing data per node and can exceed 512 KB before all nodes arrive */
 static int fetch_body_alloc(ctl_server_t *s, const char *url,
                             const char *request_header,
                             unsigned char **body_out, size_t *len_out,
@@ -709,7 +709,7 @@ static int fetch_body_alloc(ctl_server_t *s, const char *url,
         free(body);
         return -1;
     }
-    if (meta && meta->body_cut && cfg_subscription_prefix((char *)body, &len) != 0) {
+    if (meta && meta->body_cut) {
         url_t u;
         snprintf(meta->error, sizeof meta->error,
                  "the subscription from %.96s is too large",
@@ -787,7 +787,7 @@ static void *run_fetch_job(void *arg) {
 /* c is who gets the answer, NULL for the timer. sub_index is -1 for FETCH */
 static int start_fetch_job(ctl_server_t *s, ctl_client_t *c, fetch_purpose_t purpose,
                            int sub_index, const char *url, const char *header) {
-    if (!s || !s->fetch || !url || s->fetch_active >= CTL_SERVER_MAX_CLIENTS) return -1;
+    if (!s || !s->fetch || !url || s->fetch_active >= FETCH_ACTIVE_MAX) return -1;
     if (sub_index >= STORE_MAX_SUBS || (sub_index >= 0 && s->sub_fetching[sub_index]))
         return -1;
     ctl_fetch_job_t *job = (ctl_fetch_job_t *)calloc(1, sizeof *job);
@@ -973,8 +973,7 @@ static void import_result(ctl_server_t *s, size_t si, int rc,
         if (why)
             snprintf(msg, cap, "subscription added, %s", why);
         else if (skipped[0])
-            snprintf(msg, cap, "subscription added, no server senko can run%s (%s)",
-                     meta->body_cut ? " in the first 512 KB" : "", skipped);
+            snprintf(msg, cap, "subscription added, no server senko can run (%s)", skipped);
         else
             snprintf(msg, cap, "subscription added, refresh failed");
         return;
@@ -983,8 +982,7 @@ static void import_result(ctl_server_t *s, size_t si, int rc,
     store_set_sub_meta(&s->engine.store, si, meta->upload, meta->download,
                        meta->total, meta->description, meta->support_url);
     cfg_import_stats_text(&stats, skipped, sizeof skipped);
-    snprintf(msg, cap, "subscription added, %zu server(s)%s%s%s", added,
-             meta->body_cut ? " from the first 512 KB" : "",
+    snprintf(msg, cap, "subscription added, %zu server(s)%s%s", added,
              skipped[0] ? ", " : "", skipped);
     routing_after_refresh(s, si, meta, blob, blen, msg, cap);
     if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
@@ -1622,8 +1620,7 @@ static int refresh_result(ctl_server_t *s, int si, int rc,
                                             s->engine.store.subs[si].url);
         cfg_import_stats_text(&stats, skipped, sizeof skipped);
         if (why) snprintf(msg, cap, "%s", why);
-        else if (skipped[0]) snprintf(msg, cap, "no server senko can run%s (%s)",
-                                      meta->body_cut ? " in the first 512 KB" : "", skipped);
+        else if (skipped[0]) snprintf(msg, cap, "no server senko can run (%s)", skipped);
         else snprintf(msg, cap, "refresh parse failed");
         return -1;
     }
@@ -1643,8 +1640,7 @@ static int refresh_result(ctl_server_t *s, int si, int rc,
 /* a refresh renumbers the catalog; each measurement follows its server to the
    new index, so failover keeps its latency order across a refresh */
     remap_pings(s, moved);
-    snprintf(msg, cap, "refreshed %zu server(s)%s%s%s%s", added,
-             meta->body_cut ? " from the first 512 KB" : "",
+    snprintf(msg, cap, "refreshed %zu server(s)%s%s%s", added,
              s->engine.store.n >= STORE_MAX_SERVERS ? " (list full)" : "",
              skipped[0] ? ", " : "", skipped);
     routing_after_refresh(s, (size_t)si, meta, blob, blen, msg, cap);
@@ -2476,6 +2472,8 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         free(line);
         free(encoded);
         free(json);
+        store_select(&s->engine.store, cmd.server_index);
+        if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
         return;
     }
 
@@ -2545,6 +2543,21 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
                               sv->host, sv->port, sv->remark,
                               ln, sizeof ln, &lnn) == CTL_OK)
                 client_write(c, ln, lnn);
+            char link[8192];
+            if (store_link_at(st, i, link, sizeof link) == 0) {
+                unsigned char digest[SHA256_DIGEST_LENGTH];
+                char identity[SHA256_DIGEST_LENGTH * 2 + 1];
+                char *fragment = strchr(link, '#');
+                if (fragment) *fragment = '\0';
+                if (!SHA256((const unsigned char *)link, strlen(link), digest)) {
+                    fprintf(stderr, "senkod: server %zu identity could not be hashed\n", i);
+                    continue;
+                }
+                for (size_t k = 0; k < sizeof digest; ++k)
+                    snprintf(identity + k * 2, 3, "%02x", digest[k]);
+                int n = snprintf(ln, sizeof ln, "SRVID %zu %s\n", i, identity);
+                if (n > 0 && (size_t)n < sizeof ln) client_write(c, ln, (size_t)n);
+            }
         }
         if (ctl_build_listend((int)st->n, ln, sizeof ln, &lnn) == CTL_OK)
             client_write(c, ln, lnn);

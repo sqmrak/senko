@@ -5,26 +5,6 @@
 
 @implementation MainVC (Tunnel)
 
-/* a stuck-connecting or missing reply means routing may already be half
-   applied, so only a reply where the daemon itself settled on a non-connected
-   outcome is safe to retry against a different candidate */
-static BOOL SenkoConnectReplyIsCleanFailure(NSString *reply) {
-    if (!reply) return NO;
-    NSString *errReason = nil;
-    NSString *finalState = nil;
-    for (NSString *line in [reply componentsSeparatedByString:@"\n"]) {
-        if ([line length] == 0) continue;
-        if ([line hasPrefix:@"ERR "]) {
-            errReason = [line substringFromIndex:4];
-        } else if ([line hasPrefix:@"STATE "]) {
-            finalState = SenkoControlStateFromReply(line, NULL);
-        }
-    }
-    if (!finalState) return NO;
-    if ([finalState isEqualToString:@"connecting"] && !errReason) return NO;
-    return ![finalState isEqualToString:@"connected"];
-}
-
 /* the headline names the state, the detail line under it keeps carrying the
    daemon's own wording, so a failure still shows its exact reason */
 - (NSString *)stateHeadline {
@@ -236,22 +216,6 @@ static void senkoClearStatus(void) {
     }];
 }
 
-/* tries idx, and on a clean (non-stuck) failure moves to the next
-   best-measured sibling collapsed into the same row, until one connects or
-   the row is exhausted. replyBlock always fires exactly once, with whichever
-   attempt's reply decided the outcome. */
-- (void)connectTryingCandidates:(NSArray *)candidates offset:(NSUInteger)offset
-                           reply:(void (^)(NSString *reply))replyBlock {
-    int idx = [[candidates objectAtIndex:offset] intValue];
-    [_ctl connectIndex:idx reply:^(NSString *reply) {
-        if (offset + 1 < [candidates count] && SenkoConnectReplyIsCleanFailure(reply)) {
-            [self connectTryingCandidates:candidates offset:offset + 1 reply:replyBlock];
-            return;
-        }
-        replyBlock(reply);
-    }];
-}
-
 - (void)startNativeServerIndex:(int)idx {
     [_ctl nativeConfigurationIndex:idx reply:^(NSString *json, NSString *error) {
         if (!json) {
@@ -270,7 +234,7 @@ static void senkoClearStatus(void) {
                 return;
             }
             _activeBackend = SenkoBackendServer;
-            [_state release]; _state = [@"connected" copy];
+            [_state release]; _state = [@"connecting" copy];
             [self setLastErr:nil];
             [self applyState];
             [self setToggleBusy:NO];
@@ -368,9 +332,7 @@ static void senkoClearStatus(void) {
             }];
             return;
         }
-        [self connectTryingCandidates:[self connectCandidatesForServerIndex:_selectedSrvIdx]
-                                offset:0
-                                 reply:^(NSString *reply) {
+        [_ctl connectIndex:_selectedSrvIdx reply:^(NSString *reply) {
         NSString *errReason = nil;
         NSString *finalState = nil;
         if (reply) {
@@ -447,9 +409,7 @@ static void senkoClearStatus(void) {
         }];
         return;
     }
-    [self connectTryingCandidates:[self connectCandidatesForServerIndex:idx]
-                            offset:0
-                             reply:^(NSString *reply) {
+    [_ctl connectIndex:idx reply:^(NSString *reply) {
         NSString *errReason = nil;
         NSString *finalState = nil;
         if (reply) {
@@ -759,7 +719,7 @@ static const NSUInteger kSenkoAutoProbeLimit = 24;
             _autoPending--;
             _autoDone++;
             [_autoResults replaceObjectAtIndex:slot withObject:[NSNumber numberWithInt:ms]];
-            [_serverStatus setObject:[NSNumber numberWithInt:ms] forKey:key];
+            [self setPingResult:ms forServerIndex:[key intValue]];
             [self reloadServerRowForIndex:index];
             if (_autoDone >= [_autoQueue count])
                 [self finishAutoProbes];

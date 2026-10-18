@@ -95,13 +95,23 @@ static NSError *SenkoPacketTunnelError(NSString *message) {
         if (excluded) ipv4.excludedRoutes = [NSArray arrayWithObject:excluded];
     }
     network.IPv4Settings = ipv4;
+    /* apps that prefer IPv6 must enter the same tunnel as Safari's IPv4 fallback */
+    NEIPv6Settings *ipv6 = [[[NEIPv6Settings alloc]
+        initWithAddresses:[NSArray arrayWithObject:@"fd00:7365:6e6b::1"]
+        networkPrefixLengths:[NSArray arrayWithObject:[NSNumber numberWithInt:64]]]
+        autorelease];
+    ipv6.includedRoutes = [NSArray arrayWithObject:[NEIPv6Route defaultRoute]];
+    network.IPv6Settings = ipv6;
     if ([network respondsToSelector:@selector(setMTU:)])
         network.MTU = [NSNumber numberWithInt:1500];
     if ([NEDNSSettings instancesRespondToSelector:
          @selector(initWithServers:)])
-        network.DNSSettings = [[[NEDNSSettings alloc]
-                                initWithServers:[NSArray arrayWithObject:@"1.1.1.1"]]
-                               autorelease];
+    {
+        NEDNSSettings *dns = [[[NEDNSSettings alloc]
+            initWithServers:[NSArray arrayWithObject:@"1.1.1.1"]] autorelease];
+        dns.matchDomains = [NSArray arrayWithObject:@""];
+        network.DNSSettings = dns;
+    }
 
     [self setTunnelNetworkSettings:network completionHandler:^(NSError *error) {
         if (error) {
@@ -170,7 +180,7 @@ static NSError *SenkoPacketTunnelError(NSString *message) {
 
 - (void)stopTunnelWithReason:(NEProviderStopReason)reason
             completionHandler:(void (^)(void))completionHandler {
-    (void)reason;
+    NSLog(@"senko native VPN stopped, reason %ld", (long)reason);
     char detail[512];
     memset(detail, 0, sizeof detail);
     int result = SenkoNativeStop(detail, sizeof detail);

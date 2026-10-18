@@ -475,6 +475,25 @@ static void SenkoOrbitTween(CALayer *layer, NSString *path, id from, id to, BOOL
 static NSString * const kSenkoPlateFill = @"homePlateFill";
 static NSString * const kSenkoPlateSheen = @"homePlateSheen";
 
+@interface SenkoHomePlateBackdrop : UIView
+@end
+
+@implementation SenkoHomePlateBackdrop
+@end
+
+static UIView *SenkoPlateBackdrop(UIView *plate, BOOL create) {
+    for (UIView *view in plate.subviews)
+        if ([view isKindOfClass:[SenkoHomePlateBackdrop class]]) return view;
+    if (!create) return nil;
+    UIView *view = [[[SenkoHomePlateBackdrop alloc] initWithFrame:plate.bounds] autorelease];
+    view.userInteractionEnabled = NO;
+    view.opaque = NO;
+    view.clipsToBounds = YES;
+    view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [plate insertSubview:view atIndex:0];
+    return view;
+}
+
 static CAGradientLayer *SenkoPlateLayer(UIView *plate, NSString *name, CALayer *above) {
     for (CALayer *layer in plate.layer.sublayers)
         if ([layer.name isEqualToString:name] && [layer isKindOfClass:[CAGradientLayer class]])
@@ -496,6 +515,7 @@ static CAGradientLayer *SenkoPlateLayer(UIView *plate, NSString *name, CALayer *
    without a second palette. ios7 is the one theme with no light source, so it
    keeps a flat plate */
 void SenkoStyleHomePlate(UIView *plate, CGFloat radius, UIColor *base) {
+    UIView *backdrop = SenkoPlateBackdrop(plate, YES);
     BOOL light = SenkoThemeIsLight();
     BOOL flat = SenkoThemeIsFlat() && !SenkoThemeIsIos16();
     UIColor *top;
@@ -508,9 +528,9 @@ void SenkoStyleHomePlate(UIView *plate, CGFloat radius, UIColor *base) {
         plate.layer.cornerRadius = radius;
         plate.layer.masksToBounds = NO;
         plate.layer.borderWidth = 0.0f;
-        CAGradientLayer *fill = SenkoPlateLayer(plate, kSenkoPlateFill, nil);
+        CAGradientLayer *fill = SenkoPlateLayer(backdrop, kSenkoPlateFill, nil);
         fill.colors = [NSArray arrayWithObjects:(id)top.CGColor, (id)bottom.CGColor, nil];
-        CAGradientLayer *sheen = SenkoPlateLayer(plate, kSenkoPlateSheen, fill);
+        CAGradientLayer *sheen = SenkoPlateLayer(backdrop, kSenkoPlateSheen, fill);
         sheen.hidden = YES;
         SenkoMaterialElevate(plate.layer, 2.0f);
         SenkoLayoutHomePlate(plate);
@@ -536,9 +556,9 @@ void SenkoStyleHomePlate(UIView *plate, CGFloat radius, UIColor *base) {
     plate.layer.borderWidth = 0.5f;
     plate.layer.borderColor = (light ? [UIColor colorWithWhite:0.0f alpha:0.10f]
                                      : [UIColor colorWithWhite:1.0f alpha:0.10f]).CGColor;
-    CAGradientLayer *fill = SenkoPlateLayer(plate, kSenkoPlateFill, nil);
+    CAGradientLayer *fill = SenkoPlateLayer(backdrop, kSenkoPlateFill, nil);
     fill.colors = [NSArray arrayWithObjects:(id)top.CGColor, (id)bottom.CGColor, nil];
-    CAGradientLayer *sheen = SenkoPlateLayer(plate, kSenkoPlateSheen, fill);
+    CAGradientLayer *sheen = SenkoPlateLayer(backdrop, kSenkoPlateSheen, fill);
     sheen.hidden = flat;
     sheen.colors = [NSArray arrayWithObjects:
                     (id)[UIColor colorWithWhite:1.0f alpha:light ? 0.34f : 0.14f].CGColor,
@@ -550,35 +570,29 @@ void SenkoStyleHomePlate(UIView *plate, CGFloat radius, UIColor *base) {
     SenkoLayoutHomePlate(plate);
 }
 
-/* uibutton puts its image view back at the bottom of the stack when the image
-   changes, which buried the glyph under the fill after a theme switch. the
-   relief is pushed below everything else on every pass */
+/* UIKit owns the button's layers on ios 10, so relief stays in a clipped view */
 static void SenkoKeepReliefBelow(UIView *plate) {
-    CALayer *fill = nil;
-    CALayer *sheen = nil;
-    for (CALayer *layer in plate.layer.sublayers) {
-        if ([layer.name isEqualToString:kSenkoPlateFill]) fill = layer;
-        else if ([layer.name isEqualToString:kSenkoPlateSheen]) sheen = layer;
-    }
-    NSArray *order = plate.layer.sublayers;
-    if (fill && (![order count] || [order objectAtIndex:0] != fill))
-        [plate.layer insertSublayer:fill atIndex:0];
-    if (sheen && ([order count] < 2 || [plate.layer.sublayers objectAtIndex:1] != sheen))
-        [plate.layer insertSublayer:sheen atIndex:1];
+    UIView *backdrop = SenkoPlateBackdrop(plate, NO);
+    if (backdrop && [plate.subviews objectAtIndex:0] != backdrop)
+        [plate sendSubviewToBack:backdrop];
 }
 
 void SenkoLayoutHomePlate(UIView *plate) {
     CGRect b = plate.bounds;
-    if (b.size.width < 2.0f || b.size.height < 2.0f) return;
+    UIView *backdrop = SenkoPlateBackdrop(plate, NO);
+    if (!backdrop) return;
     CGFloat radius = plate.layer.cornerRadius;
     SenkoBeginSilentLayers();
+    backdrop.frame = b;
+    backdrop.layer.cornerRadius = radius;
+    CGRect content = backdrop.bounds;
     SenkoKeepReliefBelow(plate);
-    for (CALayer *layer in plate.layer.sublayers) {
+    for (CALayer *layer in backdrop.layer.sublayers) {
         if ([layer.name isEqualToString:kSenkoPlateFill]) {
-            layer.frame = b;
+            layer.frame = content;
             layer.cornerRadius = radius;
         } else if ([layer.name isEqualToString:kSenkoPlateSheen]) {
-            layer.frame = CGRectMake(1.0f, 1.0f, b.size.width - 2.0f, floorf(b.size.height * 0.5f));
+            layer.frame = CGRectMake(1.0f, 1.0f, MAX(0.0f, content.size.width - 2.0f), floorf(MAX(0.0f, content.size.height) * 0.5f));
             layer.cornerRadius = radius > 1.0f ? radius - 1.0f : 0.0f;
         }
     }
@@ -591,11 +605,6 @@ void SenkoLayoutHomePlate(UIView *plate) {
 @implementation SenkoReliefControl
 - (void)layoutSubviews {
     [super layoutSubviews];
-    if (CGSizeEqualToSize(_reliefSize, self.bounds.size)) {
-        SenkoKeepReliefBelow(self);
-        return;
-    }
-    _reliefSize = self.bounds.size;
     SenkoLayoutHomePlate(self);
 }
 @end
@@ -603,11 +612,6 @@ void SenkoLayoutHomePlate(UIView *plate) {
 @implementation SenkoReliefButton
 - (void)layoutSubviews {
     [super layoutSubviews];
-    if (CGSizeEqualToSize(_reliefSize, self.bounds.size)) {
-        SenkoKeepReliefBelow(self);
-        return;
-    }
-    _reliefSize = self.bounds.size;
     SenkoLayoutHomePlate(self);
 }
 
@@ -660,10 +664,10 @@ static void SenkoHomeLayoutCard(SenkoHomeView *v, BOOL isFlag);
         self.autoresizingMask = UIViewAutoresizingFlexibleWidth |
                                 UIViewAutoresizingFlexibleHeight;
 
-        gear = [SenkoReliefButton buttonWithType:UIButtonTypeCustom];
+        gear = [[[SenkoReliefButton alloc] initWithFrame:CGRectZero] autorelease];
         [self wirePress:gear];
         [self addSubview:gear];
-        stats = [SenkoReliefButton buttonWithType:UIButtonTypeCustom];
+        stats = [[[SenkoReliefButton alloc] initWithFrame:CGRectZero] autorelease];
         [self wirePress:stats];
         [self addSubview:stats];
 

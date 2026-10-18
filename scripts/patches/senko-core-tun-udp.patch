@@ -1,0 +1,437 @@
+--- a/proxy/tun/udp_fullcone.go
++++ b/proxy/tun/udp_fullcone.go
+@@ -3,6 +3,7 @@
+ import (
+ 	"context"
+ 	"io"
++	"os"
+ 	"sync"
+ 	"time"
+ 
+@@ -11,177 +12,275 @@
+ 	"github.com/xtls/xray-core/common/net"
+ )
+ 
++const udpFlowLimit = 256
++const udpQueueLimit = 16
++const udpQueueBytesLimit = 4 * 1024 * 1024
++const udpFlowBytesLimit = 128 * 1024
++
+ type packet struct {
+ 	data []byte
+ 	dest *net.Destination
+ }
+ 
+-// sub-handler specifically for udp connections under main handler
+ type udpConnectionHandler struct {
+ 	sync.RWMutex
+-
+-	udpConns map[net.Destination]*udpConn
+-
++	udpConns         map[net.Destination]*udpConn
++	idleTimeout      time.Duration
++	closed           bool
++	queuedBytes      int
+ 	handleConnection func(conn net.Conn, dest net.Destination)
+ 	writePacket      func(data []byte, src net.Destination, dst net.Destination) error
+ }
+ 
+ func newUdpConnectionHandler(handleConnection func(conn net.Conn, dest net.Destination), writePacket func(data []byte, src net.Destination, dst net.Destination) error) *udpConnectionHandler {
+-	handler := &udpConnectionHandler{
++	return &udpConnectionHandler{
+ 		udpConns:         make(map[net.Destination]*udpConn),
++		idleTimeout:      time.Minute,
+ 		handleConnection: handleConnection,
+ 		writePacket:      writePacket,
+ 	}
+-
+-	return handler
+-}
+-
+-// HandlePacket handles UDP packets coming from tun, to forward to the dispatcher
+-// this custom handler support FullCone NAT of returning packets, binding connection only by the source addr:port
+-func (u *udpConnectionHandler) HandlePacket(src net.Destination, dst net.Destination, data []byte) {
+-	u.RLock()
+-	conn, found := u.udpConns[src]
+-	if found {
+-		select {
+-		case conn.egress <- &packet{
+-			data: data,
+-			dest: &dst,
+-		}:
+-		default:
+-			errors.LogDebug(context.Background(), "drop udp with size ", len(data), " to ", dst.NetAddr(), " original ", conn.dst.NetAddr(), " > queue full")
+-		}
+-		u.RUnlock()
++}
++
++func (u *udpConnectionHandler) HandlePacket(src, dst net.Destination, data []byte) {
++	if len(data) > 65527 || (dst.Address.Family().IsIPv4() && len(data) > 65507) {
++		errors.LogDebug(context.Background(), "drop oversized tun UDP datagram")
+ 		return
+ 	}
+-	u.RUnlock()
+-
+ 	u.Lock()
+ 	defer u.Unlock()
+-
+-	conn, found = u.udpConns[src]
+-	if !found {
+-		egress := make(chan *packet, 1024)
+-		conn = &udpConn{handler: u, egress: egress, src: src, dst: dst}
++	if u.closed {
++		return
++	}
++	conn := u.udpConns[src]
++	if conn == nil {
++		if len(u.udpConns) >= udpFlowLimit {
++			errors.LogDebug(context.Background(), "drop tun UDP flow: flow limit reached")
++			return
++		}
++		conn = &udpConn{
++			handler: u, egress: make(chan *packet, udpQueueLimit),
++			src: src, dst: dst, done: make(chan struct{}),
++			deadlineChanged: make(chan struct{}), lastActivity: time.Now(),
++		}
+ 		u.udpConns[src] = conn
+-
+ 		go u.handleConnection(conn, dst)
+ 	}
+-
+-	// send packet data to the egress channel, if it has buffer, or discard
+-	select {
+-	case conn.egress <- &packet{
+-		data: data,
+-		dest: &dst,
+-	}:
+-	default:
+-		errors.LogDebug(context.Background(), "drop udp with size ", len(data), " to ", dst.NetAddr(), " original ", conn.dst.NetAddr(), " > queue full 2")
+-	}
+-}
+-
+-func (u *udpConnectionHandler) connectionFinished(src net.Destination) {
++	if len(conn.egress) == cap(conn.egress) ||
++		conn.queuedBytes+len(data) > udpFlowBytesLimit || u.queuedBytes+len(data) > udpQueueBytesLimit {
++		errors.LogDebug(context.Background(), "drop tun UDP datagram: queue full")
++		return
++	}
++	// gvisor releases the input packet after this callback
++	conn.queuedBytes += len(data)
++	u.queuedBytes += len(data)
++	conn.egress <- &packet{data: append([]byte(nil), data...), dest: &dst}
++	conn.activity()
++}
++
++func (u *udpConnectionHandler) connectionFinished(c *udpConn) {
+ 	u.Lock()
+-	conn, found := u.udpConns[src]
+-	if found {
+-		delete(u.udpConns, src)
+-		close(conn.egress)
++	// a repeated close must not remove a newer flow at the same source port
++	if u.udpConns[c.src] == c {
++		delete(u.udpConns, c.src)
++	}
++	for {
++		select {
++		case p := <-c.egress:
++			c.queuedBytes -= len(p.data)
++			u.queuedBytes -= len(p.data)
++		default:
++			u.Unlock()
++			return
++		}
++	}
++}
++
++func (u *udpConnectionHandler) Close() {
++	u.Lock()
++	u.closed = true
++	pending := make([]*udpConn, 0, len(u.udpConns))
++	for _, c := range u.udpConns {
++		pending = append(pending, c)
+ 	}
+ 	u.Unlock()
+-}
+-
+-// udp connection abstraction
++	for _, c := range pending {
++		c.Close()
++	}
++}
++
+ type udpConn struct {
+-	handler *udpConnectionHandler
+-
+-	egress chan *packet
+-	src    net.Destination
+-	dst    net.Destination
++	handler         *udpConnectionHandler
++	queuedBytes     int
++	egress          chan *packet
++	src             net.Destination
++	dst             net.Destination
++	done            chan struct{}
++	closeOnce       sync.Once
++	deadlineMu      sync.Mutex
++	deadlineChanged chan struct{}
++	readDeadline    time.Time
++	writeDeadline   time.Time
++	lastActivity    time.Time
++}
++
++func (c *udpConn) wakeReaderLocked() {
++	close(c.deadlineChanged)
++	c.deadlineChanged = make(chan struct{})
++}
++
++func (c *udpConn) activity() {
++	c.deadlineMu.Lock()
++	c.lastActivity = time.Now()
++	c.wakeReaderLocked()
++	c.deadlineMu.Unlock()
++}
++
++func (c *udpConn) nextPacket() (*packet, error) {
++	for {
++		select {
++		case <-c.done:
++			return nil, io.EOF
++		default:
++		}
++		c.deadlineMu.Lock()
++		deadline := c.readDeadline
++		idle := c.lastActivity.Add(c.handler.idleTimeout)
++		idleFirst := deadline.IsZero() || idle.Before(deadline)
++		if idleFirst {
++			deadline = idle
++		}
++		changed := c.deadlineChanged
++		c.deadlineMu.Unlock()
++		left := time.Until(deadline)
++		if left <= 0 {
++			if idleFirst {
++				c.Close()
++			}
++			return nil, os.ErrDeadlineExceeded
++		}
++		timer := time.NewTimer(left)
++		select {
++		case <-c.done:
++			timer.Stop()
++			return nil, io.EOF
++		case e := <-c.egress:
++			timer.Stop()
++			c.handler.Lock()
++			c.queuedBytes -= len(e.data)
++			c.handler.queuedBytes -= len(e.data)
++			c.handler.Unlock()
++			c.activity()
++			return e, nil
++		case <-changed:
++			timer.Stop()
++		case <-timer.C:
++			// a new deadline or packet may have extended the idle deadline
++		}
++	}
+ }
+ 
+ func (c *udpConn) ReadMultiBuffer() (buf.MultiBuffer, error) {
+-	for {
+-		e, ok := <-c.egress
+-		if !ok {
+-			return nil, io.EOF
+-		}
+-
+-		b := buf.New()
+-		if _, err := b.Write(e.data); err != nil {
+-			errors.LogErrorInner(context.Background(), err, "drop packet to ", e.dest, " with size ", len(e.data))
+-			b.Release()
+-			continue
+-		}
+-		b.UDP = e.dest
+-
+-		return buf.MultiBuffer{b}, nil
+-	}
+-}
+-
+-// Read packets from the connection
++	e, err := c.nextPacket()
++	if err != nil {
++		return nil, err
++	}
++	b := buf.NewWithSize(int32(len(e.data)))
++	if _, err := b.Write(e.data); err != nil {
++		b.Release()
++		return nil, err
++	}
++	b.UDP = e.dest
++	return buf.MultiBuffer{b}, nil
++}
++
+ func (c *udpConn) Read(p []byte) (int, error) {
+-	e, ok := <-c.egress
+-	if !ok {
+-		return 0, io.EOF
++	e, err := c.nextPacket()
++	if err != nil {
++		return 0, err
+ 	}
+ 	n := copy(p, e.data)
+ 	if n != len(e.data) {
+-		return 0, io.ErrShortBuffer
++		return n, io.ErrShortBuffer
+ 	}
+ 	return n, nil
+ }
+ 
++func (c *udpConn) write(payload []byte, dst net.Destination) error {
++	if len(payload) > 65527 || (c.src.Address.Family().IsIPv4() && len(payload) > 65507) {
++		return errors.New("tun UDP reply exceeds the IP datagram limit")
++	}
++	select {
++	case <-c.done:
++		return io.ErrClosedPipe
++	default:
++	}
++	c.deadlineMu.Lock()
++	deadline := c.writeDeadline
++	c.deadlineMu.Unlock()
++	if !deadline.IsZero() && !time.Now().Before(deadline) {
++		return os.ErrDeadlineExceeded
++	}
++	if err := c.handler.writePacket(payload, dst, c.src); err != nil {
++		return err
++	}
++	c.activity()
++	return nil
++}
++
+ func (c *udpConn) WriteMultiBuffer(mb buf.MultiBuffer) error {
+-	for i, b := range mb {
++	defer buf.ReleaseMulti(mb)
++	for _, b := range mb {
+ 		dst := c.dst
+ 		if b.UDP != nil {
+ 			if b.UDP.Address.Family().IsDomain() {
+-				errors.LogError(context.Background(), "impossible domain packet ", b.UDP, " reply via original target ", dst)
+-			} else {
+-				dst = *b.UDP
++				return errors.New("tun UDP reply contains a domain instead of an address")
+ 			}
+-		}
+-		err := c.handler.writePacket(b.Bytes(), dst, c.src)
+-		if err != nil {
+-			buf.ReleaseMulti(mb[i:])
++			dst = *b.UDP
++		}
++		if err := c.write(b.Bytes(), dst); err != nil {
+ 			return err
+ 		}
+-		b.Release()
+-	}
+-	return nil
+-}
+-
+-// Write returning packets back
++	}
++	return nil
++}
++
+ func (c *udpConn) Write(p []byte) (int, error) {
+-	// sending packets back mean sending payload with source/destination reversed
+-	err := c.handler.writePacket(p, c.dst, c.src)
+-	if err != nil {
+-		return 0, nil
+-	}
+-
++	if err := c.write(p, c.dst); err != nil {
++		return 0, err
++	}
+ 	return len(p), nil
+ }
+ 
+ func (c *udpConn) Close() error {
+-	c.handler.connectionFinished(c.src)
+-
+-	return nil
+-}
+-
+-func (c *udpConn) LocalAddr() net.Addr {
+-	return c.dst.RawNetAddr()
+-}
+-
+-func (c *udpConn) RemoteAddr() net.Addr {
+-	return c.src.RawNetAddr()
+-}
++	c.closeOnce.Do(func() {
++		close(c.done)
++		c.handler.connectionFinished(c)
++	})
++	return nil
++}
++
++func (c *udpConn) LocalAddr() net.Addr  { return c.dst.RawNetAddr() }
++func (c *udpConn) RemoteAddr() net.Addr { return c.src.RawNetAddr() }
+ 
+ func (c *udpConn) SetDeadline(t time.Time) error {
++	c.deadlineMu.Lock()
++	c.readDeadline, c.writeDeadline = t, t
++	c.wakeReaderLocked()
++	c.deadlineMu.Unlock()
+ 	return nil
+ }
+ 
+ func (c *udpConn) SetReadDeadline(t time.Time) error {
++	c.deadlineMu.Lock()
++	c.readDeadline = t
++	c.wakeReaderLocked()
++	c.deadlineMu.Unlock()
+ 	return nil
+ }
+ 
+ func (c *udpConn) SetWriteDeadline(t time.Time) error {
+-	return nil
+-}
++	c.deadlineMu.Lock()
++	c.writeDeadline = t
++	c.deadlineMu.Unlock()
++	return nil
++}
+--- a/proxy/tun/stack_gvisor.go
++++ b/proxy/tun/stack_gvisor.go
+@@ -40,6 +40,7 @@
+ 	handler     *Handler
+ 	stack       *stack.Stack
+ 	endpoint    stack.LinkEndpoint
++	udpHandler  *udpConnectionHandler
+ }
+ 
+ // NewStack builds new ip stack (using gVisor)
+@@ -100,11 +101,12 @@
+ 
+ 	// Use custom UDP packet handler, instead of strict gVisor forwarder, for FullCone NAT support
+ 	udpForwarder := newUdpConnectionHandler(t.handler.HandleConnection, t.writeRawUDPPacket)
++	if t.idleTimeout > 0 {
++		udpForwarder.idleTimeout = t.idleTimeout
++	}
++	t.udpHandler = udpForwarder
+ 	ipStack.SetTransportProtocolHandler(udp.ProtocolNumber, func(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
+-		data := pkt.Clone().Data().AsRange().ToSlice()
+-		// if len(data) == 0 {
+-		// 	return false
+-		// }
++		data := pkt.Data().AsRange().ToSlice()
+ 		// source/destination of the packet we process as incoming, on gVisor side are Remote/Local
+ 		// in other terms, src is the side behind tun, dst is the side behind gVisor
+ 		// this function handle packets passing from the tun to the gVisor, therefore the src/dst assignement
+@@ -192,6 +194,9 @@
+ 
+ // Close is called by Handler to shut down the stack
+ func (t *stackGVisor) Close() error {
++	if t.udpHandler != nil {
++		t.udpHandler.Close()
++	}
+ 	if t.stack == nil {
+ 		return nil
+ 	}

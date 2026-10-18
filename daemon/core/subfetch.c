@@ -99,7 +99,7 @@ static uint64_t userinfo_value(const char *value, const char *wanted) {
    shipped the expiry in milliseconds, and one shipped days remaining. read
    literally, both land in 1970 and the list calls a live subscription expired */
 #define SUBFETCH_EXPIRE_MIN 946684800ULL   /* 2000-01-01 */
-#define SUBFETCH_EXPIRE_MAX 4102444800ULL  /* 2100-01-01 */
+#define SUBFETCH_EXPIRE_MAX 253402300799ULL /* 9999-12-31 */
 
 static uint64_t userinfo_expire(const char *value) {
     uint64_t v = userinfo_value(value, "expire");
@@ -174,10 +174,13 @@ static void parser_info(const http_parser_t *hp, subfetch_info_t *info) {
 }
 
 /* wait with a deadline */
-static int wait_io(int fd, int want_write, int64_t deadline) {
+static int wait_io(int fd, int want_write, int64_t deadline, subfetch_info_t *info) {
     for (;;) {
         int64_t left = deadline - senko_now_ms();
-        if (left <= 0) return 0;
+        if (left <= 0) {
+            if (info) info->timed_out = 1;
+            return 0;
+        }
         struct pollfd pfd;
         pfd.fd = fd;
         pfd.events = want_write ? POLLOUT : POLLIN;
@@ -241,6 +244,9 @@ static subfetch_status_t fetch_once(const subfetch_cfg_t *cfg, const url_t *u,
         return SUBFETCH_ERR_TRANSPORT;
     }
 
+    http_parser_t hp;
+    http_parser_init(&hp, body, body_cap);
+    if (cfg->sink) http_parser_set_sink(&hp, cfg->sink, cfg->sink_ctx);
     subfetch_status_t result = SUBFETCH_ERR_HTTP;
     do {
         char req[2048]; size_t reqlen = 0;
@@ -254,9 +260,9 @@ static subfetch_status_t fetch_once(const subfetch_cfg_t *cfg, const url_t *u,
             int w = vt->write(th, (const uint8_t *)req + off, reqlen - off);
             if (w > 0) { off += (size_t)w; continue; }
             if (w == TRANSPORT_WANT_WRITE) {
-                if (!wait_io(fd, 1, deadline)) { io_ok = 0; break; }
+                if (!wait_io(fd, 1, deadline, info)) { io_ok = 0; break; }
             } else if (w == TRANSPORT_WANT_READ) {
-                if (!wait_io(fd, 0, deadline)) { io_ok = 0; break; }
+                if (!wait_io(fd, 0, deadline, info)) { io_ok = 0; break; }
             } else { io_ok = 0; break; }
         }
         if (!io_ok) {
@@ -265,9 +271,6 @@ static subfetch_status_t fetch_once(const subfetch_cfg_t *cfg, const url_t *u,
             break;
         }
 
-        http_parser_t hp;
-        http_parser_init(&hp, body, body_cap);
-        if (cfg->sink) http_parser_set_sink(&hp, cfg->sink, cfg->sink_ctx);
         uint8_t rb[8192];
         for (;;) {
             int n = vt->read(th, rb, sizeof rb);
@@ -298,16 +301,15 @@ static subfetch_status_t fetch_once(const subfetch_cfg_t *cfg, const url_t *u,
                     break;
                 }
                 if (hs == HTTP_ERR_TOOBIG) { result = SUBFETCH_ERR_TOOBIG; break; }
-                if (hs == HTTP_ERR_STATUS && info) info->http_status = hp.status_code;
                 if (hs != HTTP_NEED_MORE) { result = SUBFETCH_ERR_HTTP; break; }
             } else if (n == TRANSPORT_WANT_READ) {
-                if (!wait_io(fd, 0, deadline)) {
+                if (!wait_io(fd, 0, deadline, info)) {
                     fprintf(stderr, "senkod: subscription response wait failed for %s\n", u->host);
                     result = SUBFETCH_ERR_TRANSPORT;
                     break;
                 }
             } else if (n == TRANSPORT_WANT_WRITE) {
-                if (!wait_io(fd, 1, deadline)) {
+                if (!wait_io(fd, 1, deadline, info)) {
                     fprintf(stderr, "senkod: subscription response write wait failed for %s\n", u->host);
                     result = SUBFETCH_ERR_TRANSPORT;
                     break;
@@ -338,6 +340,11 @@ static subfetch_status_t fetch_once(const subfetch_cfg_t *cfg, const url_t *u,
         }
     } while (0);
 
+    if (info) {
+        info->received = hp.body_len;
+        if (result != SUBFETCH_OK && result != SUBFETCH_ERR_REDIRECT)
+            info->http_status = hp.status_code;
+    }
     vt->close(th);
     close(fd);
     return result;

@@ -33,15 +33,20 @@ static int same_server(const vl_server_t *a, const vl_server_t *b) {
         && strcmp(a->ws_host, b->ws_host) == 0
         && strcmp(a->mode, b->mode) == 0
         && strcmp(a->encryption, b->encryption) == 0
+        && a->insecure == b->insecure
+        && strcmp(a->pin_sha256, b->pin_sha256) == 0
+        && strcmp(a->obfs, b->obfs) == 0
+        && strcmp(a->obfs_password, b->obfs_password) == 0
+        && strcmp(a->port_hop, b->port_hop) == 0
         && strcmp(a->unsupported, b->unsupported) == 0;
 }
 
 /* the row a selection lived in: one node can sit in several named rows, so
    the name decides first, and a renamed row still finds its node */
-static int find_selection(const store_t *st, const vl_server_t *prev) {
+static int find_selection(const store_t *st, const vl_server_t *prev, int group) {
     int fallback = -1;
     for (size_t i = 0; i < st->n; ++i) {
-        if (!same_server(&st->servers[i], prev)) continue;
+        if (st->group[i] != group || !same_server(&st->servers[i], prev)) continue;
         if (strcmp(st->servers[i].remark, prev->remark) == 0) return (int)i;
         if (fallback < 0) fallback = (int)i;
     }
@@ -345,6 +350,7 @@ store_status_t store_refresh_sub_ex(store_t *st, size_t sub_index,
 
     vl_server_t prev_sel;
     int had_sel = (st->selected >= 0 && (size_t)st->selected < st->n);
+    int selected_group = had_sel ? st->group[st->selected] : STORE_GROUP_MANUAL;
     if (had_sel) prev_sel = st->servers[st->selected];
 
     size_t old_group_count = 0;
@@ -376,7 +382,7 @@ store_status_t store_refresh_sub_ex(store_t *st, size_t sub_index,
     free(fresh);
     if (out_added) *out_added = added;
 
-    if (had_sel) st->selected = find_selection(st, &prev_sel);
+    if (had_sel) st->selected = find_selection(st, &prev_sel, selected_group);
     return STORE_OK;
 }
 
@@ -409,6 +415,7 @@ store_status_t store_move_manual(store_t *st, size_t index, size_t to_pos) {
     int moved_group = st->group[index];
     vl_server_t selected;
     int had_selected = st->selected >= 0 && (size_t)st->selected < st->n;
+    int selected_group = had_selected ? st->group[st->selected] : STORE_GROUP_MANUAL;
     if (had_selected) selected = st->servers[st->selected];
     /* the full server table is close to half a megabyte, which overflows the
        small default stack on ios 5. store calls are serialized by the daemon
@@ -435,7 +442,7 @@ store_status_t store_move_manual(store_t *st, size_t index, size_t to_pos) {
     memcpy(st->servers, next, out * sizeof next[0]);
     memcpy(st->group, next_group, out * sizeof next_group[0]);
     st->n = out;
-    st->selected = had_selected ? find_selection(st, &selected) : -1;
+    st->selected = had_selected ? find_selection(st, &selected, selected_group) : -1;
     return STORE_OK;
 }
 
@@ -446,6 +453,7 @@ store_status_t store_remove_sub(store_t *st, size_t sub_index) {
 
     vl_server_t prev_sel;
     int had_sel = (st->selected >= 0 && (size_t)st->selected < st->n);
+    int selected_group = had_sel ? st->group[st->selected] : STORE_GROUP_MANUAL;
     if (had_sel) prev_sel = st->servers[st->selected];
 
     drop_group(st, (int)sub_index);
@@ -459,7 +467,7 @@ store_status_t store_remove_sub(store_t *st, size_t sub_index) {
         break;
     }
 
-    st->selected = had_sel ? find_selection(st, &prev_sel) : -1;
+    st->selected = had_sel ? find_selection(st, &prev_sel, selected_group) : -1;
     return STORE_OK;
 }
 

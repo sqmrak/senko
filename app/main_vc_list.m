@@ -328,15 +328,29 @@ static UIView *SenkoSectionDragProxy(UIView *view) {
 
 BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
     if (!a || !b) return NO;
+    if ([a->identity length] && [b->identity length])
+        return a->group == b->group && [a->identity isEqualToString:b->identity];
     return a->group == b->group &&
            a->port == b->port &&
            [a->proto isEqualToString:b->proto] &&
            [a->net isEqualToString:b->net] &&
            [a->security isEqualToString:b->security] &&
-           [a->host isEqualToString:b->host];
+           [a->host isEqualToString:b->host] &&
+           [a->remark isEqualToString:b->remark];
 }
 
 @implementation MainVC (List)
+
+- (void)setPingResult:(int)ms forServerIndex:(int)index {
+    NSNumber *value = [NSNumber numberWithInt:ms >= 0 ? ms : -1];
+    [_serverStatus setObject:value forKey:[NSNumber numberWithInt:index]];
+    SenkoServer *server = [self serverByIndex:index];
+    if (server && [server->identity length]) {
+        [_pingCache setObject:value forKey:server->identity];
+        [[NSUserDefaults standardUserDefaults] setObject:
+            [NSDictionary dictionaryWithDictionary:_pingCache] forKey:@"senko.server.measurements"];
+    }
+}
 
 /* panel feeds put the same banner in front of every node name and a row label
    only has room for the first few words, so a whole section can read as one
@@ -468,22 +482,6 @@ static NSString *SenkoCollapseNameKey(NSString *name) {
     return out;
 }
 
-static BOOL SenkoSameMeasuredCatalog(NSArray *before, NSArray *after) {
-    if ([before count] != [after count]) return NO;
-    for (NSUInteger i = 0; i < [before count]; ++i) {
-        SenkoServer *a = [before objectAtIndex:i];
-        SenkoServer *b = [after objectAtIndex:i];
-        if (a->index != b->index || a->group != b->group || a->port != b->port ||
-            ![a->host isEqualToString:b->host] ||
-            ![a->proto isEqualToString:b->proto] ||
-            ![a->net isEqualToString:b->net] ||
-            ![a->security isEqualToString:b->security] ||
-            ![a->remark isEqualToString:b->remark])
-            return NO;
-    }
-    return YES;
-}
-
 - (void)applyCatalog:(NSArray *)servers subs:(NSArray *)subs order:(NSArray *)order {
     _catalogLoaded = YES;
     [self hideBusyOverlay];
@@ -497,7 +495,6 @@ static BOOL SenkoSameMeasuredCatalog(NSArray *before, NSArray *after) {
             }
         }
     }
-    BOOL sameMeasuredCatalog = SenkoSameMeasuredCatalog(_servers, servers);
     [_servers release];
     _servers = [servers mutableCopy];
     [_subs release];
@@ -513,15 +510,16 @@ static BOOL SenkoSameMeasuredCatalog(NSArray *before, NSArray *after) {
     }
     _checkGeneration++;
     [_pingingSubs removeAllObjects];
-    if (!sameMeasuredCatalog) {
-        [_serverStatus removeAllObjects];
-    } else {
-        /* an interrupted check has no result to carry into the new catalog */
-        for (NSNumber *key in [_serverStatus allKeys]) {
-            if ([[_serverStatus objectForKey:key] intValue] == -3)
-                [_serverStatus removeObjectForKey:key];
-        }
+    [_serverStatus removeAllObjects];
+    NSMutableDictionary *current = [NSMutableDictionary dictionary];
+    for (SenkoServer *server in _servers) {
+        NSNumber *ms = server->identity ? [_pingCache objectForKey:server->identity] : nil;
+        if (!ms) continue;
+        [current setObject:ms forKey:server->identity];
+        [_serverStatus setObject:ms forKey:[NSNumber numberWithInt:server->index]];
     }
+    [_pingCache setDictionary:current];
+    [[NSUserDefaults standardUserDefaults] setObject:current forKey:@"senko.server.measurements"];
     [self rebuildSections];
     [self reconcileSelectionAfterListKeeping:oldSelected];
     [oldSelected release];
@@ -1314,19 +1312,45 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
 - (void)reconcileSelectionAfterListKeeping:(SenkoServer *)anchor {
     if (_selectedBackend == SenkoBackendAmneziaWG) return;
     if (anchor) {
+        SenkoServer *renamed = nil;
         for (SenkoServer *sv in _servers) {
-            if (SenkoServerIdentityEqual(sv, anchor)) {
+            if (!SenkoServerIdentityEqual(sv, anchor)) continue;
+            if ([sv->remark isEqualToString:anchor->remark]) {
                 _selectedSrvIdx = sv->index;
                 return;
             }
+            if (!renamed) renamed = sv;
+        }
+        if (renamed) {
+            _selectedSrvIdx = renamed->index;
+            return;
         }
     }
-    if (_selectedSrvIdx < 0 || [self isServerSelectionLocked]) {
-        [self syncSelectionFromDaemon];
-        return;
+    NSString *saved = [[NSUserDefaults standardUserDefaults] stringForKey:@"senko.server.selected"];
+    if (!anchor && [saved length]) {
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        int group = (int)[defaults integerForKey:@"senko.server.selected.group"];
+        NSString *remark = [defaults stringForKey:@"senko.server.selected.remark"];
+        SenkoServer *renamed = nil;
+        for (SenkoServer *sv in _servers) {
+            if (sv->group != group || ![sv->identity isEqualToString:saved]) continue;
+            if ([sv->remark isEqualToString:remark]) {
+                _selectedSrvIdx = sv->index;
+                return;
+            }
+            if (!renamed) renamed = sv;
+        }
+        if (renamed) {
+            _selectedSrvIdx = renamed->index;
+            return;
+        }
     }
-    for (SenkoServer *sv in _servers) {
-        if (sv->index == _selectedSrvIdx) return;
+    if (anchor || [saved length]) {
+        _selectedSrvIdx = -1;
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"senko.server.selected"];
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"senko.server.selected.group"];
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"senko.server.selected.remark"];
+        return;
     }
     [self syncSelectionFromDaemon];
 }
@@ -1950,6 +1974,14 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
 - (void)selectServerIndex:(int)index {
     int oldIdx = _selectedSrvIdx;
     _selectedBackend = SenkoBackendServer;
+    SenkoServer *server = [self serverByIndex:index];
+    if (server && [server->identity length])
+        [[NSUserDefaults standardUserDefaults] setObject:server->identity forKey:@"senko.server.selected"];
+    if (server) {
+        [[NSUserDefaults standardUserDefaults] setInteger:server->group forKey:@"senko.server.selected.group"];
+        [[NSUserDefaults standardUserDefaults] setObject:server->remark ? server->remark : @""
+            forKey:@"senko.server.selected.remark"];
+    }
     [[NSUserDefaults standardUserDefaults] setInteger:_selectedBackend forKey:SENKO_SELECTED_BACKEND_KEY];
     [[NSUserDefaults standardUserDefaults] synchronize];
     _selectedSrvIdx = index;
@@ -1967,24 +1999,6 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
     for (SenkoServer *s in _servers)
         if (s->index == index) return s;
     return nil;
-}
-
-/* the order a collapsed row's members get tried in when the representative
-   itself cannot open a tunnel: best measured ping first, unmeasured after,
-   ties keep catalog order. just the index itself when it stands for no one. */
-- (NSArray *)connectCandidatesForServerIndex:(int)index {
-    SenkoServer *sv = [self serverByIndex:index];
-    NSArray *idxs = (sv && [sv->dupIndexes count]) ? sv->dupIndexes
-        : [NSArray arrayWithObject:[NSNumber numberWithInt:index]];
-    return [idxs sortedArrayUsingComparator:^NSComparisonResult(NSNumber *a, NSNumber *b) {
-        NSNumber *pa = [_serverStatus objectForKey:a];
-        NSNumber *pb = [_serverStatus objectForKey:b];
-        int ra = SenkoSortRank(pa), rb = SenkoSortRank(pb);
-        if (ra != rb) return ra < rb ? NSOrderedAscending : NSOrderedDescending;
-        if (ra == 0 && [pa intValue] != [pb intValue])
-            return [pa intValue] < [pb intValue] ? NSOrderedAscending : NSOrderedDescending;
-        return NSOrderedSame;
-    }];
 }
 
 - (void)openSheetForServer:(SenkoServer *)server {
@@ -2059,7 +2073,7 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
         [_ctl checkIndex:index mode:mode reply:^(int ms, NSString *error) {
             if (generation != _checkGeneration) return;
             if (ms < 0 && [error length]) [self setLastErr:error];
-            [_serverStatus setObject:[NSNumber numberWithInt:ms] forKey:key];
+            [self setPingResult:ms forServerIndex:[key intValue]];
             if (_sheet == sheet)
                 [_sheet setPingResult:[NSNumber numberWithInt:ms]];
             [self reloadServerRowForIndex:index];
@@ -2433,7 +2447,7 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
     SetStatusDefault(_statusLabel, SenkoLocalizedText(@"Checking server"));
     [_ctl checkIndex:serverIndex mode:mode reply:^(int ms, NSString *error) {
         if (generation != _checkGeneration) return;
-        [_serverStatus setObject:[NSNumber numberWithInt:ms] forKey:key];
+        [self setPingResult:ms forServerIndex:[key intValue]];
         [self reloadServerRowForIndex:serverIndex];
         (void)error;
         SetStatusDefault(_statusLabel, ms >= 0
@@ -2587,8 +2601,7 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
             if (gen != _checkGeneration) return;
             _pingPending--;
             _pingCompleted++;
-            [_serverStatus setObject:[NSNumber numberWithInt:ms]
-                              forKey:[NSNumber numberWithInt:serverIndex]];
+            [self setPingResult:ms forServerIndex:serverIndex];
             [self reloadServerRowForIndex:serverIndex];
             if (_pingCompleted >= [_pingQueue count])
                 [self finishBoundedPing];

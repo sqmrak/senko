@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <poll.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -46,6 +47,7 @@ static int stub_dial(void *ctx, const char *host, uint16_t port, int budget_ms) 
    canned response */
 static const char *g_response;
 static int g_peer = -1;
+static int g_keep_open;
 
 static int canned_dial(void *ctx, const char *host, uint16_t port, int budget_ms) {
     (void)ctx; (void)host; (void)port; (void)budget_ms;
@@ -56,7 +58,12 @@ static int canned_dial(void *ctx, const char *host, uint16_t port, int budget_ms
         close(sv[1]);
         return -1;
     }
-    shutdown(sv[1], SHUT_WR);
+    if (!g_keep_open) shutdown(sv[1], SHUT_WR);
+    if (fcntl(sv[0], F_SETFL, O_NONBLOCK) != 0) {
+        close(sv[0]);
+        close(sv[1]);
+        return -1;
+    }
     g_peer = sv[1];
     return sv[0];
 }
@@ -116,6 +123,23 @@ int main(void) {
     close(g_peer);
     ok("a 200 is fetched", r == SUBFETCH_OK && blen == 4 && memcmp(body, "abcd", 4) == 0);
     ok("a success carries no error status", info.http_status == 0);
+
+    g_keep_open = 1;
+    g_response = "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabcd";
+    r = subfetch_get_info(&cfg, "http://sub.example.com/feed", body, sizeof body,
+                          &blen, 50, &info);
+    close(g_peer);
+    ok("a stalled body reports its HTTP status and progress",
+       r == SUBFETCH_ERR_TRANSPORT && info.timed_out &&
+       info.http_status == 200 && info.received == 4 && blen == 0);
+    g_response = "";
+    r = subfetch_get_info(&cfg, "http://sub.example.com/feed", body, sizeof body,
+                          &blen, 50, &info);
+    close(g_peer);
+    ok("a silent server is distinguished from a stalled body",
+       r == SUBFETCH_ERR_TRANSPORT && info.timed_out &&
+       info.http_status == 0 && info.received == 0 && blen == 0);
+    g_keep_open = 0;
 
     g_response = "garbage\r\n\r\n";
     r = subfetch_get_info(&cfg, "http://sub.example.com/feed", body, sizeof body,

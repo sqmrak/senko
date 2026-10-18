@@ -11,6 +11,32 @@ static void ok(const char *what, int cond) {
 }
 
 int main(void) {
+    {
+        static store_t groups;
+        const char *node = "vless://11111111-1111-4111-8111-111111111111@same.example:443?security=none#same";
+        size_t first = 0, second = 0, added = 0;
+        store_init(&groups);
+        ok("first subscription", store_add_sub(&groups, "first", "https://first.example/feed", &first) == STORE_OK);
+        ok("second subscription", store_add_sub(&groups, "second", "https://second.example/feed", &second) == STORE_OK);
+        ok("first copy", store_refresh_sub(&groups, first, node, strlen(node), &added) == STORE_OK);
+        ok("second copy", store_refresh_sub(&groups, second, node, strlen(node), &added) == STORE_OK);
+        ok("select second copy", store_select(&groups, 1) == STORE_OK);
+        ok("refresh selected subscription", store_refresh_sub(&groups, second, node, strlen(node), &added) == STORE_OK);
+        ok("selection stays in its subscription", groups.selected == 1 && groups.group[groups.selected] == (int)second);
+        ok("remove selected subscription", store_remove_sub(&groups, second) == STORE_OK);
+        ok("another subscription does not inherit selection", groups.selected == -1);
+    }
+    {
+        static store_t hy2;
+        vl_server_t node;
+        store_init(&hy2);
+        ok("parse hysteria2 identity fixture", cfg_parse_link(
+            "hysteria2://password@same.example:443?obfs=salamander&obfs-password=first", &node) == CFG_OK);
+        ok("first hysteria2 profile", store_add_manual_server(&hy2, &node, NULL) == STORE_OK);
+        snprintf(node.obfs_password, sizeof node.obfs_password, "second");
+        ok("a different obfuscation password keeps its own server",
+           store_add_manual_server(&hy2, &node, NULL) == STORE_OK && hy2.n == 2);
+    }
     store_t st;
     store_init(&st);
 
@@ -316,23 +342,6 @@ int main(void) {
            ps.servers[ps.n - 1].port == 443);
     }
 
-    {
-/* a json array cut at the fetch cap keeps the profiles that arrived whole */
-        char cut[] = "[{\"remarks\":\"a]\\\"}\",\"o\":[1]},{\"remarks\":\"b\"},{\"remarks\":\"c";
-        size_t cut_len = strlen(cut);
-        ok("cut json array keeps whole items",
-           cfg_subscription_prefix(cut, &cut_len) == 0 &&
-           cut_len == strlen("[{\"remarks\":\"a]\\\"}\",\"o\":[1]},{\"remarks\":\"b\"}]") &&
-           memcmp(cut, "[{\"remarks\":\"a]\\\"}\",\"o\":[1]},{\"remarks\":\"b\"}]", cut_len) == 0);
-        char first_cut[] = "[{\"remarks\":\"a\"";
-        size_t first_len = strlen(first_cut);
-        ok("cut inside the first item keeps nothing",
-           cfg_subscription_prefix(first_cut, &first_len) == -1);
-        char object_cut[] = "{\"outbounds\":[{\"a\":1},{\"b\"";
-        size_t object_len = strlen(object_cut);
-        ok("a cut json object cannot be salvaged",
-           cfg_subscription_prefix(object_cut, &object_len) == -1);
-    }
 
     {
         /* a subscription's happ routing profile: stored, saved, rebuilt at connect */

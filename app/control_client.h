@@ -15,6 +15,7 @@ NSString *SenkoControlStateFromReply(NSString *reply, long *uptime);
     int      port;
     NSString *remark;
     NSString *link;
+    NSString *identity;
 /* other catalog indexes that show under this server's row because they
    reduce to the same display name (same country, different transport). nil
    when this server is not standing in for any siblings. */

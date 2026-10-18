@@ -22,7 +22,7 @@ static const CGFloat kSenkoAutoHeaderHeight = 78.0f;
 }
 
 - (UIButton *)plateButton:(SEL)action {
-    UIButton *b = [SenkoReliefButton buttonWithType:UIButtonTypeCustom];
+    UIButton *b = [[[SenkoReliefButton alloc] initWithFrame:CGRectZero] autorelease];
     [b addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     [self addSubview:b];
     return b;
@@ -244,7 +244,7 @@ static const CGFloat kSenkoAutoHeaderHeight = 78.0f;
         [_chips removeAllObjects];
         NSInteger i = 0;
         for (NSString *title in _chipTitles) {
-            UIButton *chip = [SenkoReliefButton buttonWithType:UIButtonTypeCustom];
+            UIButton *chip = [[[SenkoReliefButton alloc] initWithFrame:CGRectZero] autorelease];
             chip.tag = i++;
             chip.titleLabel.font = SenkoFontBody(14.0f, YES);
             chip.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;

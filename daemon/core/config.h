@@ -196,12 +196,6 @@ cfg_status_t cfg_parse_subscription_rows(const char *blob, size_t blob_len,
                                          vl_server_t *out, size_t max_servers,
                                          size_t *out_count, cfg_import_stats_t *stats);
 
-/* a body the fetch cut at its size cap, reduced in place to the entries that
-   arrived whole: complete lines of a link list (base64 is decoded first) or
-   complete items of a clash profile or of a top level json array. -1 when
-   nothing whole is left or the format cannot be read from a prefix (a json
-   object, a happ link) */
-int cfg_subscription_prefix(char *blob, size_t *len);
 
 /* how share links, xray and sing-box json and clash profiles all read a node,
    so one format cannot accept what another refuses. the two mappers return -1

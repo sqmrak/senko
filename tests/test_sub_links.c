@@ -223,60 +223,6 @@ static void test_subscription(void) {
        count == 1 && strcmp(out[0].remark, "one") == 0);
 }
 
-/* the first 512 KB of a multi megabyte feed */
-static int prefix_of(const char *body, char *buf, size_t cap, size_t *len) {
-    *len = strlen(body);
-    if (*len >= cap) return -2;
-    memcpy(buf, body, *len + 1);
-    return cfg_subscription_prefix(buf, len);
-}
-
-static void test_cut_body(void) {
-    static vl_server_t out[16];
-    char buf[1024];
-    size_t len = 0, count = 0;
-    cfg_import_stats_t stats;
-
-    ok("links keep whole lines",
-       prefix_of("# t\nvless://" UUID "@a.example:443?security=tls#1\n"
-                 "vless://" UUID "@b.example:443?security=tls#2\nvless://" UUID "@c.exa",
-                 buf, sizeof buf, &len) == 0 &&
-       cfg_parse_subscription_ex(buf, len, out, 16, &count, &stats) == CFG_OK &&
-       count == 2 && stats.skipped == 0 && strcmp(out[1].host, "b.example") == 0);
-    ok("a cut inside the first line leaves nothing",
-       prefix_of("vless://" UUID "@a.exa", buf, sizeof buf, &len) != 0);
-
-    /* base64 of three vless lines, cut inside the third */
-    const char *full = "vless://" UUID "@a.example:443?security=tls#1\n"
-                       "vless://" UUID "@b.example:443?security=tls#2\n"
-                       "vless://" UUID "@c.example:443?security=tls#3\n";
-    char enc[1024];
-    size_t enc_len = 0;
-    ok("encode", b64_encode((const unsigned char *)full, strlen(full), enc, sizeof enc, &enc_len) == 0);
-    for (size_t cut = enc_len - 30; cut > enc_len - 34; --cut) {
-        enc[cut] = '\0';
-        ok("base64 cut at any offset keeps whole lines",
-           prefix_of(enc, buf, sizeof buf, &len) == 0 &&
-           cfg_parse_subscription_ex(buf, len, out, 16, &count, &stats) == CFG_OK &&
-           count == 2 && stats.skipped == 0);
-    }
-
-    ok("clash keeps whole items",
-       prefix_of("proxies:\n"
-                 "  - name: one\n    type: trojan\n    server: a.example\n    port: 443\n"
-                 "    password: pw\n    sni: a.example\n"
-                 "  - name: two\n    type: trojan\n    server: b.example\n    port: 443\n"
-                 "    password: pw\n    sni: b.exa",
-                 buf, sizeof buf, &len) == 0 &&
-       cfg_parse_subscription_ex(buf, len, out, 16, &count, &stats) == CFG_OK &&
-       count == 1 && strcmp(out[0].host, "a.example") == 0);
-
-    ok("cut json is refused",
-       prefix_of("[{\"remarks\":\"a\",\"outbounds\":[{\"protocol\":\"vle", buf, sizeof buf, &len) != 0);
-    ok("cut json behind header lines is refused",
-       prefix_of("//profile-title: x\n{\"outbounds\":[{\"type\":\"vle", buf, sizeof buf, &len) != 0);
-}
-
 /* hiddify style panels put profile headers above the body itself */
 static void test_header_lines(void) {
     static vl_server_t out[16];
@@ -588,7 +534,6 @@ int main(void) {
     test_vmess_links();
     test_unsupported_schemes();
     test_subscription();
-    test_cut_body();
     test_header_lines();
     test_raw_remarks();
     test_json_outbounds();

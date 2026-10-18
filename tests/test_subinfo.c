@@ -61,6 +61,10 @@ int main(void) {
        and the list then called a live subscription expired */
     expect("milliseconds",
            subfetch_userinfo_expire_for_test("expire=1735689600000"), 1735689600ULL);
+    expect("privio expiry beyond 2100",
+           subfetch_userinfo_expire_for_test("expire=4898316803"), 4898316803ULL);
+    expect("far future milliseconds",
+           subfetch_userinfo_expire_for_test("expire=4898316803000"), 4898316803ULL);
     expect("days left is not a timestamp",
            subfetch_userinfo_expire_for_test("expire=30"), 0ULL);
     expect("second after the epoch is not a timestamp",

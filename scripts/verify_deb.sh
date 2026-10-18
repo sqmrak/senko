@@ -59,6 +59,9 @@ fi
 [ -s data/var/jb/usr/lib/senko/cacert.pem ] || {
   echo "daemon tls roots missing from the persistent path" >&2; exit 1;
 }
+[ -s data/var/jb/Applications/Senko.app/PlugIns/SenkoTunnel.appex/cacert.pem ] || {
+  echo "native VPN tls roots missing from the extension bundle" >&2; exit 1;
+}
 [ -s data/var/jb/usr/lib/senko/launchd.sh ] || {
   echo "launchd control script missing" >&2; exit 1;
 }

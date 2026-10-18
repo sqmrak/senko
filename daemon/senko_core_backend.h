@@ -21,6 +21,7 @@ typedef struct {
 /* the separate senko-core owns a utun device, which its runtime can only reach on
    arm64 from ios 12 onward. everything else falls back to the c backend */
 int senko_core_backend_supported(void);
+int senko_core_roots_file(const char *bundle, const char **file);
 
 int senko_core_backend_start(senko_core_backend_t *backend, const vl_server_t *server,
                      const char *endpoint_ip, const char *dns_server,

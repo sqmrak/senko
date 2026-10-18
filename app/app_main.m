@@ -275,6 +275,7 @@ NSString *SenkoFormatRate(double bytesPerSecond) {
 - (void)loadLegacyTlsfix;
 - (void)senkoLaunchSettled;
 - (void)senkoOfferSafeModeReport;
+- (void)applyThemeAppearance:(NSNotification *)note;
 @end
 
 @implementation AppDelegate
@@ -288,6 +289,11 @@ NSString *SenkoFormatRate(double bytesPerSecond) {
                                  forKey:SENKO_SERVER_SORT_KEY]];
     SenkoCrashStage("window");
     UIWindow *w = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
+    SenkoCrashStage("palette");
+    InitPalette();
+    [[NSNotificationCenter defaultCenter] addObserver:self
+        selector:@selector(applyThemeAppearance:)
+        name:SenkoThemeDidChangeNotification object:nil];
     SenkoCrashStage("main controller");
     MainVC *vc = [[[MainVC alloc] init] autorelease];
     w.rootViewController = vc;
@@ -304,6 +310,7 @@ NSString *SenkoFormatRate(double bytesPerSecond) {
         [self senkoOfferSafeModeReport];
     }];
     [_window makeKeyAndVisible];
+    [self applyThemeAppearance:nil];
     [CATransaction commit];
 /* the overlay is a device setting, so it comes back on the next launch. it is
    put up after the main window so it stays above it */
@@ -407,7 +414,22 @@ NSString *SenkoFormatRate(double bytesPerSecond) {
     [a show];
 }
 
-- (void)dealloc { [_window release]; [super dealloc]; }
+- (void)applyThemeAppearance:(NSNotification *)note {
+    (void)note;
+    BOOL modern = [UIViewController instancesRespondToSelector:@selector(setNeedsStatusBarAppearanceUpdate)];
+    UIStatusBarStyle style = SenkoThemeIsLight() ? UIStatusBarStyleDefault
+        : (UIStatusBarStyle)(modern ? 1 : 2);
+    [[UIApplication sharedApplication] setStatusBarStyle:style animated:NO];
+    if ([_window respondsToSelector:@selector(setOverrideUserInterfaceStyle:)])
+        ((void (*)(id, SEL, NSInteger))objc_msgSend)(_window,
+            @selector(setOverrideUserInterfaceStyle:), SenkoThemeIsLight() ? 1 : 2);
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [_window release];
+    [super dealloc];
+}
 @end
 
 int main(int argc, char **argv) {
@@ -416,8 +438,6 @@ int main(int argc, char **argv) {
     SenkoCrashStage("localization");
     SenkoLocalizationInstall();
     SenkoEmojiTextInstall();
-    SenkoCrashStage("palette");
-    InitPalette();
     SenkoCrashStage("sfx hooks");
     SenkoMeowInstallHooks();
     SenkoCrashStage("uikit");

@@ -96,6 +96,8 @@ echo "==> host tests"
 # keep system compiler first so host tests are not built with the ios clang
 HOST_PATH="${SENKO_HOST_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 env PATH="${HOST_PATH}" make -C "${ROOT}/tests" test CC="${CC:-/usr/bin/cc}"
+env PATH="${HOST_PATH}" SENKO_GO="${GO_BIN}" SENKO_CORE_SRC="${SENKO_CORE_SOURCE}" \
+  make -C "${ROOT}/tests" test-native
 
 echo "==> fetch tls roots"
 bash "${ROOT}/scripts/fetch_roots.sh"
@@ -329,6 +331,8 @@ fi
 find "${PAYLOAD}/Applications/Senko.app" -type f ! -name senko -exec chmod 644 {} +
 cp -R "${SLICE}/native/SenkoTunnel.appex" \
   "${PAYLOAD}/Applications/Senko.app/PlugIns/"
+cp "${ROOT}/senkotlsfix/cacert.pem" \
+  "${PAYLOAD}/Applications/Senko.app/PlugIns/SenkoTunnel.appex/cacert.pem"
 chmod 755 "${PAYLOAD}/Applications/Senko.app/PlugIns/SenkoTunnel.appex/SenkoTunnel"
 find "${PAYLOAD}/Applications/Senko.app/PlugIns/SenkoTunnel.appex" \
   -type f ! -name SenkoTunnel -exec chmod 644 {} +

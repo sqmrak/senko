@@ -38,6 +38,7 @@ static void SenkoDisableInjectedStatusBadge(void) {
     [_lastErr release];
     [_lastAlertErr release];
     [_serverStatus release];
+    [_pingCache release];
     [_pingingSubs release];
     [_pingQueue release];
     [_autoQueue release];
@@ -223,6 +224,17 @@ static void SenkoDisableInjectedStatusBadge(void) {
     _activeBackend = SenkoBackendNone;
     _state = [@"idle" copy];
     _serverStatus = [[NSMutableDictionary alloc] init];
+    _pingCache = [[NSMutableDictionary alloc] init];
+    id savedPings = [[NSUserDefaults standardUserDefaults] objectForKey:@"senko.server.measurements"];
+    if ([savedPings isKindOfClass:[NSDictionary class]]) {
+        for (id key in savedPings) {
+            id value = [savedPings objectForKey:key];
+            if ([_pingCache count] >= 256) break;
+            if ([key isKindOfClass:[NSString class]] && [key length] == 64 &&
+                [value isKindOfClass:[NSNumber class]] && [value intValue] >= -1)
+                [_pingCache setObject:value forKey:key];
+        }
+    }
     _pingingSubs = [[NSMutableSet alloc] init];
     _checkGeneration = 0;
     _catalogGeneration = 0;
@@ -378,6 +390,7 @@ static void SenkoDisableInjectedStatusBadge(void) {
    immediately on the way back, before the daemon socket is reachable again */
 - (void)appWillResignActive:(NSNotification *)n {
     (void)n;
+    [[NSUserDefaults standardUserDefaults] synchronize];
     [self stopStatusHeartbeat];
 }
 
