@@ -434,7 +434,7 @@ int main(void) {
         fputs("keep", block);
         fclose(block);
     }
-    ctl_server_t blocked;
+    static ctl_server_t blocked;
     ok("regular file blocks init",
        ctl_server_init(&blocked, block_path, mock_apply, NULL) == CTLS_ERR_BIND);
     struct stat bst;
@@ -443,7 +443,7 @@ int main(void) {
 
     const char *replace_path = "/tmp/senko_ctltest.replace";
     unlink(replace_path);
-    ctl_server_t replaced;
+    static ctl_server_t replaced;
     ok("replace-path init",
        ctl_server_init(&replaced, replace_path, mock_apply, NULL) == CTLS_OK);
     unlink(replace_path);
@@ -461,7 +461,7 @@ int main(void) {
     apply_rec_t rec;
     memset(&rec, 0, sizeof rec);
 
-    ctl_server_t s;
+    static ctl_server_t s;
     ok("server init", ctl_server_init(&s, path, mock_apply, &rec) == CTLS_OK);
     struct stat sockst;
     ok("control socket is not world accessible",

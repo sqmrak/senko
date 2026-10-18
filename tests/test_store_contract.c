@@ -1,6 +1,8 @@
 #include "store.h"
+#include "cJSON.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int g_fail = 0;
@@ -10,7 +12,81 @@ static void ok(const char *what, int cond) {
     fprintf(stderr, "FAIL %s\n", what);
 }
 
+static cJSON *subscription_node(int index) {
+    char host[64];
+    snprintf(host, sizeof host, "node%d.example", index);
+    cJSON *node = cJSON_CreateObject();
+    cJSON_AddStringToObject(node, "protocol", "vless");
+    cJSON *settings = cJSON_AddObjectToObject(node, "settings");
+    cJSON_AddStringToObject(settings, "address", host);
+    cJSON_AddNumberToObject(settings, "port", 443);
+    cJSON_AddStringToObject(settings, "id", "11111111-1111-4111-8111-111111111111");
+    cJSON_AddStringToObject(settings, "encryption", "none");
+    cJSON *stream = cJSON_AddObjectToObject(node, "streamSettings");
+    cJSON_AddStringToObject(stream, "network", index % 5 ? "tcp" : "kcp");
+    cJSON_AddStringToObject(stream, "security", "none");
+    return node;
+}
+
+static void test_balancer_subscription(void) {
+    static store_t catalog;
+    cJSON *profiles = cJSON_CreateArray();
+    cJSON *automatic = cJSON_CreateObject();
+    cJSON_AddItemToArray(profiles, automatic);
+    cJSON_AddStringToObject(automatic, "remarks", "automatic");
+    cJSON *outbounds = cJSON_AddArrayToObject(automatic, "outbounds");
+    for (int i = 0; i < 300; ++i) {
+        cJSON *node = subscription_node(i);
+        cJSON_AddItemToArray(outbounds, node);
+        cJSON_AddItemToArray(outbounds, cJSON_Duplicate(node, 1));
+    }
+    char padding[4097];
+    memset(padding, 'x', sizeof padding - 1);
+    padding[sizeof padding - 1] = '\0';
+    for (int i = 0; i < 122; ++i) {
+        char name[32];
+        snprintf(name, sizeof name, "named %d", i);
+        cJSON *profile = cJSON_CreateObject();
+        cJSON_AddItemToArray(profiles, profile);
+        cJSON_AddStringToObject(profile, "remarks", name);
+        cJSON_AddStringToObject(profile, "padding", padding);
+        cJSON *nodes = cJSON_AddArrayToObject(profile, "outbounds");
+        cJSON_AddItemToArray(nodes, subscription_node(1));
+    }
+    char *body = cJSON_PrintUnformatted(profiles);
+    cJSON_Delete(profiles);
+    ok("large balancer fixture allocated", body != NULL);
+    if (!body) return;
+    ok("balancer fixture exceeds the former download limit", strlen(body) > 512 * 1024);
+    store_init(&catalog);
+    size_t sub = 0, added = 0;
+    store_add_sub(&catalog, "panel", "https://panel.example/feed", &sub);
+    ok("balancer subscription imports", store_refresh_sub(&catalog, sub, body,
+       strlen(body), &added) == STORE_OK);
+    ok("balancer and named profiles keep every distinct row", added == 422);
+    size_t supported = 0, names = 0;
+    for (size_t i = 0; i < catalog.n; ++i) {
+        int seen = 0;
+        supported += cfg_validate_server(&catalog.servers[i], NULL, 0) != 0;
+        for (size_t j = 0; j < i; ++j)
+            if (!strcmp(catalog.servers[i].remark, catalog.servers[j].remark)) seen = 1;
+        if (!seen) ++names;
+    }
+    ok("all profiles after the automatic group survive", names == 123 && supported == 362);
+    char *saved = malloc(512 * 1024);
+    size_t length = 0;
+    ok("large catalog save buffer allocated", saved != NULL);
+    if (saved) {
+        ok("large catalog serializes", store_serialize(&catalog, saved, 512 * 1024, &length) == STORE_OK);
+        ok("large catalog survives a restart", store_deserialize(&catalog, saved, length) == STORE_OK &&
+           catalog.n == 422 && !strcmp(catalog.servers[catalog.n - 1].remark, "named 121"));
+    }
+    free(saved);
+    free(body);
+}
+
 int main(void) {
+    test_balancer_subscription();
     {
         static store_t groups;
         const char *node = "vless://11111111-1111-4111-8111-111111111111@same.example:443?security=none#same";
@@ -37,7 +113,7 @@ int main(void) {
         ok("a different obfuscation password keeps its own server",
            store_add_manual_server(&hy2, &node, NULL) == STORE_OK && hy2.n == 2);
     }
-    store_t st;
+    static store_t st;
     store_init(&st);
 
     size_t idx = 99;
@@ -142,7 +218,7 @@ int main(void) {
        strstr(saved, "SUBINFO ") != NULL &&
        strstr(saved, "SET rule direct domain-suffix example.com\n") != NULL &&
        strstr(saved, "SET rule block ip-cidr 192.0.2.0/24\n") != NULL);
-    store_t restored;
+    static store_t restored;
     ok("deserialize order and expiry",
        store_deserialize(&restored, saved, saved_len) == STORE_OK &&
        restored.subs[sub].expire == 1893456000ULL &&
@@ -191,7 +267,7 @@ int main(void) {
    was one such field, and a trojan/vless node behind a self-signed cert
    would lose it and start failing its tls handshake after a respring. */
     {
-        store_t rt;
+        static store_t rt;
         store_init(&rt);
         size_t ridx = 0;
         ok("insecure trojan link accepted",
@@ -227,7 +303,7 @@ int main(void) {
 /* the panel's suggested title must land as the subscription's name, but only
    while nobody has renamed it away from the url-derived default */
     {
-        store_t ts;
+        static store_t ts;
         store_init(&ts);
         size_t t = 0;
         ok("add titled sub",

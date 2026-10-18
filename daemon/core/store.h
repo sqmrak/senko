@@ -10,7 +10,8 @@
 extern "C" {
 #endif
 
-#define STORE_MAX_SERVERS 256
+/* balancer profiles precede named nodes and can contain hundreds of outbounds */
+#define STORE_MAX_SERVERS 1024
 #define STORE_MAX_SUBS    32
 
 #define STORE_GROUP_MANUAL (-1)

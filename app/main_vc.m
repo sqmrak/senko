@@ -1,5 +1,6 @@
 #import "main_vc_priv.h"
 #import "crash_report.h"
+#include "../daemon/core/store.h"
 
 #import <fcntl.h>
 #import <unistd.h>
@@ -229,7 +230,7 @@ static void SenkoDisableInjectedStatusBadge(void) {
     if ([savedPings isKindOfClass:[NSDictionary class]]) {
         for (id key in savedPings) {
             id value = [savedPings objectForKey:key];
-            if ([_pingCache count] >= 256) break;
+            if ([_pingCache count] >= STORE_MAX_SERVERS) break;
             if ([key isKindOfClass:[NSString class]] && [key length] == 64 &&
                 [value isKindOfClass:[NSNumber class]] && [value intValue] >= -1)
                 [_pingCache setObject:value forKey:key];

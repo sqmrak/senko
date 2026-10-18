@@ -43,7 +43,7 @@ int main(void) {
     unlink(tmp);
     unlink(victim);
 
-    store_t st;
+    static store_t st;
     store_init(&st);
     size_t index = 0;
     ok("server added", store_add_manual(&st,
@@ -61,7 +61,7 @@ int main(void) {
     ok("victim unchanged", read_text(victim, text, sizeof text) == 0 &&
        strcmp(text, "sentinel\n") == 0);
 
-    store_t loaded;
+    static store_t loaded;
     daemon_settings_t loaded_settings;
     ok("saved config loads", storefile_load(&loaded, &loaded_settings, cfg) == STOREFILE_OK &&
        loaded.n == 1 && loaded_settings.socks_port == settings.socks_port);

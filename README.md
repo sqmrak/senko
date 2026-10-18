@@ -23,7 +23,7 @@
 - amneziawg
 - socks5, http(s)
 
-subscriptions: uri lists, base64, happ, xray/sing-box json, clash yaml, shadowrocket/surge ini.
+subscriptions: uri lists, base64, happ, xray/sing-box json, clash yaml, shadowrocket/surge ini. up to 1024 catalog entries, including alternate transports and unsupported rows.
 
 ## subscriptions
 
