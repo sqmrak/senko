@@ -1089,14 +1089,17 @@ static int subfetch_dial_direct(daemon_ctl_t *d, const char *host, uint16_t port
     if (budget_ms <= 0) return -1;
     long deadline = probe_now_ms() + budget_ms;
 
-    char address[INET_ADDRSTRLEN];
     direct_socket_iface_t iface;
     memset(&iface, 0, sizeof iface);
-    if (egress_snapshot(iface.ifname, sizeof iface.ifname,
-                        address, sizeof address) != 0)
+    if (egress_interface(iface.ifname, sizeof iface.ifname) != 0) {
+        fprintf(stderr, "senkod: direct dial to %s has no wifi or cellular interface with a global address\n", host);
         return -1;
+    }
     iface.ifindex = if_nametoindex(iface.ifname);
-    if (!iface.ifindex) return -1;
+    if (!iface.ifindex) {
+        fprintf(stderr, "senkod: direct dial to %s: interface %s has no index\n", host, iface.ifname);
+        return -1;
+    }
 
     char portstr[8];
     snprintf(portstr, sizeof portstr, "%u", port);
