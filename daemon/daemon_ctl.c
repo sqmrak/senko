@@ -1132,9 +1132,19 @@ static int subfetch_dial_direct(daemon_ctl_t *d, const char *host, uint16_t port
 
     int fd = -1;
     for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
-        if (!net_addr_allowed(ai->ai_addr)) continue;
+        char shown[INET6_ADDRSTRLEN] = "?";
+        if (ai->ai_family == AF_INET)
+            inet_ntop(AF_INET, &((struct sockaddr_in *)ai->ai_addr)->sin_addr, shown, sizeof shown);
+        else if (ai->ai_family == AF_INET6)
+            inet_ntop(AF_INET6, &((struct sockaddr_in6 *)ai->ai_addr)->sin6_addr, shown, sizeof shown);
+        if (!net_addr_allowed(ai->ai_addr)) {
+            fprintf(stderr, "senkod: direct dial to %s refused address %s\n", host, shown);
+            continue;
+        }
         fd = subfetch_connect_bound(&iface, ai->ai_addr, ai->ai_addrlen, deadline);
         if (fd >= 0) break;
+        fprintf(stderr, "senkod: direct dial to %s could not connect to %s on %s\n",
+                host, shown, iface.ifname);
     }
     if (res) freeaddrinfo(res);
     if (fd < 0 && !resolved && d && deadline > probe_now_ms()) {
