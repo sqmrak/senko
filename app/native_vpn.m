@@ -112,6 +112,11 @@ static void SenkoNativeWaitStopped(id connection, void (^completion)(NSError *))
     });
 }
 
+static NSInteger SenkoNativeConnectionStatus(id manager) {
+    id connection = ((id (*)(id, SEL))objc_msgSend)(manager, @selector(connection));
+    return connection ? ((NSInteger (*)(id, SEL))objc_msgSend)(connection, @selector(status)) : 0;
+}
+
 static void SenkoNativeReadTraffic(id manager,
                                    void (^completion)(BOOL, uint64_t, uint64_t)) {
     id connection = manager ? ((id (*)(id, SEL))objc_msgSend)(
@@ -169,8 +174,8 @@ static void SenkoNativeReadTraffic(id manager,
             SenkoNativeFinish(completion, loadError);
             return;
         }
-        id manager = SenkoNativeFindManager(managers);
-        if (!manager) manager = [[[SenkoNativeManagerClass() alloc] init] autorelease];
+        id found = SenkoNativeFindManager(managers);
+        void (^configure)(id) = ^(id manager) {
         [_manager release];
         _manager = [manager retain];
 
@@ -229,6 +234,23 @@ static void SenkoNativeReadTraffic(id manager,
                 SenkoNativeFinish(completion, nil);
             });
         });
+        };
+        /* a profile saved by an older install reads "needs an update" in Settings
+           and never starts, so it is removed and made again */
+        if (found && SenkoNativeConnectionStatus(found) == 0) {
+            ((void (*)(id, SEL, void (^)(NSError *)))objc_msgSend)(found,
+                @selector(removeFromPreferencesWithCompletionHandler:),
+                ^(NSError *removeError) {
+                if (removeError) {
+                    SenkoNativeFinish(completion, SenkoNativeError(
+                        @"the Senko VPN profile needs an update, delete it in Settings, General, VPN and connect again"));
+                    return;
+                }
+                configure([[[SenkoNativeManagerClass() alloc] init] autorelease]);
+            });
+            return;
+        }
+        configure(found ? found : [[[SenkoNativeManagerClass() alloc] init] autorelease]);
     });
 }
 
