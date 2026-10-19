@@ -627,8 +627,15 @@ int utun_backend_start(utun_backend_t *backend, const vl_server_t *server,
     tcp.direct_ctx = &backend->direct;
     tcp.dial = dial;
     tcp.dial_ctx = dial_ctx;
-    tcp.opener_threads = 2;
-    tcp.max_flows = 8;
+    /* eight relays starved any app that opens a burst of connections, such as a
+       messenger on start. the ceiling stays under the lwip pcb count of the profile */
+#if defined(SENKO_LWIP_PROFILE_LARGE)
+    tcp.opener_threads = 6;
+    tcp.max_flows = 48;
+#else
+    tcp.opener_threads = 3;
+    tcp.max_flows = 24;
+#endif
     tcp.use_shared_tls = !hysteria && server->security != VL_SEC_NONE;
     memcpy(tcp.dns_upstream, dns, 4);
     tcp.dns_upstream_len = 4;

@@ -16,7 +16,9 @@ TRIPLE  ?= arm-apple-darwin11
 CC      := $(TC)/clang -target $(TRIPLE) -B $(TC)
 ARCH    ?= -arch armv7 -miphoneos-version-min=4.3
 IOS_BINDIR ?= build/ios
-CFLAGS  := -std=c99 -Wall -Wextra -O2 -DSENKO_RELEASE $(EXTRA_CFLAGS) $(ARCH) -isysroot $(SDK) \
+# lwipopts.h sizes the flow tables by profile, and only 64-bit slices get the large one
+PROFILE := $(if $(findstring arm64,$(ARCH)),-DSENKO_LWIP_PROFILE_LARGE)
+CFLAGS  := -std=c99 -Wall -Wextra -O2 -DSENKO_RELEASE $(PROFILE) $(EXTRA_CFLAGS) $(ARCH) -isysroot $(SDK) \
            -Icore -Icore/third_party -I. -I$(OSSL)/include -I$(QUIC)/include \
            -Ilwip_port -Ithird_party/lwip/src/include
 # link archives directly because device openssl is not a supported dependency
