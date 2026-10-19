@@ -152,7 +152,7 @@ $(BIN): $(APP_SRC) $(ZBAR_OBJ) $(FLAG_SRC) $(ICON_SRC) $(GLYPH_SRC) $(EMOJI_SRC)
 		cp Info.plist $(APP)/; \
 		cp icons/Icon.png icons/Icon@2x.png icons/Icon-72.png icons/Icon-72@2x.png \
 		   icons/Icon-60@2x.png icons/Icon-60@3x.png icons/Icon-76.png icons/Icon-76@2x.png \
-		   icons/Icon-83.5@2x.png icons/sqmrak.jpg icons/boykisser.png icons/senko-fall.png icons/meow.caf icons/meow.wav icons/ouch.wav icons/miside-bg.jpg icons/frutiger-bg.jpg icons/frutiger-bg-dark.jpg icons/frutiger-bg-dark-wide.jpg icons/server-placeholder.png \
+		   icons/Icon-83.5@2x.png icons/sqmrak.jpg icons/axi8229.png icons/boykisser.png icons/senko-fall.png icons/meow.caf icons/meow.wav icons/ouch.wav icons/miside-bg.jpg icons/frutiger-bg.jpg icons/frutiger-bg-dark.jpg icons/frutiger-bg-dark-wide.jpg icons/server-placeholder.png \
 		   icons/ios26-bg-light.jpg icons/ios26-bg-dark.jpg \
 		   icons/Default.png icons/Default@2x.png icons/Default-568h@2x.png \
 		   icons/Default-667h@2x.png icons/Default-736h@3x.png \

@@ -333,6 +333,17 @@ static UILabel *AboutHeroLabel(UIView *host, UIFont *font) {
         [withFace setObject:face forKey:kAboutImage];
         developer = withFace;
     }
+    NSDictionary *contributor = [self row:@"Developer"
+        value:SenkoLocalizedText(@"@axi8229\nFull Apple A7 support and Hysteria stabilization")
+        glyph:nil action:NULL];
+    NSString *contributorAvatar = [[NSBundle mainBundle] pathForResource:@"axi8229" ofType:@"png"];
+    UIImage *contributorFace = contributorAvatar ?
+        [UIImage imageWithContentsOfFile:contributorAvatar] : nil;
+    if (contributorFace) {
+        NSMutableDictionary *withFace = [[contributor mutableCopy] autorelease];
+        [withFace setObject:contributorFace forKey:kAboutImage];
+        contributor = withFace;
+    }
     NSArray *sections = [NSArray arrayWithObjects:
         [NSDictionary dictionaryWithObjectsAndKeys:
             SenkoLocalizedText(@"Device"), kAboutTitle,
@@ -375,6 +386,7 @@ static UILabel *AboutHeroLabel(UIView *host, UIFont *font) {
             SenkoLocalizedText(@"Credits"), kAboutTitle,
             [NSArray arrayWithObjects:
                 developer,
+                contributor,
                 [self row:@"Special thanks" value:kAboutThanks glyph:@"glyph-bolt.png" action:NULL],
                 [self row:@"Sponsors" value:kAboutSponsors glyph:@"glyph-rocket.png" action:NULL],
                 [self row:@"Testers" value:kAboutTesters glyph:@"glyph-search.png" action:NULL],
