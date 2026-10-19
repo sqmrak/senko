@@ -436,7 +436,8 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
                 }
             }
             int hook_pinned = pin == SENKO_BACKEND_APP_PROXY;
-            int routing_ok;
+            int routing_ok = 0;
+            int run_utun = 0;
             int failure = DCTL_ERR_UTUN;
             if (core_attempted) {
                 failure = DCTL_ERR_CORE;
@@ -444,9 +445,17 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
                                               d->settings.dns_upstream, d->rules,
                                               d->geo_dir, backend_reason,
                                               sizeof backend_reason) == 0;
-                if (!routing_ok)
+                if (!routing_ok) {
                     fprintf(stderr, "senkod: senko-core failed: %s\n",
                             backend_reason[0] ? backend_reason : "unknown error");
+/* ios 13 rootful kills the core at exec with status 137, and an unreadable
+   roots file stops it too: auto retries once on the utun backend, a pin does not */
+                    if (pin == SENKO_BACKEND_AUTO && !quic_only) {
+                        fprintf(stderr, "senkod: falling back from senko-core to the utun backend\n");
+                        backend_reason[0] = '\0';
+                        run_utun = 1;
+                    }
+                }
             } else if (hook_pinned) {
                 failure = DCTL_ERR_ROUTING;
                 routing_ok = app_proxy_start(&d->app_proxy, (int)loop_listen_port(d->loop),
@@ -454,6 +463,10 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
                 if (!routing_ok)
                     fprintf(stderr, "senkod: connect hook failed: %s\n", backend_reason);
             } else {
+                run_utun = 1;
+            }
+            if (run_utun) {
+                failure = DCTL_ERR_UTUN;
                 utun_backend_set_app_owner(&d->embedded_utun,
                                            d->owner ? app_owner_policy_lookup : NULL, d->owner);
                 routing_ok = utun_backend_start(&d->embedded_utun, s, ip_list,
