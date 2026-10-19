@@ -1236,6 +1236,13 @@ int daemon_ctl_fetch(void *ctx, const char *url,
     cfg.tls = &transport_tls; /* use tls for https */
     cfg.request_header = request_header;
     cfg.max_redirects = 5;
+/* the app waits 20s for the reply, and a failed tunnel attempt is retried
+   direct inside that window, so only a fetch that cannot touch the tunnel
+   may run past its 8s */
+    {
+        daemon_ctl_t *dctl = (daemon_ctl_t *)ctx;
+        cfg.progress_extend_ms = (dctl && dctl->app_proxy.active && dctl->loop) ? 0 : 10000;
+    }
 
 /* the app gives REFRESH/ADDSUB 20s before it gives up waiting on this reply,
    and a retry means the deadline gets spent twice: budget each attempt short
@@ -1251,6 +1258,7 @@ int daemon_ctl_fetch(void *ctx, const char *url,
         dial_ctx.last_via_tunnel) {
         dial_ctx.force_direct = 1;
         fprintf(stderr, "senkod: subfetch retrying direct, bypassing the tunnel\n");
+        cfg.progress_extend_ms = 0;
         r = subfetch_get_info(&cfg, url, buf, cap, len, 8000, &info);
     }
     if (r != SUBFETCH_OK) {

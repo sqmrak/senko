@@ -320,7 +320,7 @@ test_subfetch_budget: test_subfetch_budget.c $(CORE)/subfetch.c $(CORE)/subfetch
 	$(CC) $(CFLAGS) $(TLS_CFLAGS) -DSENKO_HOST_TEST -I$(DAEMON) test_subfetch_budget.c \
 	      $(CORE)/subfetch.c $(CORE)/http.c $(CORE)/url.c $(CORE)/net_safe.c \
 	      $(CORE)/b64.c $(CORE)/transport_tcp.c $(CORE)/transport_tls.c \
-	      $(TRACE) $(REPLAY) $(UPLOAD) $(TIME) -o $@ $(TLS_LDFLAGS) -lz
+	      $(TRACE) $(REPLAY) $(UPLOAD) $(TIME) -o $@ $(TLS_LDFLAGS) -lz -lpthread
 
 test_legacy_ios: test_legacy_ios.c $(DAEMON)/legacy_ios.c $(DAEMON)/legacy_ios.h
 	$(CC) $(CFLAGS) -I$(DAEMON) test_legacy_ios.c $(DAEMON)/legacy_ios.c -o $@

@@ -37,6 +37,9 @@ typedef struct {
     const transport_vt_t *tls;
     const char *request_header; /* only for the subscription HTTP request */
     int max_redirects; /* zero uses five hops */
+/* extra time a body that keeps arriving may take past the fetch timeout, zero
+   keeps the timeout hard. the caller sets it only when it can afford the wait */
+    int progress_extend_ms;
 /* set by subfetch_get_file only: the body goes to the sink and body_cap is its limit */
     http_body_sink_fn sink;
     void *sink_ctx;

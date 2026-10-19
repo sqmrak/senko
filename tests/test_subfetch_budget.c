@@ -10,6 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <poll.h>
+#include <pthread.h>
+#include <signal.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -60,6 +62,45 @@ static int canned_dial(void *ctx, const char *host, uint16_t port, int budget_ms
     }
     if (!g_keep_open) shutdown(sv[1], SHUT_WR);
     if (fcntl(sv[0], F_SETFL, O_NONBLOCK) != 0) {
+        close(sv[0]);
+        close(sv[1]);
+        return -1;
+    }
+    g_peer = sv[1];
+    return sv[0];
+}
+
+/* a body that arrives in pieces: the header and the first piece are already
+   in the socket, the rest follows from a thread every 60 ms */
+static void *trickle_writer(void *arg) {
+    int fd = *(int *)arg;
+    free(arg);
+    for (int i = 0; i < 4; ++i) {
+        poll(NULL, 0, 60);
+        if (write(fd, "efgh", 4) != 4) break;
+    }
+    shutdown(fd, SHUT_WR);
+    return NULL;
+}
+
+static pthread_t g_trickle;
+
+static int trickle_dial(void *ctx, const char *host, uint16_t port, int budget_ms) {
+    (void)ctx; (void)host; (void)port; (void)budget_ms;
+    static const char head[] = "HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\nabcd";
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return -1;
+    if (write(sv[1], head, sizeof head - 1) != (ssize_t)(sizeof head - 1) ||
+        fcntl(sv[0], F_SETFL, O_NONBLOCK) != 0) {
+        close(sv[0]);
+        close(sv[1]);
+        return -1;
+    }
+    int *writer_fd = malloc(sizeof *writer_fd);
+    if (!writer_fd) { close(sv[0]); close(sv[1]); return -1; }
+    *writer_fd = sv[1];
+    if (pthread_create(&g_trickle, NULL, trickle_writer, writer_fd) != 0) {
+        free(writer_fd);
         close(sv[0]);
         close(sv[1]);
         return -1;
@@ -221,6 +262,28 @@ int main(void) {
            SUBFETCH_ERR_ARG);
         fclose(out);
         unlink(path);
+    }
+
+/* a body that is still arriving may run past the timeout, up to the cap the
+   caller allows, and without that allowance it stalls as before */
+    {
+        subfetch_cfg_t slow = cfg;
+        signal(SIGPIPE, SIG_IGN); /* the writer outlives a fetch that gave up */
+        slow.dial = trickle_dial;
+        r = subfetch_get_info(&slow, "http://sub.example.com/feed", body, sizeof body,
+                              &blen, 100, &info);
+        pthread_join(g_trickle, NULL);
+        close(g_peer);
+        ok("a flowing body past the timeout stalls without an allowance",
+           r == SUBFETCH_ERR_TRANSPORT && info.timed_out && info.http_status == 200);
+
+        slow.progress_extend_ms = 2000;
+        r = subfetch_get_info(&slow, "http://sub.example.com/feed", body, sizeof body,
+                              &blen, 100, &info);
+        pthread_join(g_trickle, NULL);
+        close(g_peer);
+        ok("a flowing body past the timeout finishes with an allowance",
+           r == SUBFETCH_OK && blen == 20 && memcmp(body, "abcdefghefghefghefgh", 20) == 0);
     }
 
     /* the routing header of a happ panel comes back with the body */
