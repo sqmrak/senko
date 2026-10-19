@@ -252,6 +252,7 @@
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip;
 - (void)selectServerIndex:(int)index;
 - (void)setPingResult:(int)ms forServerIndex:(int)index;
+- (void)persistPingCache;
 - (SenkoServer *)serverByIndex:(int)index;
 - (NSString *)homeDetailText;
 - (void)showSortMenu;

@@ -347,9 +347,21 @@ BOOL SenkoServerIdentityEqual(SenkoServer *a, SenkoServer *b) {
     SenkoServer *server = [self serverByIndex:index];
     if (server && [server->identity length]) {
         [_pingCache setObject:value forKey:server->identity];
-        [[NSUserDefaults standardUserDefaults] setObject:
-            [NSDictionary dictionaryWithDictionary:_pingCache] forKey:@"senko.server.measurements"];
+        /* a full pass reports up to 1024 results, and copying the whole table
+           into the defaults for each one is quadratic work on the main thread */
+        [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                                 selector:@selector(persistPingCache)
+                                                   object:nil];
+        [self performSelector:@selector(persistPingCache) withObject:nil afterDelay:1.0];
     }
+}
+
+- (void)persistPingCache {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(persistPingCache)
+                                               object:nil];
+    [[NSUserDefaults standardUserDefaults] setObject:
+        [NSDictionary dictionaryWithDictionary:_pingCache] forKey:@"senko.server.measurements"];
 }
 
 /* panel feeds put the same banner in front of every node name and a row label

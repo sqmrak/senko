@@ -391,6 +391,7 @@ static void SenkoDisableInjectedStatusBadge(void) {
    immediately on the way back, before the daemon socket is reachable again */
 - (void)appWillResignActive:(NSNotification *)n {
     (void)n;
+    [self persistPingCache];
     [[NSUserDefaults standardUserDefaults] synchronize];
     [self stopStatusHeartbeat];
 }
