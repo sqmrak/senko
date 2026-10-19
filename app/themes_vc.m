@@ -29,6 +29,31 @@
 }
 @end
 
+/* the swatches share the row evenly, so they are placed from the real content
+   width and a rotation keeps them centred */
+@interface SenkoThemeAccentCell : UITableViewCell
+@end
+
+@implementation SenkoThemeAccentCell
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat pad = 14.0f;
+    CGFloat side = 34.0f;
+    CGFloat width = self.contentView.bounds.size.width - pad * 2.0f;
+    CGFloat step = width / (CGFloat)SENKO_IOS6_ACCENT_COUNT;
+    for (NSInteger i = 0; i < SENKO_IOS6_ACCENT_COUNT; ++i) {
+        UIView *swatch = [self.contentView viewWithTag:9301 + i];
+        if (!swatch) continue;
+        swatch.frame = CGRectMake(pad + step * (CGFloat)i + floorf((step - side) * 0.5f),
+            floorf((self.contentView.bounds.size.height - side) * 0.5f), side, side);
+    }
+}
+@end
+
+static BOOL SenkoThemeHasAccentChoice(void) {
+    return [SenkoThemeCurrentId() isEqualToString:SENKO_IOS6_THEME_ID];
+}
+
 @interface ThemeGroupVC : UIViewController <UITableViewDataSource, UITableViewDelegate,
                                              UIActionSheetDelegate,
                                              FileImportDelegate> {
@@ -416,6 +441,10 @@
     SenkoThemeSetLight(seg.selectedSegmentIndex == 1);
 }
 
+- (void)accentTapped:(UIButton *)button {
+    SenkoIos6SetAccent(button.tag - 9301);
+}
+
 - (void)meowSwitchChanged:(UISwitch *)sw {
     SenkoMeowSetEnabled(sw.on);
     if (sw.on)
@@ -430,7 +459,7 @@
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv {
     (void)tv;
-    return (SenkoThemeIsBoykisser() || SenkoThemeIsMiside()) ? 3 : 2;
+    return (SenkoThemeIsBoykisser() || SenkoThemeIsMiside() || SenkoThemeHasAccentChoice()) ? 3 : 2;
 }
 
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
@@ -449,6 +478,7 @@
     lab.font = [UIFont boldSystemFontOfSize:13];
     if (s == 0) lab.text = SenkoLocalizedText(@"Style");
     else if (s == 1) lab.text = SenkoLocalizedText(@"Appearance");
+    else if (SenkoThemeHasAccentChoice()) lab.text = SenkoLocalizedText(@"Accent");
     else lab.text = SenkoThemeIsMiside() ? @"ooouch" : @"meowmeowmeow";
     lab.textAlignment = NSTextAlignmentCenter;
     SenkoStyleAccentLabel(lab);
@@ -511,6 +541,34 @@
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
+    if (ip.section == 2 && SenkoThemeHasAccentChoice()) {
+        static NSString *cid = @"accent";
+        UITableViewCell *cell = [tv dequeueReusableCellWithIdentifier:cid];
+        if (!cell) {
+            cell = [[[SenkoThemeAccentCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                                reuseIdentifier:cid] autorelease];
+            for (NSInteger i = 0; i < SENKO_IOS6_ACCENT_COUNT; ++i) {
+                UIButton *swatch = [UIButton buttonWithType:UIButtonTypeCustom];
+                swatch.tag = 9301 + i;
+                swatch.layer.cornerRadius = 17.0f;
+                swatch.backgroundColor = SenkoIos6AccentSwatch(i);
+                [swatch addTarget:self action:@selector(accentTapped:)
+                 forControlEvents:UIControlEventTouchUpInside];
+                [cell.contentView addSubview:swatch];
+            }
+        }
+        cell.backgroundColor = kCellHi;
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        NSInteger chosen = SenkoIos6Accent();
+        for (NSInteger i = 0; i < SENKO_IOS6_ACCENT_COUNT; ++i) {
+            UIView *swatch = [cell.contentView viewWithTag:9301 + i];
+            BOOL on = i == chosen;
+            swatch.layer.borderWidth = on ? 3.0f : 1.0f;
+            swatch.layer.borderColor = (on ? kInk : [kInk colorWithAlphaComponent:0.25f]).CGColor;
+        }
+        [cell setNeedsLayout];
+        return cell;
+    }
     if (ip.section == 2) {
         static NSString *cid = @"sfx";
         UITableViewCell *cell = [tv dequeueReusableCellWithIdentifier:cid];

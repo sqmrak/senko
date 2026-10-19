@@ -44,6 +44,13 @@ void SenkoThemeApplyId(NSString *themeId);
 /* re-resolve the current id and repaint: a custom theme's def is rebuilt when
    its colors are saved, so the cached pointer has to be refreshed */
 void SenkoThemeReapplyCurrent(void);
+
+/* accent of the iOS 6 style: orange, red, blue, green, yellow, purple */
+#define SENKO_IOS6_ACCENT_COUNT 6
+#define SENKO_IOS6_THEME_ID @"senko-ios6"
+NSInteger SenkoIos6Accent(void);
+void SenkoIos6SetAccent(NSInteger index);
+UIColor *SenkoIos6AccentSwatch(NSInteger index);
 /* freeze the current screen and dissolve it, so a theme switch reads as one
    transition instead of every view repainting on its own */
 void SenkoThemeCrossfadeWindows(void);

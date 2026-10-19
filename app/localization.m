@@ -166,6 +166,7 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"AmneziaWG", @"AmneziaWG");
     SenkoAddTranslation(@"Apply anyway", @"Всё равно применить");
     SenkoAddTranslation(@"Appearance", @"Оформление");
+    SenkoAddTranslation(@"Accent", @"Акцент");
     SenkoAddTranslation(@"Cancel", @"Отмена");
     SenkoAddTranslation(@"Check ping", @"Проверить профиль");
     SenkoAddTranslation(@"Check", @"Проверить");
@@ -929,6 +930,7 @@ static void SenkoBuildTranslations(void) {
     SenkoAddChineseTranslation(@"Custom", @"自定义");
     SenkoAddChineseTranslation(@"Appearance", @"外观");
     SenkoAddChineseTranslation(@"Dark / Light applies to the selected style. Choice is stored on device.", @"深色和浅色模式应用于所选风格。设置保存在设备上。");
+    SenkoAddChineseTranslation(@"Accent", @"强调色");
     SenkoAddChineseTranslation(@"Play a short ouch on every button tap.", @"每次点击按钮时播放短音效。");
     SenkoAddChineseTranslation(@"Play a short meow on every button tap.", @"每次点击按钮时播放短猫叫声。");
     SenkoAddChineseTranslation(@"Dark", @"深色");
