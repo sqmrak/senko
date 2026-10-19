@@ -1,6 +1,6 @@
 Package: com.senko.daemon
 Name: Senko
-Version: 4.0.1-stable
+Version: 4.1.0-stable
 Architecture: all
 Description: VLESS and AmneziaWG client for jailbroken iOS 4.3-16 (armv7 + arm64 + arm64e)
 Maintainer: sqmrak

@@ -6,7 +6,7 @@
 #import "control_client.h"
 
 #define SENKO_SOCK @"/var/tmp/senkod.sock"
-#define SENKO_VERSION @"v4.0.1-stable"
+#define SENKO_VERSION @"v4.1.0-stable"
 /* quick connect: the connect button dials whichever server answers fastest */
 #define SENKO_AUTO_SERVER_KEY @"SenkoAutoServer"
 #define SENKO_PINNED_SUB_URL_KEY @"SenkoPinnedSubscriptionURL"

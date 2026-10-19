@@ -17,7 +17,7 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>4.0.1-stable</string>
+    <string>4.1.0-stable</string>
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <false/>
 	<key>CFBundleVersion</key>
