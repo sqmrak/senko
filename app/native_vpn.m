@@ -77,6 +77,41 @@ static id SenkoNativeFindManager(NSArray *managers) {
     return nil;
 }
 
+/* stopVPNTunnel returns while the extension is still going down, and a start
+   issued in that window is dropped, which left a server switch on a dead card */
+static void SenkoNativeWaitStopped(id connection, void (^completion)(NSError *)) {
+    NSInteger (*statusOf)(id, SEL) = (NSInteger (*)(id, SEL))objc_msgSend;
+    SEL statusSel = @selector(status);
+    void (^done)(NSError *) = [completion copy];
+    __block BOOL finished = NO;
+    __block id observer = nil;
+    void (^finish)(NSError *) = ^(NSError *error) {
+        if (finished) return;
+        finished = YES;
+        [[NSNotificationCenter defaultCenter] removeObserver:observer];
+        [observer release];
+        observer = nil;
+        SenkoNativeFinish(done, error);
+        [done release];
+    };
+    observer = [[[NSNotificationCenter defaultCenter]
+        addObserverForName:@"NEVPNStatusDidChangeNotification"
+                    object:connection
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *note) {
+        (void)note;
+        if (statusOf(connection, statusSel) <= 1) finish(nil);
+    }] retain];
+    if (statusOf(connection, statusSel) <= 1) {
+        finish(nil);
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC),
+                   dispatch_get_main_queue(), ^{
+        finish(SenkoNativeError(@"native VPN did not stop in time"));
+    });
+}
+
 static void SenkoNativeReadTraffic(id manager,
                                    void (^completion)(BOOL, uint64_t, uint64_t)) {
     id connection = manager ? ((id (*)(id, SEL))objc_msgSend)(
@@ -216,9 +251,12 @@ static void SenkoNativeReadTraffic(id manager,
         _manager = [manager retain];
         id connection = ((id (*)(id, SEL))objc_msgSend)(
             manager, @selector(connection));
-        if (connection)
-            ((void (*)(id, SEL))objc_msgSend)(connection, @selector(stopVPNTunnel));
-        SenkoNativeFinish(completion, nil);
+        if (!connection) {
+            SenkoNativeFinish(completion, nil);
+            return;
+        }
+        ((void (*)(id, SEL))objc_msgSend)(connection, @selector(stopVPNTunnel));
+        SenkoNativeWaitStopped(connection, completion);
     });
 }
 
