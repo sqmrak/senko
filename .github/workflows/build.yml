@@ -1,0 +1,117 @@
+name: Build Senko DEB
+
+on:
+  push:
+    branches: [ "**" ]
+    tags: [ "v*" ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: false
+
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang llvm zstd libssl-dev git curl wget xz-utils pkg-config libtext-template-perl cmake
+          # Install ldid binary
+          sudo curl -sSL "https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64" -o /usr/local/bin/ldid
+          sudo chmod +x /usr/local/bin/ldid
+
+      - name: Setup Theos and iOS Toolchain
+        run: |
+          git clone --recursive https://github.com/theos/theos.git ~/theos
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+          
+          # Download verified Swift/LLVM toolchain for iOS on Linux
+          mkdir -p ~/theos/toolchain/linux/iphone
+          curl -sSL "https://github.com/CRKatri/llvm-project/releases/download/swift-5.3.2-RELEASE/swift-5.3.2-RELEASE-ubuntu20.04.tar.zst" -o /tmp/toolchain.tar.zst
+          zstd -d /tmp/toolchain.tar.zst -o /tmp/toolchain.tar
+          tar -xf /tmp/toolchain.tar -C ~/theos/toolchain/linux/iphone --strip-components=1
+          
+          mkdir -p ~/theos/toolchain/linux/iphone/bin
+          ln -sf /usr/local/bin/ldid ~/theos/toolchain/linux/iphone/bin/ldid
+          [ ! -f ~/theos/toolchain/linux/iphone/bin/llvm-ar ] && ln -sf $(which llvm-ar || ls /usr/bin/llvm-ar* | head -n1 || which ar) ~/theos/toolchain/linux/iphone/bin/llvm-ar || true
+          [ ! -f ~/theos/toolchain/linux/iphone/bin/llvm-ranlib ] && ln -sf $(which llvm-ranlib || ls /usr/bin/llvm-ranlib* | head -n1 || which ranlib) ~/theos/toolchain/linux/iphone/bin/llvm-ranlib || true
+          [ ! -f ~/theos/toolchain/linux/iphone/bin/lipo ] && ln -sf ~/theos/toolchain/linux/iphone/bin/llvm-lipo ~/theos/toolchain/linux/iphone/bin/lipo || true
+          [ ! -f ~/theos/toolchain/linux/iphone/bin/llvm-nm ] && ln -sf $(which llvm-nm || ls /usr/bin/llvm-nm* | head -n1 || which nm) ~/theos/toolchain/linux/iphone/bin/llvm-nm || true
+          [ ! -f ~/theos/toolchain/linux/iphone/bin/strip ] && ln -sf $(which llvm-strip || ls /usr/bin/llvm-strip* | head -n1 || which strip) ~/theos/toolchain/linux/iphone/bin/strip || true
+          
+          # Download iOS SDKs
+          rm -rf ~/theos/sdks
+          git clone --depth=1 https://github.com/theos/sdks.git ~/theos/sdks
+          
+          # Fix missing stubs in iPhoneOS9.3.sdk (liblaunch.tbd and libc basic symbols like memcpy/memset)
+          if [ -f ~/theos/sdks/iPhoneOS10.3.sdk/usr/lib/system/liblaunch.tbd ]; then
+            cp ~/theos/sdks/iPhoneOS10.3.sdk/usr/lib/system/liblaunch.tbd ~/theos/sdks/iPhoneOS9.3.sdk/usr/lib/system/liblaunch.tbd
+          fi
+          if [ -f ~/theos/sdks/iPhoneOS10.3.sdk/usr/lib/system/libsystem_c.tbd ]; then
+            cp ~/theos/sdks/iPhoneOS10.3.sdk/usr/lib/system/libsystem_c.tbd ~/theos/sdks/iPhoneOS9.3.sdk/usr/lib/system/libsystem_c.tbd
+          fi
+          
+          echo "SENKO_TC=$HOME/theos/toolchain/linux/iphone/bin" >> $GITHUB_ENV
+          echo "SENKO_SDK_V64=$HOME/theos/sdks/iPhoneOS14.5.sdk" >> $GITHUB_ENV
+          echo "SENKO_SDK_V7=$HOME/theos/sdks/iPhoneOS9.3.sdk" >> $GITHUB_ENV
+          echo "SENKO_CRT_V7=$HOME/theos/sdks/iPhoneOS9.3.sdk/usr/lib/crt1.o" >> $GITHUB_ENV
+
+      - name: Checkout dependencies
+        run: |
+          mkdir -p ~/deps
+          
+          # OpenSSL 3.5 (needed for QUIC API)
+          if [ ! -d ~/deps/openssl ]; then
+            git clone --depth 1 --branch openssl-3.5 https://github.com/openssl/openssl.git ~/deps/openssl
+          fi
+          echo "SENKO_OPENSSL_SRC=$HOME/deps/openssl" >> $GITHUB_ENV
+          echo "SENKO_OSSL_V64=$HOME/deps/openssl-arm64" >> $GITHUB_ENV
+          echo "SENKO_OSSL_V7=$HOME/deps/openssl-armv7" >> $GITHUB_ENV
+          
+          # ngtcp2 & nghttp3 (with submodules for sfparse)
+          if [ ! -d ~/deps/ngtcp2 ]; then
+            git clone --depth 1 --recurse-submodules https://github.com/ngtcp2/ngtcp2.git ~/deps/ngtcp2
+          fi
+          if [ ! -d ~/deps/nghttp3 ]; then
+            git clone --depth 1 --recurse-submodules https://github.com/ngtcp2/nghttp3.git ~/deps/nghttp3
+          fi
+          echo "SENKO_NGTCP2_SRC=$HOME/deps/ngtcp2" >> $GITHUB_ENV
+          echo "SENKO_NGHTTP3_SRC=$HOME/deps/nghttp3" >> $GITHUB_ENV
+          echo "SENKO_QUIC=$HOME/deps/quic" >> $GITHUB_ENV
+          
+          # mbedtls
+          echo "SENKO_MBED_SRC=$HOME/deps/mbedtls-src" >> $GITHUB_ENV
+          echo "SENKO_MBED=$HOME/deps/mbedtls-out" >> $GITHUB_ENV
+          
+          # xray-core pinned commit
+          if [ ! -d ~/deps/xray-core ]; then
+            mkdir -p ~/deps/xray-core
+            git -C ~/deps/xray-core init
+            git -C ~/deps/xray-core remote add origin https://github.com/XTLS/Xray-core.git
+            git -C ~/deps/xray-core fetch --depth 1 origin 2ec1657c03a4c368bfabc31e04df0d2c3f1d50a5
+            git -C ~/deps/xray-core checkout FETCH_HEAD
+          fi
+          echo "SENKO_CORE_SRC=$HOME/deps/xray-core" >> $GITHUB_ENV
+          echo "SENKO_GO=$(which go)" >> $GITHUB_ENV
+
+      - name: Build Debian Package
+        run: |
+          chmod +x build_deb.sh scripts/*.sh
+          ./build_deb.sh
+
+      - name: Upload DEB Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: senko-deb
+          path: "*.deb"
+          if-no-files-found: error
