@@ -27,6 +27,28 @@ for dir in "${NGTCP2}/lib" "${NGHTTP3}/lib"; do
   [[ -d "${dir}" ]] || { echo "missing ${dir}" >&2; exit 1; }
 done
 
+mkdir -p "${NGTCP2}/lib/includes/ngtcp2"
+cat << 'EOF' > "${NGTCP2}/lib/includes/ngtcp2/version.h"
+#ifndef NGTCP2_VERSION_H
+#define NGTCP2_VERSION_H
+#define NGTCP2_VERSION "1.6.0"
+#define NGTCP2_VERSION_NUM 0x010600
+#endif
+EOF
+
+mkdir -p "${NGHTTP3}/lib/includes/nghttp3"
+cat << 'EOF' > "${NGHTTP3}/lib/includes/nghttp3/version.h"
+#ifndef NGHTTP3_VERSION_H
+#define NGHTTP3_VERSION_H
+#define NGHTTP3_VERSION "1.4.0"
+#define NGHTTP3_VERSION_NUM 0x010400
+#endif
+EOF
+mkdir -p "${NGHTTP3}/lib/sfparse/sfparse"
+[ -f "${NGHTTP3}/lib/sfparse/sfparse.h" ] && ln -sf "${NGHTTP3}/lib/sfparse/sfparse.h" "${NGHTTP3}/lib/sfparse/sfparse/sfparse.h" || true
+[ -f "${NGHTTP3}/lib/sfparse.h" ] && ln -sf "${NGHTTP3}/lib/sfparse.h" "${NGHTTP3}/lib/sfparse/sfparse.h" || true
+[ -f "${NGHTTP3}/lib/sfparse.h" ] && ln -sf "${NGHTTP3}/lib/sfparse.h" "${NGHTTP3}/lib/sfparse/sfparse/sfparse.h" || true
+
 # ngtcp2_crypto_ossl needs SSL_set_quic_tls_cbs, which only openssl 3.5 has
 check_openssl() {
   local ossl="$1"
@@ -55,7 +77,7 @@ build_arch() {
     -D_DARWIN_C_SOURCE
     -I"${NGTCP2}/lib" -I"${NGTCP2}/lib/includes" -I"${NGTCP2}/crypto"
     -I"${NGTCP2}/crypto/includes" -I"${NGHTTP3}/lib" -I"${NGHTTP3}/lib/includes"
-    -I"${ossl}/include")
+    -I"${NGHTTP3}/lib/sfparse" -I"${ossl}/include")
 
   local src
   for src in "${NGTCP2}"/lib/*.c "${NGTCP2}/crypto/shared.c" "${NGTCP2}/crypto/ossl/ossl.c"; do

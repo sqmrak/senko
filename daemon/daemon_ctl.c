@@ -417,8 +417,12 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
             int pin = d->settings.force_backend;
 /* a pin is respected even when it cannot work: the backend names the reason
    it will not run on this device, which is the answer the tester came for */
+            /* On Apple A7 or iOS 12, Hysteria2 runs natively and reliably via the utun
+               backend (ngtcp2/nghttp3); heavy senko-core is used only when explicitly pinned */
+            int hy2_prefers_utun = (s->proto == VL_PROTO_HYSTERIA2) &&
+                (senko_ios_major() <= 12 || senko_is_apple_a7());
             int core_attempted = pin == SENKO_BACKEND_CORE ||
-                (pin == SENKO_BACKEND_AUTO && senko_core_backend_supported());
+                (pin == SENKO_BACKEND_AUTO && senko_core_backend_supported() && !hy2_prefers_utun);
 /* senko-core reads geo sets from the dat files but cannot name an app, so a
    profile with app rules, or with geo rules and no dat yet, runs on the utun
    backend, which decides them itself. a
@@ -450,7 +454,7 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
                             backend_reason[0] ? backend_reason : "unknown error");
 /* ios 13 rootful kills the core at exec with status 137, and an unreadable
    roots file stops it too: auto retries once on the utun backend, a pin does not */
-                    if (pin == SENKO_BACKEND_AUTO && !quic_only) {
+                    if (pin == SENKO_BACKEND_AUTO) {
                         fprintf(stderr, "senkod: falling back from senko-core to the utun backend\n");
                         backend_reason[0] = '\0';
                         run_utun = 1;

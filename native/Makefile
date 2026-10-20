@@ -13,7 +13,7 @@ CFLAGS := -fno-objc-arc -fblocks -fapplication-extension -Wall -Wextra -O2 \
 	$(ARCH) -isysroot $(SDK) -I. -I$(SDK)/usr/include
 # the go archive keeps ~50k local symbols the final clang link would copy in;
 # -x drops them before ldid signs, where build_deb.sh's strip would break the seal
-LDFLAGS := $(ARCH) -isysroot $(SDK) -fapplication-extension -Wl,-dead_strip -Wl,-x \
+LDFLAGS := $(ARCH) -isysroot $(SDK) -fapplication-extension -Wl,-dead_strip -Wl,-x -Wl,-segalign,0x4000 -Wl,-undefined,dynamic_lookup \
 	-framework Foundation -framework NetworkExtension -framework CoreFoundation \
 	-framework Security -lresolv -lobjc
 
@@ -27,10 +27,8 @@ CORE_SCRIPT := ../scripts/build_native_core.sh
 all: $(APPX)/SenkoTunnel
 
 $(ARCHIVE): $(CORE_SCRIPT) ../scripts/ensure_senko_core_distro.sh \
-		../scripts/prepare_core_overlay.sh ../scripts/patches/senko-core-tun-udp.patch \
 		../scripts/patches/senko-core-trim-distro.patch \
-		../scripts/patches/senko-core-trim-conf.patch \
-		../scripts/patches/go-runtime-procyield-ios.patch go/main.go go/go.mod
+		../scripts/patches/senko-core-trim-conf.patch go/main.go go/go.mod
 	mkdir -p $(dir $@)
 	SENKO_GO=$(GO) SENKO_TC=$(TC) SENKO_SDK_V64=$(SDK) SENKO_NATIVE_MIN_IOS=9.0 \
 	SENKO_CORE_SRC=$(SENKO_CORE_SOURCE) $(CORE_SCRIPT) $@
