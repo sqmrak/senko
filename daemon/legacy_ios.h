@@ -15,4 +15,7 @@ int senko_ios_major_from_plist(const char *xml);
    whose SystemVersion.plist is a binary property list */
 int senko_ios_major_from_darwin(const char *release);
 
+/* returns 1 if running on Apple A7 hardware (iPad4,1-4,5, iPhone6,1-6,2) */
+int senko_is_apple_a7(void);
+
 #endif

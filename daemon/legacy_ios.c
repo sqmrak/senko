@@ -98,3 +98,21 @@ const char *senko_ios_major_source(void) {
     (void)ios_major_detect(&source);
     return source;
 }
+
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
+
+int senko_is_apple_a7(void) {
+#if defined(__APPLE__)
+    char model[64];
+    size_t model_len = sizeof model;
+    if (sysctlbyname("hw.machine", model, &model_len, NULL, 0) == 0 && model_len > 0) {
+        /* Apple A7: iPad4,1 - iPad4,3 (iPad Air 1), iPad4,4 - iPad4,6 (iPad mini 2),
+           iPad4,7 - iPad4,9 (iPad mini 3), iPhone6,1 - iPhone6,2 (iPhone 5s) */
+        if (strncmp(model, "iPad4,", 6) == 0 || strncmp(model, "iPhone6,", 8) == 0)
+            return 1;
+    }
+#endif
+    return 0;
+}
