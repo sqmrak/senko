@@ -734,13 +734,15 @@ int main(void) {
         g_fetch.body_cut = 0;
 
         size_t padding = 600 * 1024;
-        char *large = malloc(padding + 2048);
+        size_t tail_cap = 2048;
+        const char head[] = "[{\"remarks\":\"large\",\"padding\":\"";
+        size_t head_len = sizeof head - 1;
+        char *large = malloc(head_len + padding + tail_cap);
         ok("allocate large feed", large != NULL);
         if (large) {
-            const char head[] = "[{\"remarks\":\"large\",\"padding\":\"";
-            memcpy(large, head, sizeof head - 1);
-            memset(large + sizeof head - 1, 'x', padding);
-            snprintf(large + sizeof head - 1 + padding, 2048,
+            memcpy(large, head, head_len);
+            memset(large + head_len, 'x', padding);
+            snprintf(large + head_len + padding, tail_cap,
                 "\",\"outbounds\":[{\"protocol\":\"vless\",\"settings\":{\"address\":\"late.example\","
                 "\"port\":443,\"id\":\"11111111-1111-4111-8111-111111111111\",\"encryption\":\"none\"}}]}]");
             g_fetch.blob = large;
