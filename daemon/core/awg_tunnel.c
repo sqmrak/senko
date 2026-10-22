@@ -73,6 +73,39 @@ static size_t inner_packet_length(const uint8_t *packet, size_t packet_len) {
     return packet_len;
 }
 
+/* 1 when the counter was accepted before or has fallen out of the window */
+static int replay_seen(const awg_tunnel_t *tunnel, uint64_t counter) {
+    if (!tunnel->have_recv_counter || counter > tunnel->recv_counter) return 0;
+    uint64_t distance = tunnel->recv_counter - counter;
+    if (distance >= AWG_REPLAY_BITS) return 1;
+    size_t slot = (size_t)(counter % AWG_REPLAY_BITS);
+    return (tunnel->recv_window[slot / 64] >> (slot % 64)) & 1U;
+}
+
+/* only a datagram that authenticated reaches this, or a forged counter far
+   ahead would push the window past the real ones */
+static void replay_mark(awg_tunnel_t *tunnel, uint64_t counter) {
+    if (!tunnel->have_recv_counter) {
+        memset(tunnel->recv_window, 0, sizeof tunnel->recv_window);
+        tunnel->recv_counter = counter;
+        tunnel->have_recv_counter = 1;
+    } else if (counter > tunnel->recv_counter) {
+        uint64_t advance = counter - tunnel->recv_counter;
+        if (advance >= AWG_REPLAY_BITS) {
+            memset(tunnel->recv_window, 0, sizeof tunnel->recv_window);
+        } else {
+            /* the slots the window moves onto belonged to counters it forgot */
+            for (uint64_t n = tunnel->recv_counter + 1; n <= counter; ++n) {
+                size_t slot = (size_t)(n % AWG_REPLAY_BITS);
+                tunnel->recv_window[slot / 64] &= ~(UINT64_C(1) << (slot % 64));
+            }
+        }
+        tunnel->recv_counter = counter;
+    }
+    size_t slot = (size_t)(counter % AWG_REPLAY_BITS);
+    tunnel->recv_window[slot / 64] |= UINT64_C(1) << (slot % 64);
+}
+
 void awg_tunnel_init(awg_tunnel_t *tunnel, const awg_config_t *cfg) {
     if (!tunnel) return;
     memset(tunnel, 0, sizeof *tunnel);
@@ -160,20 +193,7 @@ awg_tun_status_t awg_tunnel_open(awg_tunnel_t *tunnel,
         read_le32(hdr + 4) != tunnel->handshake.sender_index)
         return AWG_TUN_ERR_FORMAT;
     uint64_t counter = read_le64(hdr + 8);
-    uint64_t window = tunnel->recv_window;
-    if (tunnel->have_recv_counter) {
-        if (counter > tunnel->recv_counter) {
-            uint64_t shift = counter - tunnel->recv_counter;
-            window = shift >= 64 ? 1 : (window << shift) | 1U;
-        } else {
-            uint64_t distance = tunnel->recv_counter - counter;
-            if (distance >= 64 || (window & (UINT64_C(1) << distance)))
-                return AWG_TUN_ERR_REPLAY;
-            window |= UINT64_C(1) << distance;
-        }
-    } else {
-        window = 1;
-    }
+    if (replay_seen(tunnel, counter)) return AWG_TUN_ERR_REPLAY;
     size_t plain_len = packet_len - prefix - AWG_TRANSPORT_FIXED;
     if (plain_len > cap) return AWG_TUN_ERR_SPACE;
     uint8_t nonce[12];
@@ -183,10 +203,7 @@ awg_tun_status_t awg_tunnel_open(awg_tunnel_t *tunnel,
     OPENSSL_cleanse(nonce, sizeof nonce);
     if (!ok) return AWG_TUN_ERR_AUTH;
     if (packet_len > tunnel->udp_window) tunnel->udp_window = (uint32_t)packet_len;
-    tunnel->recv_window = window;
-    if (!tunnel->have_recv_counter || counter > tunnel->recv_counter)
-        tunnel->recv_counter = counter;
-    tunnel->have_recv_counter = 1;
+    replay_mark(tunnel, counter);
     *out_len = inner_packet_length(out, plain_len);
     return AWG_TUN_OK;
 }

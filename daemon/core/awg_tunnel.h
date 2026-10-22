@@ -20,11 +20,20 @@ typedef enum {
     AWG_TUN_ERR_CRYPTO = -6
 } awg_tun_status_t;
 
+/* the kernel implementation of wireguard remembers 8192 counters. wifi
+   retries and cellular paths deliver datagrams dozens of packets late, and a
+   window of 64 counted those as replays and dropped them, which a tcp flow
+   pays for with a retransmit and a smaller window */
+#define AWG_REPLAY_BITS  8192
+#define AWG_REPLAY_WORDS (AWG_REPLAY_BITS / 64)
+
 typedef struct {
     awg_handshake_t handshake;
     uint64_t send_counter;
     uint64_t recv_counter;
-    uint64_t recv_window;
+    /* ring of seen counters: bit n of the ring says that counter n was
+       accepted, and a counter maps to its slot by n modulo AWG_REPLAY_BITS */
+    uint64_t recv_window[AWG_REPLAY_WORDS];
     uint32_t udp_window;
     int have_recv_counter;
 } awg_tunnel_t;
