@@ -213,6 +213,12 @@ int main(void) {
     size_t opened_len = 0;
     ssize_t got;
 
+    /* the loop opens by telling the server its keys work */
+    got = recv_wait(udp[1], wire, sizeof wire, 2000);
+    ok("the loop opens with a keepalive",
+       got > 0 && awg_tunnel_open(&server, wire, (size_t)got, opened, sizeof opened,
+                                  &opened_len) == AWG_TUN_OK && opened_len == 0);
+
     /* a flow the rules leave to the server is sealed unchanged */
     size_t len = pkt_udp4(packet, APP, 5000, ABROAD, 443, (const uint8_t *)"quic", 4);
     ok("a datagram abroad is written", send_frame(dev[1], packet, len) > 0);

@@ -98,11 +98,16 @@ int main(void) {
     uint8_t frame[256], wire[512], opened[512];
     size_t opened_len = 0, wire_len = 0;
 
+    ssize_t got = recv_wait(udp[1], wire, sizeof wire, 2000);
+    ok("a started link announces its keys with a keepalive",
+       got > 0 && awg_tunnel_open(&server, wire, (size_t)got, opened, sizeof opened,
+                                  &opened_len) == AWG_TUN_OK && opened_len == 0);
+
     frame[0] = frame[1] = frame[2] = 0;
     frame[3] = UTUN_FAMILY_INET;
     memcpy(frame + 4, ipv4_packet, sizeof ipv4_packet);
     ok("a packet goes into the device", write(dev[1], frame, 4 + sizeof ipv4_packet) > 0);
-    ssize_t got = recv_wait(udp[1], wire, sizeof wire, 2000);
+    got = recv_wait(udp[1], wire, sizeof wire, 2000);
     ok("it reaches the server sealed",
        got > 0 && awg_tunnel_open(&server, wire, (size_t)got, opened, sizeof opened,
                                   &opened_len) == AWG_TUN_OK &&

@@ -242,6 +242,13 @@ awg_link_status_t awg_link_begin(awg_link_t *link, char *reason, size_t reason_c
             snprintf(reason, reason_cap, "amneziawg timer random generation failed");
         return AWG_LINK_ERR_EXPIRED;
     }
+    /* a responder starts sending on new keys only after a packet sealed with
+       them arrives, so a link with nothing to send would leave the server's
+       first packets waiting for a timer */
+    if (send_keepalive(link) != 0) {
+        set_reason(reason, reason_cap, "the udp socket to the server failed (errno %d)", errno);
+        return AWG_LINK_ERR_UDP;
+    }
     return AWG_LINK_RUNNING;
 }
 
@@ -304,7 +311,8 @@ awg_link_status_t awg_link_service(awg_link_t *link, int udp_readable,
 }
 
 awg_link_status_t awg_link_run(awg_link_t *link, char *reason, size_t reason_cap) {
-    if (awg_link_begin(link, reason, reason_cap) != AWG_LINK_RUNNING) return AWG_LINK_ERR_EXPIRED;
+    awg_link_status_t begun = awg_link_begin(link, reason, reason_cap);
+    if (begun != AWG_LINK_RUNNING) return begun;
     for (;;) {
         awg_link_status_t timers = run_timers(link, reason, reason_cap);
         if (timers != AWG_LINK_RUNNING) return timers;
