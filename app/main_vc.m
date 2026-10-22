@@ -203,7 +203,7 @@ static void SenkoDisableInjectedStatusBadge(void) {
 
 - (void)didRotateFromInterfaceOrientation:(UIInterfaceOrientation)io {
     (void)io;
-    if (_boyField && SenkoThemeIsBoykisser())
+    if (_boyField)
         [self syncBoykisserField];
 }
 
@@ -247,6 +247,8 @@ static void SenkoDisableInjectedStatusBadge(void) {
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
     [nc addObserver:self selector:@selector(themeDidChange:)
                name:SenkoThemeDidChangeNotification object:nil];
+    [nc addObserver:self selector:@selector(syncBoykisserField)
+               name:SenkoSnowDidChangeNotification object:nil];
     [nc addObserver:self selector:@selector(languageDidChange:)
                name:SenkoLanguageDidChangeNotification object:nil];
     /* core animation drops layer animations when the app is backgrounded, so
@@ -316,7 +318,7 @@ static void SenkoDisableInjectedStatusBadge(void) {
                    forControlEvents:UIControlEventTouchUpInside];
     [_picker addSubview:_emptyState];
 
-    if (SenkoThemeIsBoykisser())
+    if (SenkoThemeIsBoykisser() || SenkoSnowEnabled())
         [self syncBoykisserField];
     if (SenkoThemeIsFrutigeraero())
         [self syncBubbleField];

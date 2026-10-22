@@ -817,6 +817,7 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"App", @"Приложение");
     SenkoAddTranslation(@"Advanced", @"Дополнительно");
     SenkoAddTranslation(@"Quick connect", @"Быстрое подключение");
+    SenkoAddTranslation(@"Falling snow", @"Падающий снег");
     SenkoAddTranslation(@"Theme", @"Тема");
     SenkoAddTranslation(@"Backup", @"Резервная копия");
     SenkoAddTranslation(@"DNS", @"DNS");
@@ -1034,6 +1035,7 @@ static void SenkoBuildTranslations(void) {
     SenkoAddChineseTranslation(@"App", @"应用");
     SenkoAddChineseTranslation(@"Advanced", @"高级");
     SenkoAddChineseTranslation(@"Quick connect", @"快速连接");
+    SenkoAddChineseTranslation(@"Falling snow", @"飘落的雪花");
     SenkoAddChineseTranslation(@"Theme", @"主题");
     SenkoAddChineseTranslation(@"Backup", @"备份");
     SenkoAddChineseTranslation(@"DNS", @"DNS");

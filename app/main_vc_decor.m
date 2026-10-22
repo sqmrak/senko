@@ -129,9 +129,18 @@ static void SenkoPlaceBehind(UIView *view, UIView *root) {
 }
 
 - (void)syncBoykisserField {
-    if (SenkoThemeIsBoykisser()) {
+    BOOL snow = SenkoSnowEnabled();
+/* snow replaces the sprites a theme drops, so a field of the other kind goes away */
+    if (_boyField && [_boyField isSnow] != snow) {
+        [_boyField stop];
+        [_boyField removeFromSuperview];
+        [_boyField release];
+        _boyField = nil;
+    }
+    if (snow || SenkoThemeIsBoykisser()) {
         if (!_boyField) {
-            _boyField = [[SenkoBoykisserField alloc] initWithFrame:self.view.bounds];
+            _boyField = snow ? [[SenkoBoykisserField alloc] initSnowWithFrame:self.view.bounds]
+                             : [[SenkoBoykisserField alloc] initWithFrame:self.view.bounds];
             _boyField.autoresizingMask =
                 UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
             _boyField.tag = 9002;

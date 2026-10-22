@@ -8,7 +8,9 @@
 
 enum { kBoyMaxPhone = 10 };
 enum { kBoyMaxPad   = 16 };
-enum { kBoyMax      = 16 };
+enum { kSnowPhone   = 32 };
+enum { kSnowPad     = 48 };
+enum { kBoyMax      = 48 };
 
 typedef struct {
     CGFloat x, y;
@@ -17,6 +19,7 @@ typedef struct {
     CGFloat scale;
     CGFloat alpha;
     CGFloat w, h;
+    CGFloat phase, vphase, sway;
     CALayer *layer;
 } boy_flake_t;
 
@@ -27,6 +30,7 @@ typedef struct {
     BOOL _running;
     BOOL _paused;
     BOOL _isPad;
+    BOOL _snow;
     UIImage *_sprite;
     CGSize _laidSize;
     CFTimeInterval _lastTs;
@@ -66,6 +70,29 @@ static UIImage *BoySprite(NSString *name, BOOL pad) {
     return out;
 }
 
+/* a soft white dot with a faint blue edge, so a flake still shows on a light theme */
+static UIImage *SnowSprite(void) {
+    static UIImage *sprite;
+    if (sprite) return sprite;
+    const CGFloat side = 32.0f;
+    UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 1.0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    CGFloat comps[8] = { 1, 1, 1, 1,  1, 1, 1, 0 };
+    CGFloat locs[2] = { 0.35f, 1.0f };
+    CGGradientRef grad = CGGradientCreateWithColorComponents(space, comps, locs, 2);
+    CGContextSetShadowWithColor(ctx, CGSizeZero, 2.0f,
+        [UIColor colorWithRed:0.45f green:0.58f blue:0.78f alpha:0.55f].CGColor);
+    CGPoint c = CGPointMake(side / 2, side / 2);
+    CGContextDrawRadialGradient(ctx, grad, c, 0, c, side / 2 - 3.0f, 0);
+    CGGradientRelease(grad);
+    CGColorSpaceRelease(space);
+    UIImage *out = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    sprite = [out retain];
+    return sprite;
+}
+
 static CGFloat boy_randf(CGFloat a, CGFloat b) {
     return a + ((CGFloat)(arc4random() % 10000) / 10000.0f) * (b - a);
 }
@@ -83,7 +110,16 @@ static CGFloat boy_randf(CGFloat a, CGFloat b) {
     CGFloat bh = self.bounds.size.height;
     if (bw < 1) bw = 320;
     if (bh < 1) bh = 480;
-    if (_isPad) {
+    if (_snow) {
+        f->scale = boy_randf(0.45f, 1.5f);
+        f->alpha = boy_randf(0.55f, 1.0f);
+/* small flakes fall slower than big ones, which reads as depth */
+        f->vy = boy_randf(26.0f, 40.0f) + 22.0f * f->scale;
+        f->vx = boy_randf(-5.0f, 5.0f);
+        f->sway = boy_randf(6.0f, 18.0f);
+        f->phase = boy_randf(0.0f, 6.2832f);
+        f->vphase = boy_randf(0.6f, 1.6f);
+    } else if (_isPad) {
         f->scale = boy_randf(0.85f, 1.45f);
         f->alpha = boy_randf(0.92f, 1.0f);
         f->vy = boy_randf(52.0f, 78.0f);
@@ -99,8 +135,8 @@ static CGFloat boy_randf(CGFloat a, CGFloat b) {
         f->y = boy_randf(-40, bh);
     else
         f->y = boy_randf(-(_baseH + 40.0f), -36.0f);
-    f->rot = boy_randf(-0.18f, 0.18f);
-    f->vrot = boy_randf(-0.28f, 0.28f);
+    f->rot = _snow ? 0.0f : boy_randf(-0.18f, 0.18f);
+    f->vrot = _snow ? 0.0f : boy_randf(-0.28f, 0.28f);
     f->h = _baseH * f->scale;
     f->w = f->h;
     if (_sprite && _sprite.size.height > 1)
@@ -112,19 +148,28 @@ static CGFloat boy_randf(CGFloat a, CGFloat b) {
     return [self initWithFrame:frame spriteName:@"boykisser"];
 }
 
+- (id)initSnowWithFrame:(CGRect)frame {
+    return [self initWithFrame:frame spriteName:nil snow:YES];
+}
+
 - (id)initWithFrame:(CGRect)frame spriteName:(NSString *)name {
+    return [self initWithFrame:frame spriteName:name snow:NO];
+}
+
+- (id)initWithFrame:(CGRect)frame spriteName:(NSString *)name snow:(BOOL)snow {
     if ((self = [super initWithFrame:frame])) {
+        _snow = snow;
         self.userInteractionEnabled = NO;
         self.backgroundColor = [UIColor clearColor];
         self.clipsToBounds = YES;
         self.opaque = NO;
         self.layer.shouldRasterize = NO;
         _isPad = BoyIsPad();
-        _count = _isPad ? kBoyMaxPad : kBoyMaxPhone;
-        _baseH = _isPad ? 110.0f : 70.0f; /* display pt at scale 1 */
+        _count = snow ? (_isPad ? kSnowPad : kSnowPhone) : (_isPad ? kBoyMaxPad : kBoyMaxPhone);
+        _baseH = snow ? (_isPad ? 16.0f : 12.0f) : (_isPad ? 110.0f : 70.0f); /* display pt at scale 1 */
         _paused = NO;
         _lastTs = 0;
-        _sprite = [BoySprite(name, _isPad) retain];
+        _sprite = [(snow ? SnowSprite() : BoySprite(name, _isPad)) retain];
         memset(_flakes, 0, sizeof _flakes);
         for (int i = 0; i < _count; ++i) {
             CALayer *L = [CALayer layer];
@@ -179,6 +224,10 @@ static CGFloat boy_randf(CGFloat a, CGFloat b) {
         boy_flake_t *f = &_flakes[i];
         f->y += f->vy * dt;
         f->x += f->vx * dt;
+        if (_snow) {
+            f->phase += f->vphase * dt;
+            f->x += sinf(f->phase) * f->sway * dt;
+        }
         f->rot += f->vrot * dt;
         if (f->y > bh + f->h || f->x < -f->w || f->x > bw + f->w) {
             [self resetFlake:f scatter:NO];
@@ -230,6 +279,10 @@ static CGFloat boy_randf(CGFloat a, CGFloat b) {
         _lastTs = 0;
     if (_link)
         _link.paused = _paused;
+}
+
+- (BOOL)isSnow {
+    return _snow;
 }
 
 - (BOOL)isRunning {

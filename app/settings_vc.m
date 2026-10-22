@@ -57,6 +57,7 @@ typedef enum {
     SenkoRowAttempts,
     SenkoRowSubRefresh,
     SenkoRowTheme,
+    SenkoRowSnow,
     SenkoRowLanguage,
     SenkoRowStats,
     SenkoRowLogs,
@@ -75,7 +76,7 @@ static const SenkoSettingsRow kSenkoMainRows[] = {
     SenkoRowFailover, SenkoRowAttempts, SenkoRowSubRefresh
 };
 static const SenkoSettingsRow kSenkoAppRows[] = {
-    SenkoRowTheme, SenkoRowLanguage, SenkoRowStats, SenkoRowLogs,
+    SenkoRowTheme, SenkoRowSnow, SenkoRowLanguage, SenkoRowStats, SenkoRowLogs,
     SenkoRowBackup, SenkoRowUpdate
 };
 static const SenkoSettingsRow kSenkoMoreRows[] = {
@@ -96,6 +97,7 @@ static const SenkoSettingsRowInfo kSenkoRowInfo[] = {
     [SenkoRowAttempts]     = { "Reconnect attempts",      "glyph-repeat.png" },
     [SenkoRowSubRefresh]   = { "Update subscriptions",    "glyph-cloud.png" },
     [SenkoRowTheme]        = { "Theme",                   "glyph-palette.png" },
+    [SenkoRowSnow]         = { "Falling snow",            "glyph-snow.png" },
     [SenkoRowLanguage]     = { "Language",                "glyph-globe.png" },
     [SenkoRowStats]        = { "Statistics",              "glyph-chart.png" },
     [SenkoRowLogs]         = { "System Logs",             "glyph-logs.png" },
@@ -512,6 +514,10 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
             cell.accessoryView = [self switchOn:[self daemonFlag:@"failover"]
                                         enabled:daemon action:@selector(failoverChanged:)];
             return cell;
+        case SenkoRowSnow:
+            cell.accessoryView = [self switchOn:SenkoSnowEnabled()
+                                        enabled:YES action:@selector(snowChanged:)];
+            return cell;
         case SenkoRowAttempts:
             cell.detailTextLabel.text = [self daemonValue:
                 SenkoAttemptLimitName([_settings objectForKey:@"reconnect_max_attempts"])];
@@ -598,6 +604,10 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
    in the app defaults the server list reads, not in the daemon */
 - (void)quickConnectChanged:(UISwitch *)sw {
     SenkoSetAutoServerEnabled(sw.on);
+}
+
+- (void)snowChanged:(UISwitch *)sw {
+    SenkoSetSnowEnabled(sw.on);
 }
 
 - (void)autoReconnectChanged:(UISwitch *)sw {

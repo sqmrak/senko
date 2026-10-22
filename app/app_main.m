@@ -229,6 +229,19 @@ void SenkoSetAutoServerEnabled(BOOL enabled) {
     [d synchronize];
 }
 
+NSString * const SenkoSnowDidChangeNotification = @"SenkoSnowDidChangeNotification";
+
+BOOL SenkoSnowEnabled(void) {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:SENKO_SNOW_KEY];
+}
+
+void SenkoSetSnowEnabled(BOOL enabled) {
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    [d setBool:enabled forKey:SENKO_SNOW_KEY];
+    [d synchronize];
+    [[NSNotificationCenter defaultCenter] postNotificationName:SenkoSnowDidChangeNotification object:nil];
+}
+
 NSString *SenkoFormatBytes(unsigned long long value) {
     double amount = (double)value;
     NSArray *units = SenkoLanguageIsRussian()

@@ -9,6 +9,7 @@
 #define SENKO_VERSION @"v4.1.0-stable"
 /* quick connect: the connect button dials whichever server answers fastest */
 #define SENKO_AUTO_SERVER_KEY @"SenkoAutoServer"
+#define SENKO_SNOW_KEY @"SenkoFallingSnow"
 #define SENKO_PINNED_SUB_URL_KEY @"SenkoPinnedSubscriptionURL"
 #define SENKO_AWG_PROFILE_KEY @"SenkoAWGProfilePath"
 #define SENKO_AWG_PROFILE_PATH @"/var/mobile/Library/Preferences/Senko/amneziawg.conf"
@@ -69,6 +70,10 @@ void SenkoFPSOverlaySetEnabled(BOOL enabled);
 NSString *SenkoAboutTLSMode(void);
 BOOL SenkoAutoServerEnabled(void);
 void SenkoSetAutoServerEnabled(BOOL enabled);
+/* falling snow on the main screen. it takes the place of whatever the theme drops */
+extern NSString * const SenkoSnowDidChangeNotification;
+BOOL SenkoSnowEnabled(void);
+void SenkoSetSnowEnabled(BOOL enabled);
 
 /* 1.2 MB style sizes and 3.4 Mbit/s style rates in the ui language */
 NSString *SenkoFormatBytes(unsigned long long value);
