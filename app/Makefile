@@ -16,6 +16,12 @@ ENTITLEMENTS ?= entitlements.plist
 TRIPLE  ?= arm-apple-darwin11
 CC      := $(TC)/clang -target $(TRIPLE) -B $(TC)
 ARCH    ?= -arch armv7 -miphoneos-version-min=4.3
+# ios 8 draws popovers and action sheets as empty dark boxes in an armv7 binary
+# whose sdk field reads 4.3, which is what the linker records from the deployment
+# target. builds up to 3.1.0 recorded 5.0 there and drew them correctly, so the
+# field is pinned while the deployment target stays 4.3
+LD_SDK_VERSION ?= $(if $(findstring armv7,$(ARCH)),5.0,)
+comma   := ,
 CFLAGS  := -fno-objc-arc -fblocks -Wall -Wextra -O2 $(EXTRA_CFLAGS) $(ARCH) -isysroot $(SDK) \
            -I. -Itheme -Ithird_party/zbar/include -Ithird_party/zbar/zbar \
            -Ithird_party/zbar/zbar/decoder -Ithird_party/zbar/zbar/qrcode
@@ -29,7 +35,8 @@ LDFLAGS := $(ARCH) -isysroot $(SDK) \
            -weak_framework AVFoundation \
            -weak_framework CoreMedia -weak_framework CoreVideo \
            -lz -liconv \
-           $(if $(CRT),-nostartfiles $(CRT),)
+           $(if $(CRT),-nostartfiles $(CRT),) \
+           $(if $(LD_SDK_VERSION),-Wl$(comma)-sdk_version$(comma)$(LD_SDK_VERSION),)
 
 ZBAR    := third_party/zbar
 FLAG_SRC := $(wildcard icons/flags/*.png)
