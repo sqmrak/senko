@@ -226,6 +226,13 @@ static void senkoClearStatus(void) {
             return;
         }
         [_nativeVPN startWithConfiguration:json serverAddress:nil completion:^(NSError *nativeError) {
+/* the system has no extension for the profile on this device, so the daemon
+   backend takes the tunnel and the toggle stays busy until it answers */
+            if ([[nativeError domain] isEqualToString:SenkoNativeVPNErrorDomain] &&
+                [nativeError code] == SenkoNativeVPNErrorProviderMissing) {
+                [self connectDaemonServerIndex:idx];
+                return;
+            }
             if (nativeError) {
                 [self setLastErr:[nativeError localizedDescription]];
                 [_state release]; _state = [@"error" copy];
@@ -332,7 +339,14 @@ static void senkoClearStatus(void) {
             }];
             return;
         }
-        [_ctl connectIndex:_selectedSrvIdx reply:^(NSString *reply) {
+        [self connectDaemonServerIndex:_selectedSrvIdx];
+    }];
+}
+
+/* the daemon owns the tunnel on this path: the senko-core or utun backend
+   behind senkod, with no extension profile involved */
+- (void)connectDaemonServerIndex:(int)idx {
+    [_ctl connectIndex:idx reply:^(NSString *reply) {
         NSString *errReason = nil;
         NSString *finalState = nil;
         if (reply) {
@@ -371,7 +385,6 @@ static void senkoClearStatus(void) {
         [_ctl listCatalog:^(NSArray *servers, NSArray *subs, NSArray *order) {
             if (servers) [self applyCatalog:servers subs:subs order:order];
             [self setToggleBusy:NO];
-        }];
         }];
     }];
 }

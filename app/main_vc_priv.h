@@ -292,6 +292,7 @@
 - (void)togglePressed;
 - (void)toggleAfterAWGCheck;
 - (void)connectSelectedServer;
+- (void)connectDaemonServerIndex:(int)idx;
 - (void)connectFastestServer;
 - (NSArray *)autoProbeCandidates;
 - (void)launchAutoProbes:(NSUInteger)generation;

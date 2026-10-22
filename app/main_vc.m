@@ -214,6 +214,7 @@ static void SenkoDisableInjectedStatusBadge(void) {
     [super viewDidLoad];
     _ctl = [[SenkoControl alloc] initWithSocketPath:SENKO_SOCK];
     _nativeVPN = [[SenkoNativeVPN alloc] init];
+    [_nativeVPN removeInvalidProfiles];
     SenkoDisableInjectedStatusBadge();
     _selectedSrvIdx = -1;
     _menuSubIdx = -1;

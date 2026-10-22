@@ -6,6 +6,8 @@
 #import "../daemon/core/control.h"
 
 static NSString * const SenkoNativeProviderID = @"com.senko.app.tunnel";
+static NSString * const SenkoNativeRejectedKey = @"SenkoNativeRejectedBuild";
+NSString * const SenkoNativeVPNErrorDomain = @"com.senko.native-vpn";
 
 static BOOL SenkoNativeOSAvailable(void) {
 #if !defined(__LP64__)
@@ -38,12 +40,32 @@ static void SenkoNativeTrafficFinish(void (^block)(BOOL, uint64_t, uint64_t),
     }
 }
 
-static NSError *SenkoNativeError(NSString *message) {
-    return [NSError errorWithDomain:@"com.senko.native-vpn"
-                                code:1
+static NSError *SenkoNativeErrorCode(NSInteger code, NSString *message) {
+    return [NSError errorWithDomain:SenkoNativeVPNErrorDomain
+                                code:code
                             userInfo:[NSDictionary dictionaryWithObject:
                                       (message ? message : @"native VPN failed")
                                       forKey:NSLocalizedDescriptionKey]];
+}
+
+static NSError *SenkoNativeError(NSString *message) {
+    return SenkoNativeErrorCode(1, message);
+}
+
+/* a rejection is kept per build: a new build gets one more try, because its
+   install runs uicache again */
+static BOOL SenkoNativeRejected(void) {
+    NSString *build = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"];
+    NSString *rejected = [[NSUserDefaults standardUserDefaults] stringForKey:SenkoNativeRejectedKey];
+    return build && [rejected isEqualToString:build];
+}
+
+static void SenkoNativeReject(void) {
+    NSString *build = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"];
+    if (!build) return;
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setObject:build forKey:SenkoNativeRejectedKey];
+    [defaults synchronize];
 }
 
 static id SenkoNativeManagerClass(void) {
@@ -117,6 +139,33 @@ static NSInteger SenkoNativeConnectionStatus(id manager) {
     return connection ? ((NSInteger (*)(id, SEL))objc_msgSend)(connection, @selector(status)) : 0;
 }
 
+/* finish is owned by the chain and released when the chain ends */
+static void SenkoNativeRemoveNext(NSMutableArray *queue, void (^finish)(NSError *)) {
+    if (![queue count]) {
+        finish(nil);
+        [finish release];
+        return;
+    }
+    id manager = [[queue objectAtIndex:0] retain];
+    [queue removeObjectAtIndex:0];
+    ((void (*)(id, SEL, void (^)(NSError *)))objc_msgSend)(manager,
+        @selector(removeFromPreferencesWithCompletionHandler:),
+        ^(NSError *removeError) {
+        [manager release];
+        if (removeError) {
+            finish(removeError);
+            [finish release];
+            return;
+        }
+        SenkoNativeRemoveNext(queue, finish);
+    });
+}
+
+/* removes the profiles one after another and reports the first failure */
+static void SenkoNativeRemove(NSArray *managers, void (^done)(NSError *)) {
+    SenkoNativeRemoveNext([[managers mutableCopy] autorelease], [done copy]);
+}
+
 static void SenkoNativeReadTraffic(id manager,
                                    void (^completion)(BOOL, uint64_t, uint64_t)) {
     id connection = manager ? ((id (*)(id, SEL))objc_msgSend)(
@@ -147,7 +196,7 @@ static void SenkoNativeReadTraffic(id manager,
 
 + (BOOL)available {
     return SenkoNativeOSAvailable() && SenkoNativeManagerClass() &&
-           SenkoNativeProtocolClass();
+           SenkoNativeProtocolClass() && !SenkoNativeRejected();
 }
 
 - (void)dealloc {
@@ -211,6 +260,14 @@ static void SenkoNativeReadTraffic(id manager,
         save(manager, @selector(saveToPreferencesWithCompletionHandler:),
              ^(NSError *saveError) {
             if (saveError) {
+                if ([[saveError domain] isEqualToString:@"NEVPNErrorDomain"] &&
+                    [saveError code] == 1 /* NEVPNErrorConfigurationInvalid */) {
+                    SenkoNativeReject();
+                    SenkoNativeFinish(completion, SenkoNativeErrorCode(
+                        SenkoNativeVPNErrorProviderMissing,
+                        @"the system refused the Senko packet tunnel profile"));
+                    return;
+                }
                 SenkoNativeFinish(completion, saveError);
                 return;
             }
@@ -219,6 +276,21 @@ static void SenkoNativeReadTraffic(id manager,
                  ^(NSError *reloadError) {
                 if (reloadError) {
                     SenkoNativeFinish(completion, reloadError);
+                    return;
+                }
+/* a profile that is still invalid after a fresh save has no extension the
+   system can run: Settings words it as "needs an update" and it never
+   starts. it is removed and the daemon backend takes the tunnel */
+                if (SenkoNativeConnectionStatus(manager) == 0) {
+                    SenkoNativeReject();
+                    SenkoNativeRemove([NSArray arrayWithObject:manager], ^(NSError *removeError) {
+                        if (removeError)
+                            NSLog(@"senko: could not remove the unusable VPN profile: %@",
+                                  removeError);
+                        SenkoNativeFinish(completion, SenkoNativeErrorCode(
+                            SenkoNativeVPNErrorProviderMissing,
+                            @"the system has no Senko packet tunnel extension"));
+                    });
                     return;
                 }
                 id connection = ((id (*)(id, SEL))objc_msgSend)(
@@ -235,22 +307,50 @@ static void SenkoNativeReadTraffic(id manager,
             });
         });
         };
-        /* a profile saved by an older install reads "needs an update" in Settings
-           and never starts, so it is removed and made again */
+        /* one profile belongs to the app. copies an older install left, and a
+           profile that reads "needs an update", are removed and made again */
+        NSMutableArray *stale = [NSMutableArray array];
+        id keep = found;
+        for (id manager in managers)
+            if (manager != found) [stale addObject:manager];
         if (found && SenkoNativeConnectionStatus(found) == 0) {
-            ((void (*)(id, SEL, void (^)(NSError *)))objc_msgSend)(found,
-                @selector(removeFromPreferencesWithCompletionHandler:),
-                ^(NSError *removeError) {
-                if (removeError) {
-                    SenkoNativeFinish(completion, SenkoNativeError(
-                        @"the Senko VPN profile needs an update, delete it in Settings, General, VPN and connect again"));
-                    return;
-                }
-                configure([[[SenkoNativeManagerClass() alloc] init] autorelease]);
-            });
+            [stale addObject:found];
+            keep = nil;
+        }
+        void (^proceed)(void) = ^{
+            configure(keep ? keep : [[[SenkoNativeManagerClass() alloc] init] autorelease]);
+        };
+        if (![stale count]) {
+            proceed();
             return;
         }
-        configure(found ? found : [[[SenkoNativeManagerClass() alloc] init] autorelease]);
+        SenkoNativeRemove(stale, ^(NSError *removeError) {
+            if (removeError) {
+                SenkoNativeFinish(completion, SenkoNativeError(
+                    @"the Senko VPN profile needs an update, delete it in Settings, General, VPN and connect again"));
+                return;
+            }
+            proceed();
+        });
+    });
+}
+
+- (void)removeInvalidProfiles {
+    if (!SenkoNativeOSAvailable() || !SenkoNativeManagerClass()) return;
+    SenkoNativeManagers(^(NSArray *managers, NSError *loadError) {
+        if (loadError) return;
+        NSMutableArray *invalid = [NSMutableArray array];
+/* a profile the user switched off for another VPN can read as invalid too, and
+   removing it would make the next connect ask for permission again */
+        for (id manager in managers)
+            if (SenkoNativeConnectionStatus(manager) == 0 &&
+                ((BOOL (*)(id, SEL))objc_msgSend)(manager, @selector(isEnabled)))
+                [invalid addObject:manager];
+        if (![invalid count]) return;
+        SenkoNativeRemove(invalid, ^(NSError *removeError) {
+            if (removeError)
+                NSLog(@"senko: could not remove an unusable VPN profile: %@", removeError);
+        });
     });
 }
 
