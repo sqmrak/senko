@@ -25,6 +25,10 @@
 #include <unistd.h>
 
 #define AWG_HANDSHAKE_TIMEOUT_MS 5000
+/* the stock datagram buffers drop the tail of a burst from the server while the
+   loop thread is busy decrypting, and each lost datagram is a tcp retransmit.
+   hysteria2 sizes its socket the same way */
+#define AWG_UDP_BUFFER (256 * 1024)
 
 int awg_backend_init(awg_backend_t *backend) {
     if (!backend) return -1;
@@ -71,6 +75,13 @@ static int resolve_endpoint(const awg_config_t *cfg, char *out, size_t cap,
     return ok ? 0 : -1;
 }
 
+static void size_udp_buffers(int fd) {
+    int size = AWG_UDP_BUFFER;
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof size) != 0 ||
+        setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &size, sizeof size) != 0)
+        fprintf(stderr, "senkod: amneziawg keeps the stock udp buffers (errno %d)\n", errno);
+}
+
 static const char *first_ipv4_dns(const awg_config_t *cfg, const char *fallback) {
     for (size_t i = 0; i < cfg->dns_count; ++i) {
         struct in_addr a;
@@ -110,6 +121,7 @@ static void *run(void *arg) {
     iface.ifindex = if_nametoindex(input.physical_ifname);
     b->udp_fd = direct_socket_bound(&iface, AF_INET, SOCK_DGRAM, why, sizeof why);
     if (b->udp_fd < 0) goto done;
+    size_udp_buffers(b->udp_fd);
     struct sockaddr_in server;
     memset(&server, 0, sizeof server);
     server.sin_family = AF_INET;
