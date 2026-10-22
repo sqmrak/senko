@@ -309,7 +309,6 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"Rules", @"Правила");
     SenkoAddTranslation(@"Block response", @"Ответ на блок");
     SenkoAddTranslation(@"Developer", @"Разработчик");
-    SenkoAddTranslation(@"@axi8229\nFull Apple A7 support and Hysteria stabilization", @"@axi8229\nПолная поддержка Apple A7 и стабилизация Hysteria");
     SenkoAddTranslation(@"What was chosen, checks, overrides and rescue",
                         @"Что выбралось, проверки, переключатели и аварийный раздел");
     SenkoAddTranslation(@"Rescue", @"Аварийный раздел");
@@ -945,7 +944,6 @@ static void SenkoBuildTranslations(void) {
     SenkoAddChineseTranslation(@"Validate, then replace configuration", @"验证后替换配置");
     SenkoAddChineseTranslation(@"Choose a Senko .deb package", @"选择 Senko .deb 软件包");
     SenkoAddChineseTranslation(@"Developer", @"开发者");
-    SenkoAddChineseTranslation(@"@axi8229\nFull Apple A7 support and Hysteria stabilization", @"@axi8229\n完整支持 Apple A7 并稳定 Hysteria");
     SenkoAddChineseTranslation(@"What was chosen, checks, overrides and rescue", @"选择项、检查、覆盖和恢复工具");
     SenkoAddChineseTranslation(@"Transport", @"传输");
     SenkoAddChineseTranslation(@"Security", @"安全");
