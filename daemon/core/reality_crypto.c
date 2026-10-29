@@ -1,5 +1,6 @@
 #include "reality_crypto.h"
 
+#include <limits.h>
 #include <string.h>
 
 #include <openssl/evp.h>
@@ -9,6 +10,14 @@
 #include <openssl/params.h>
 
 #include "third_party/mlkem768/kem.h"
+
+/* arm64 keeps openssl's assembly; the armv7 openssl has none, and the force
+   switch lets a neon host exercise this path in the tests */
+#if (defined(__arm__) && (defined(__ARM_NEON__) || defined(__ARM_NEON))) || \
+    defined(SENKO_FORCE_NEON_AEAD)
+#define RC_OWN_CHACHA 1
+#include "chacha_poly.inc"
+#endif
 
 rc_status_t rc_mlkem768_keygen(uint8_t pub[RC_MLKEM768_PUBLICKEYLEN],
                                uint8_t priv[RC_MLKEM768_SECRETKEYLEN]) {
@@ -301,7 +310,11 @@ rc_status_t rc_chacha20poly1305_seal(const uint8_t key[32], const uint8_t iv[RC_
                                      const uint8_t *pt, size_t pt_len,
                                      uint8_t *ct, uint8_t tag[RC_GCM_TAGLEN]) {
     if (!key || !iv || !tag || (pt_len && (!pt || !ct))) return RC_ERR_ARG;
-
+#ifdef RC_OWN_CHACHA
+    if (pt_len > INT_MAX || aad_len > INT_MAX) return RC_ERR_ARG;
+    cp_aead_seal(key, iv, aad, aad_len, pt, pt_len, ct, tag);
+    return RC_OK;
+#else
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (!ctx) return RC_ERR_CRYPTO;
 
@@ -319,6 +332,7 @@ rc_status_t rc_chacha20poly1305_seal(const uint8_t key[32], const uint8_t iv[RC_
 
     EVP_CIPHER_CTX_free(ctx);
     return rc;
+#endif
 }
 
 rc_status_t rc_chacha20poly1305_open(const uint8_t key[32], const uint8_t iv[RC_GCM_IVLEN],
@@ -327,7 +341,11 @@ rc_status_t rc_chacha20poly1305_open(const uint8_t key[32], const uint8_t iv[RC_
                                      const uint8_t tag[RC_GCM_TAGLEN],
                                      uint8_t *pt) {
     if (!key || !iv || !tag || (ct_len && (!ct || !pt))) return RC_ERR_ARG;
-
+#ifdef RC_OWN_CHACHA
+    if (ct_len > INT_MAX || aad_len > INT_MAX) return RC_ERR_ARG;
+    return cp_aead_open(key, iv, aad, aad_len, ct, ct_len, tag, pt) == 0
+        ? RC_OK : RC_ERR_CRYPTO;
+#else
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (!ctx) return RC_ERR_CRYPTO;
 
@@ -346,12 +364,17 @@ rc_status_t rc_chacha20poly1305_open(const uint8_t key[32], const uint8_t iv[RC_
 
     EVP_CIPHER_CTX_free(ctx);
     return rc;
+#endif
 }
 
 rc_status_t rc_chacha20_xor(const uint8_t key[32], const uint8_t nonce[12],
                             const uint8_t *in, uint8_t *out, size_t len) {
     if (!key || !nonce || (len && (!in || !out))) return RC_ERR_ARG;
-
+#ifdef RC_OWN_CHACHA
+    if (len > INT_MAX) return RC_ERR_ARG;
+    cp_chacha_xor(key, 0, nonce, in, out, len);
+    return RC_OK;
+#else
     /* openssl's chacha20 iv is a 4 byte little-endian block counter followed
        by the 12 byte nonce; amneziawg always starts the counter at zero */
     uint8_t iv[16] = {0};
@@ -370,6 +393,7 @@ rc_status_t rc_chacha20_xor(const uint8_t key[32], const uint8_t nonce[12],
 
     EVP_CIPHER_CTX_free(ctx);
     return rc;
+#endif
 }
 
 rc_status_t rc_hmac_sha512(const uint8_t *key, size_t key_len,

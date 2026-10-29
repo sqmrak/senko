@@ -69,7 +69,7 @@ HOST_TESTS = test_ctl_server test_autoconnect test_session_direct test_config_co
              test_app_proxy test_senko_core_config test_net_safe test_legacy_ios \
              test_subinfo test_profiles test_amnezia_bundle test_amnezia_qr test_happ_links \
              test_b64 test_traffic test_loop_traffic test_rules
-HOST_TESTS += test_dns_msg
+HOST_TESTS += test_dns_msg test_chacha_poly test_awg_tunnel_neon
 HOST_TESTS += test_dns_cache
 HOST_TESTS += test_trojan
 HOST_TESTS += test_shadowsocks
@@ -145,6 +145,8 @@ test: $(HOST_TESTS)
 	./test_plist_bundle_id
 	./test_app_owner
 	./test_dns_msg
+	./test_chacha_poly
+	./test_awg_tunnel_neon
 	./test_direct_dns
 	./test_dns_cache
 	./test_ctl_server
@@ -373,6 +375,17 @@ test_awg_split: test_awg_split.c packet_fixture.h $(AWG_SPLIT_SRC) $(DAEMON)/awg
 test_awg_tunnel: test_awg_tunnel.c $(CORE)/awg_tunnel.c $(CORE)/awg_tunnel.h \
                  $(CORE)/awg_handshake.c $(CORE)/awg_config.c $(CORE)/b64.c $(CORE)/reality_crypto.c $(MLKEM768_SRC)
 	$(CC) $(CFLAGS) $(TLS_CFLAGS) test_awg_tunnel.c $(CORE)/awg_tunnel.c \
+	      $(CORE)/awg_handshake.c $(CORE)/awg_config.c $(CORE)/b64.c $(CORE)/reality_crypto.c $(MLKEM768_SRC) \
+	      $(TIME) -o $@ $(TLS_LDFLAGS)
+
+test_chacha_poly: test_chacha_poly.c $(CORE)/chacha_poly.inc
+	$(CC) $(CFLAGS) $(TLS_CFLAGS) test_chacha_poly.c -o $@ $(TLS_LDFLAGS)
+
+# the armv7 build runs its own chacha20-poly1305, so the tunnel is checked on it too
+test_awg_tunnel_neon: test_awg_tunnel.c $(CORE)/awg_tunnel.c $(CORE)/awg_tunnel.h \
+                 $(CORE)/awg_handshake.c $(CORE)/awg_config.c $(CORE)/b64.c $(CORE)/reality_crypto.c \
+                 $(CORE)/chacha_poly.inc $(MLKEM768_SRC)
+	$(CC) $(CFLAGS) $(TLS_CFLAGS) -DSENKO_FORCE_NEON_AEAD test_awg_tunnel.c $(CORE)/awg_tunnel.c \
 	      $(CORE)/awg_handshake.c $(CORE)/awg_config.c $(CORE)/b64.c $(CORE)/reality_crypto.c $(MLKEM768_SRC) \
 	      $(TIME) -o $@ $(TLS_LDFLAGS)
 
