@@ -479,6 +479,8 @@ static void SenkoBuildTranslations(void) {
                         @"нет задания launchd для senkod: переустановите пакет");
     SenkoAddTranslation(@"senkod is not running and its log is empty",
                         @"senkod не запущен, его лог пуст");
+    SenkoAddTranslation(@"senkod is running but refused the control token: reboot the device or reinstall the package",
+                        @"senkod запущен, но не принял токен управления: перезагрузите устройство или переустановите пакет");
     SenkoAddTranslation(@"This device received a link back to the same address instead of a subscription feed. Check device access and ask the provider for the feed URL.",
                         @"Устройство получило ссылку на тот же адрес вместо списка серверов. Проверьте доступ устройства к подписке и запросите у провайдера ссылку на список.");
     SenkoAddTranslation(@"The Happ crypt5 bundle on this page could not be opened. It is either damaged or sealed with a key this build does not carry.",
@@ -1453,6 +1455,7 @@ static void SenkoBuildTranslations(void) {
     SenkoAddChineseTranslation(@"section moved", @"分组已移动");
     SenkoAddChineseTranslation(@"senkod is missing: reinstall the package", @"缺少 senkod：请重新安装软件包");
     SenkoAddChineseTranslation(@"senkod is not running and its log is empty", @"senkod 未运行，日志为空");
+    SenkoAddChineseTranslation(@"senkod is running but refused the control token: reboot the device or reinstall the package", @"senkod 正在运行，但拒绝了控制令牌：请重启设备或重新安装软件包");
     SenkoAddChineseTranslation(@"server moved", @"服务器已移动");
     SenkoAddChineseTranslation(@"server ping", @"服务器延迟");
     SenkoAddChineseTranslation(@"server ping timeout", @"服务器延迟检查超时");

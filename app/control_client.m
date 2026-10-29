@@ -342,7 +342,16 @@ static int senkoCtlAuth(int fd, NSString *sockPath, int timeoutMs,
     return -1;
 }
 
+/* senkod writes a token the system removed back before it answers a client
+   that had none, so one more attempt finds the file */
 - (NSString *)blockingSend:(NSString *)cmd timeoutMs:(int)timeoutMs {
+    NSString *reply = [self blockingSendOnce:cmd timeoutMs:timeoutMs];
+    if ([reply hasPrefix:@"ERR auth required"])
+        reply = [self blockingSendOnce:cmd timeoutMs:timeoutMs];
+    return reply;
+}
+
+- (NSString *)blockingSendOnce:(NSString *)cmd timeoutMs:(int)timeoutMs {
     const char *path = [_sockPath fileSystemRepresentation];
     if (!path) return nil;
 
@@ -871,8 +880,11 @@ static NSString *SenkoSystemLogLastLine(void) {
 }
 
 /* launchd owns senkod (KeepAlive, 3 s throttle) and the app has no root to
-   start it, so all that is left to do is to say what is missing */
-static NSString *SenkoDaemonDownText(void) {
+   start it, so all that is left to do is to say what is missing. a refusal
+   from the socket means the daemon is alive, whatever its log ends with */
+static NSString *SenkoDaemonDownText(NSString *lastReply) {
+    if ([lastReply hasPrefix:@"ERR auth"])
+        return @"senkod is running but refused the control token: reboot the device or reinstall the package";
     static const char *bins[] = { "/usr/bin/senkod", SENKO_USR_BIN "/senkod",
                                   "/var/jb/usr/bin/senkod", NULL };
     static const char *plists[] = { "/Library/LaunchDaemons/com.senko.senkod.plist",
@@ -895,13 +907,14 @@ static NSString *SenkoDaemonDownText(void) {
 /* launchd may be inside its restart throttle, or senkod still loading its
    config on an old device */
         BOOL up = NO;
+        NSString *r = nil;
         for (int i = 0; i < 24 && !up; ++i) {
-            NSString *r = [self blockingSend:@"STATUS" timeoutMs:800];
+            r = [self blockingSend:@"STATUS" timeoutMs:800];
             up = r && ([r hasPrefix:@"STATE "] ||
                        [r rangeOfString:@"\nSTATE "].location != NSNotFound);
             if (!up) usleep(250000);
         }
-        NSString *detail = up ? nil : [SenkoDaemonDownText() retain];
+        NSString *detail = up ? nil : [SenkoDaemonDownText(r) retain];
         dispatch_async(dispatch_get_main_queue(), ^{
             if (done) done(up, detail);
             [detail release];

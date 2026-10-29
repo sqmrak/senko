@@ -93,20 +93,8 @@ static void ctl_token_path_from_sock(const char *sock, char *out, size_t cap) {
 
 #define CTL_MOBILE_GID 501 /* mobile group id */
 
-static int write_ctl_token(const char *path, char *token_out, size_t token_cap) {
-    if (!path || !token_out || token_cap < 33) return -1;
-    unsigned char raw[16];
-    int ur = open("/dev/urandom", O_RDONLY);
-    ssize_t got = (ur >= 0) ? read(ur, raw, sizeof raw) : -1;
-    if (ur >= 0) close(ur);
-    if (got != (ssize_t)sizeof raw) return -1;
-    static const char hex[] = "0123456789abcdef";
-    for (size_t i = 0; i < sizeof raw; ++i) {
-        token_out[i * 2]     = hex[raw[i] >> 4];
-        token_out[i * 2 + 1] = hex[raw[i] & 0xf];
-    }
-    token_out[32] = '\0';
-
+static int store_ctl_token(const char *path, const char *token) {
+    if (!path || !token) return -1;
     char tmp[128];
     int tn = snprintf(tmp, sizeof tmp, "%s.%ld.tmp", path, (long)getpid());
     if (tn <= 0 || (size_t)tn >= sizeof tmp) return -1;
@@ -118,7 +106,7 @@ static int write_ctl_token(const char *path, char *token_out, size_t token_cap) 
     int fd = open(tmp, flags, 0640);
     if (fd < 0) return -1;
     char line[48];
-    int ln = snprintf(line, sizeof line, "%s\n", token_out);
+    int ln = snprintf(line, sizeof line, "%s\n", token);
     ssize_t w = (ln > 0) ? write(fd, line, (size_t)ln) : -1;
     int secure = fchmod(fd, 0640) == 0;
     if (fchown(fd, 0, CTL_MOBILE_GID) != 0 && geteuid() == 0) secure = 0;
@@ -133,6 +121,39 @@ static int write_ctl_token(const char *path, char *token_out, size_t token_cap) 
         return -1;
     }
     return 0;
+}
+
+static int write_ctl_token(const char *path, char *token_out, size_t token_cap) {
+    if (!path || !token_out || token_cap < 33) return -1;
+    unsigned char raw[16];
+    int ur = open("/dev/urandom", O_RDONLY);
+    ssize_t got = (ur >= 0) ? read(ur, raw, sizeof raw) : -1;
+    if (ur >= 0) close(ur);
+    if (got != (ssize_t)sizeof raw) return -1;
+    static const char hex[] = "0123456789abcdef";
+    for (size_t i = 0; i < sizeof raw; ++i) {
+        token_out[i * 2]     = hex[raw[i] >> 4];
+        token_out[i * 2 + 1] = hex[raw[i] & 0xf];
+    }
+    token_out[32] = '\0';
+    return store_ctl_token(path, token_out);
+}
+
+/* the token is a plain file under /var/tmp, and /usr/sbin/daily on ios 6 unlinks
+   plain files there once they are older than three days. senkod and its socket
+   outlive that, and every client without a token is then refused as
+   "auth required" by a daemon that is running. the same token goes back, so
+   clients that already hold it stay valid */
+static void restore_missing_token(ctl_server_t *s) {
+    struct stat st;
+    if (!s->token[0] || !s->token_path[0]) return;
+    if (lstat(s->token_path, &st) == 0 || errno != ENOENT) return;
+    if (store_ctl_token(s->token_path, s->token) == 0)
+        fprintf(stderr, "senkod: control token %s was removed, written again\n",
+                s->token_path);
+    else
+        fprintf(stderr, "senkod: control token %s was removed and cannot be written: %s\n",
+                s->token_path, strerror(errno));
 }
 
 static int tighten_sock_perms(const char *path) {
@@ -1759,6 +1780,7 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
     }
 
     if (!c->authed) {
+        restore_missing_token(s);
         char err[64]; size_t en = 0;
         if (ctl_build_err("auth required", err, sizeof err, &en) == CTL_OK)
             client_write(c, err, en);

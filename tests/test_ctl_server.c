@@ -575,6 +575,26 @@ int main(void) {
     ok("connect needs auth", strstr(buf, "auth required") != NULL ||
                             strstr(buf, "ERR ") != NULL);
 
+/* /usr/sbin/daily on ios 6 unlinks plain files under /var/tmp after three days */
+    char removed_path[160];
+    char token_before[48] = "";
+    token_path_from_sock(path, removed_path, sizeof removed_path);
+    FILE *tf = fopen(removed_path, "r");
+    ok("token file readable", tf && fgets(token_before, sizeof token_before, tf));
+    if (tf) fclose(tf);
+    ok("token file removed", unlink(removed_path) == 0);
+    write(cli, "STATUS\n", 7);
+    exchange(&s, cli, buf, sizeof buf);
+    ok("removed token still refuses", strcmp(buf, "ERR auth required\n") == 0);
+    char token_after[48] = "";
+    struct stat tst;
+    tf = fopen(removed_path, "r");
+    ok("removed token written again", tf && fgets(token_after, sizeof token_after, tf));
+    if (tf) fclose(tf);
+    ok("rewritten token is the same", token_before[0] && strcmp(token_before, token_after) == 0);
+    ok("rewritten token is not world accessible",
+       stat(removed_path, &tst) == 0 && (tst.st_mode & 0007) == 0);
+
     ok("auth client", auth_client(&s, cli, path));
 
     write(cli, "STATUS\n", 7);
