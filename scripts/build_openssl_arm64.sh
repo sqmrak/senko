@@ -11,8 +11,11 @@ TC="${SENKO_TC:-${THEOS}/toolchain/linux/iphone/bin}"
 ARM64_CLANG="${SENKO_ARM64_CLANG:-${BLD}/arm64-clang}"
 SDK="${SENKO_OSSL_SDK:-${SENKO_SDK_V64:?set SENKO_SDK_V64 to the arm64 sdk}}"
 
-if [[ -f "${PREFIX}/lib/libssl.a" && -f "${PREFIX}/lib/libcrypto.a" ]]; then
-  echo "openssl arm64 already at ${PREFIX}"
+# a prefix built before the assembly kernels were enabled has no marker and is rebuilt
+MARKER="${PREFIX}/.senko-asm"
+
+if [[ -f "${PREFIX}/lib/libssl.a" && -f "${PREFIX}/lib/libcrypto.a" && -f "${MARKER}" ]]; then
+  echo "openssl arm64 with assembly already at ${PREFIX}"
   exit 0
 fi
 
@@ -56,7 +59,7 @@ cd "${BLD}"
   "CC=${ARM64_CLANG}" \
   "AR=${TC}/llvm-ar" \
   "RANLIB=${TC}/llvm-ranlib" \
-  no-asm no-shared no-dso no-tests no-engine no-ui-console \
+  no-shared no-dso no-tests no-engine no-ui-console \
   -DBROKEN_CLANG_ATOMICS -O2 -fno-strict-aliasing \
   --prefix="${PREFIX}" \
   -miphoneos-version-min=7.0 \
@@ -80,5 +83,6 @@ mkdir -p "${PREFIX}/include/openssl"
 cp -rn "${SRC}/include/openssl/." "${PREFIX}/include/openssl/" 2>/dev/null || true
 cp -a "${BLD}/include/openssl/configuration.h" "${PREFIX}/include/openssl/" 2>/dev/null || true
 
+touch "${MARKER}"
 echo "openssl ${OSSL_ARCH} installed: ${PREFIX}"
 ls -lh "${PREFIX}/lib/libssl.a" "${PREFIX}/lib/libcrypto.a"
