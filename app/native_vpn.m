@@ -21,6 +21,18 @@ static BOOL SenkoNativeOSAvailable(void) {
 #endif
 }
 
+/* the rootful install copies the app to /Applications without PlugIns, so the
+   registered bundle has no extension and ios 12 lists any profile pointing at
+   it as "needs an update", whatever the payload under /var/jb holds */
+static BOOL SenkoNativeExtensionInstalled(void) {
+    NSString *plugins = [[NSBundle mainBundle] builtInPlugInsPath];
+    if (![plugins length]) return NO;
+    BOOL isDirectory = NO;
+    NSString *appex = [plugins stringByAppendingPathComponent:@"SenkoTunnel.appex"];
+    return [[NSFileManager defaultManager] fileExistsAtPath:appex isDirectory:&isDirectory] &&
+           isDirectory;
+}
+
 static void SenkoNativeFinish(void (^block)(NSError *), NSError *error) {
     if (!block) return;
     if ([NSThread isMainThread]) block(error);
@@ -195,8 +207,9 @@ static void SenkoNativeReadTraffic(id manager,
 @implementation SenkoNativeVPN
 
 + (BOOL)available {
-    return SenkoNativeOSAvailable() && SenkoNativeManagerClass() &&
-           SenkoNativeProtocolClass() && !SenkoNativeRejected();
+    return SenkoNativeOSAvailable() && SenkoNativeExtensionInstalled() &&
+           SenkoNativeManagerClass() && SenkoNativeProtocolClass() &&
+           !SenkoNativeRejected();
 }
 
 - (void)dealloc {
@@ -340,11 +353,13 @@ static void SenkoNativeReadTraffic(id manager,
     SenkoNativeManagers(^(NSArray *managers, NSError *loadError) {
         if (loadError) return;
         NSMutableArray *invalid = [NSMutableArray array];
+        BOOL hasExtension = SenkoNativeExtensionInstalled();
 /* a profile the user switched off for another VPN can read as invalid too, and
-   removing it would make the next connect ask for permission again */
+   removing it would make the next connect ask for permission again. without
+   the extension no profile can ever run, so all of them go */
         for (id manager in managers)
-            if (SenkoNativeConnectionStatus(manager) == 0 &&
-                ((BOOL (*)(id, SEL))objc_msgSend)(manager, @selector(isEnabled)))
+            if (!hasExtension || (SenkoNativeConnectionStatus(manager) == 0 &&
+                ((BOOL (*)(id, SEL))objc_msgSend)(manager, @selector(isEnabled))))
                 [invalid addObject:manager];
         if (![invalid count]) return;
         SenkoNativeRemove(invalid, ^(NSError *removeError) {

@@ -14,8 +14,9 @@ enum { SenkoNativeVPNErrorProviderMissing = 2 };
     id _manager;
 }
 
-/* NO on devices that cannot host the extension and on a device where the
-   system refused it for this build */
+/* NO on devices that cannot host the extension, when the installed bundle
+   carries no extension (rootful installs), and on a device where the system
+   refused it for this build */
 + (BOOL)available;
 - (void)startWithConfiguration:(NSString *)json
                    serverAddress:(NSString *)serverAddress
