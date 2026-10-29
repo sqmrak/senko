@@ -18,6 +18,7 @@ enum {
 
 /* picker folders; themesvc groups by this id */
 #define SENKO_THEME_GROUP_IOS    "ios"
+#define SENKO_THEME_GROUP_ANDROID "android"
 #define SENKO_THEME_GROUP_CUSTOM "custom"
 
 typedef void (*SenkoThemeFillFn)(void);

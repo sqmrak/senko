@@ -56,7 +56,7 @@ THEME_SRC := \
 	theme/theme_boykisser.m \
 	theme/theme_miside.m \
 	theme/theme_aero.m \
-	theme/theme_material.m
+	theme/theme_android.m
 
 # ui chrome/style + screens (main_vc / ui_chrome split into modules)
 APP_SRC := \

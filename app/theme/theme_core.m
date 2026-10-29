@@ -86,6 +86,11 @@ const SenkoThemeDef *SenkoThemeFindMigrated(NSString *raw, BOOL *outLight) {
         return SenkoThemeFind(SenkoThemeDefaultId());
     }
 
+    if ([s isEqualToString:@"senko-material"]) {
+        if (outLight) *outLight = NO;
+        return SenkoThemeFind(@"senko-material-you");
+    }
+
     const SenkoThemeDef *exact = SenkoThemeFind(raw);
     if (exact) {
         if (outLight) {
@@ -143,6 +148,7 @@ NSArray *SenkoThemeAllIds(void) {
 /* fixed folder order; themes without group fall into custom */
 static const char *const kGroupOrder[] = {
     SENKO_THEME_GROUP_IOS,
+    SENKO_THEME_GROUP_ANDROID,
     SENKO_THEME_GROUP_CUSTOM
 };
 
@@ -173,6 +179,8 @@ NSArray *SenkoThemeGroupIds(void) {
 NSString *SenkoThemeGroupTitle(NSString *groupId) {
     if ([groupId isEqualToString:@SENKO_THEME_GROUP_IOS])
         return @"iOS";
+    if ([groupId isEqualToString:@SENKO_THEME_GROUP_ANDROID])
+        return @"Android";
     if ([groupId isEqualToString:@SENKO_THEME_GROUP_CUSTOM])
         return @"Custom";
     if (![groupId length]) return @"Custom";
@@ -372,6 +380,8 @@ void InitPalette(void) {
             light = [d boolForKey:SenkoThemeLightKey];
     } else if ([saved length]) {
         def = SenkoThemeFindMigrated(saved, &light);
+        if ([saved isEqualToString:@"senko-material"] && [d objectForKey:SenkoThemeLightKey])
+            light = [d boolForKey:SenkoThemeLightKey];
     } else {
         def = SenkoThemeFind(SenkoThemeDefaultId());
         if ([d objectForKey:SenkoThemeLightKey])

@@ -59,6 +59,8 @@
     UIView           *protocolDot;
     UILabel          *protocolLine;
     BOOL              _serverIconIsFlag;
+    CAGradientLayer  *_wordShimmer;
+    CATextLayer      *_wordMask;
 }
 - (void)applyTheme;
 /* a server badge keeps its own colours and shadow, any other icon is a glyph

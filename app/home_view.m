@@ -36,6 +36,24 @@ static CGPathRef SenkoCirclePath(CGPoint c, CGFloat r) {
                                        clockwise:YES].CGPath;
 }
 
+static BOOL SenkoMaterialYou(void) {
+    return [SenkoThemeCurrentId() isEqualToString:@"senko-material-you"];
+}
+
+static CGPathRef SenkoCookiePath(CGPoint c, CGFloat radius, CGFloat amplitude, int lobes, CGFloat turn) {
+    CGMutablePathRef path = CGPathCreateMutable();
+    CGFloat r = radius / (1.0f + amplitude);
+    for (int i = 0; i <= 120; ++i) {
+        CGFloat a = (CGFloat)(M_PI * 2.0 * i / 120.0);
+        CGFloat wave = r * (1.0f + amplitude * cosf(lobes * a + turn));
+        CGPoint p = CGPointMake(c.x + wave * cosf(a), c.y + wave * sinf(a));
+        if (i == 0) CGPathMoveToPoint(path, NULL, p.x, p.y);
+        else CGPathAddLineToPoint(path, NULL, p.x, p.y);
+    }
+    CGPathCloseSubpath(path);
+    return path;
+}
+
 @implementation SenkoOrbitButton
 
 - (id)initWithFrame:(CGRect)frame {
@@ -177,7 +195,56 @@ static CGPathRef SenkoCirclePath(CGPoint c, CGFloat r) {
     _faceFill.frame = faceRect;
     _faceFill.cornerRadius = faceR;
     _faceSheen.frame = CGRectMake(0.0f, 0.0f, faceR * 2.0f, faceR);
+    CGPathRef oldFace = _face.path ? CGPathCreateCopy(((CAShapeLayer *)[_face presentationLayer]).path ?: _face.path) : NULL;
+    CGPathRef oldRing = _ring.path ? CGPathCreateCopy(((CAShapeLayer *)[_ring presentationLayer]).path ?: _ring.path) : NULL;
     _ring.path = SenkoCirclePath(c, ringR);
+    [_face removeAnimationForKey:@"senko.cookie"];
+    [_ring removeAnimationForKey:@"senko.cookie"];
+    if (SenkoMaterialYou()) {
+        CGFloat amplitude = [_stateKey isEqualToString:@"connected"] ? 0.0f :
+            ([_stateKey isEqualToString:@"connecting"] ? 0.075f : 0.05f);
+        if (self.highlighted) amplitude += 0.035f;
+        CGPathRef facePath = SenkoCookiePath(c, faceR, amplitude, 9, 0.0f);
+        CGPathRef ringPath = SenkoCookiePath(c, ringR, amplitude, 9, 0.0f);
+        _face.path = facePath;
+        _face.shadowPath = facePath;
+        _ring.path = ringPath;
+        CGPathRelease(facePath);
+        CGPathRelease(ringPath);
+        if (self.window && oldFace && oldRing) {
+            CABasicAnimation *transition = [CABasicAnimation animationWithKeyPath:@"path"];
+            transition.duration = self.highlighted ? 0.14 : 0.48;
+            transition.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+            transition.fromValue = (id)oldFace;
+            transition.toValue = (id)_face.path;
+            [_face addAnimation:transition forKey:@"senko.cookie.transition"];
+            transition.fromValue = (id)oldRing;
+            transition.toValue = (id)_ring.path;
+            [_ring addAnimation:transition forKey:@"senko.cookie.transition"];
+        }
+        if (_running && [_stateKey isEqualToString:@"connecting"] && self.window && !self.highlighted) {
+            int lobes[] = { 9, 5, 3, 7, 9 };
+            NSMutableArray *faces = [NSMutableArray array];
+            NSMutableArray *rings = [NSMutableArray array];
+            for (int i = 0; i < 5; ++i) {
+                CGPathRef f = SenkoCookiePath(c, faceR, 0.075f, lobes[i], (CGFloat)i * 0.55f);
+                CGPathRef r = SenkoCookiePath(c, ringR, 0.075f, lobes[i], (CGFloat)i * 0.55f);
+                [faces addObject:(id)f];
+                [rings addObject:(id)r];
+                CGPathRelease(f);
+                CGPathRelease(r);
+            }
+            CAKeyframeAnimation *morph = [CAKeyframeAnimation animationWithKeyPath:@"path"];
+            morph.values = faces;
+            morph.duration = 4.0;
+            morph.repeatCount = HUGE_VALF;
+            [_face addAnimation:morph forKey:@"senko.cookie"];
+            morph.values = rings;
+            [_ring addAnimation:morph forKey:@"senko.cookie"];
+        }
+    }
+    if (oldFace) CGPathRelease(oldFace);
+    if (oldRing) CGPathRelease(oldRing);
     _ring.lineWidth = MAX(2.5f, side * 0.013f);
     _glyph.path = power.CGPath;
     _glyph.lineWidth = MAX(3.0f, ringR * 0.075f);
@@ -225,7 +292,7 @@ static CGPathRef SenkoCirclePath(CGPoint c, CGFloat r) {
 }
 
 - (void)applyTheme {
-    if (SenkoThemeIsMaterial()) {
+    if (SenkoThemeIsMaterial() && !SenkoMaterialYou()) {
         [self applyMaterialTheme];
         return;
     }
@@ -293,11 +360,20 @@ static CGPathRef SenkoCirclePath(CGPoint c, CGFloat r) {
     _trail.shouldRasterize = cased;
     _dot.rasterizationScale = [UIScreen mainScreen].scale;
     _trail.rasterizationScale = [UIScreen mainScreen].scale;
+    if (SenkoMaterialYou()) {
+        _faceFill.hidden = YES;
+        _face.fillColor = SenkoShadeColor(kCellHi, -0.03f).CGColor;
+        _face.shadowOpacity = 0.0f;
+        _ring.shadowOpacity = 0.0f;
+        _halo.shadowOpacity = 0.0f;
+    }
     SenkoEndSilentLayers();
+    _laidSize = CGSizeZero;
+    [self setNeedsLayout];
 }
 
 - (BOOL)orbitWanted {
-    if (SenkoThemeIsMaterial()) return NO;
+    if (SenkoThemeIsMaterial() && !SenkoMaterialYou()) return NO;
     return _running && ([_stateKey isEqualToString:@"connecting"] ||
                         [_stateKey isEqualToString:@"connected"]);
 }
@@ -397,7 +473,7 @@ static void SenkoOrbitTween(CALayer *layer, NSString *path, id from, id to, BOOL
 
 /* material's progress ring turns while the tunnel dials and nowhere else */
 - (void)syncSpinner {
-    BOOL want = SenkoThemeIsMaterial() && _running && [_stateKey isEqualToString:@"connecting"];
+    BOOL want = SenkoThemeIsMaterial() && !SenkoMaterialYou() && _running && [_stateKey isEqualToString:@"connecting"];
     if (want) SenkoMaterialSpinnerStart(_spinner);
     else SenkoMaterialSpinnerStop(_spinner);
 }
@@ -431,7 +507,7 @@ static void SenkoOrbitTween(CALayer *layer, NSString *path, id from, id to, BOOL
     [self syncOrbitAnimated:changed restart:changed];
     [self syncPulse];
     [self syncSpinner];
-    if (changed && SenkoThemeIsMaterial() && self.window &&
+    if (changed && SenkoThemeIsMaterial() && !SenkoMaterialYou() && self.window &&
         [_stateKey isEqualToString:@"connected"])
         SenkoMaterialPulse(self.layer, CGPointMake(self.bounds.size.width * 0.5f,
                                                    self.bounds.size.height * 0.5f),
@@ -444,15 +520,24 @@ static void SenkoOrbitTween(CALayer *layer, NSString *path, id from, id to, BOOL
     [self syncOrbitAnimated:NO restart:changed];
     [self syncPulse];
     [self syncSpinner];
+    if (SenkoMaterialYou()) {
+        _laidSize = CGSizeZero;
+        [self setNeedsLayout];
+    }
 }
 
 /* a button lifts under the finger in material and does not shrink */
 - (void)setHighlighted:(BOOL)highlighted {
     [super setHighlighted:highlighted];
-    if (SenkoThemeIsMaterial())
+    if (SenkoThemeIsMaterial() && !SenkoMaterialYou())
         SenkoMaterialSetElevation(_face, highlighted ? 12.0f : 6.0f, YES);
-    else
+    else {
         SenkoPressPop(self, highlighted);
+        if (SenkoMaterialYou()) {
+            _laidSize = CGSizeZero;
+            [self setNeedsLayout];
+        }
+    }
 }
 
 /* the ripple spreads inside the disc, not across the square the control owns */
@@ -706,6 +791,57 @@ static void SenkoHomeLayoutCard(SenkoHomeView *v, BOOL isFlag);
     return self;
 }
 
+- (void)dealloc {
+    [_wordShimmer release];
+    [_wordMask release];
+    [super dealloc];
+}
+
+- (void)updateWordShimmer {
+    if (!SenkoMaterialYou()) {
+        [_wordShimmer removeFromSuperlayer];
+        [_wordShimmer removeAllAnimations];
+        return;
+    }
+    if (!_wordShimmer) {
+        _wordShimmer = [[CAGradientLayer alloc] init];
+        _wordMask = [[CATextLayer alloc] init];
+        _wordMask.alignmentMode = kCAAlignmentCenter;
+        _wordMask.contentsScale = [UIScreen mainScreen].scale;
+        _wordShimmer.mask = _wordMask;
+    }
+    if (!_wordShimmer.superlayer) [self.layer addSublayer:_wordShimmer];
+    CGFloat base = SenkoThemeIsLight() ? 0.07f : 1.0f;
+    CGFloat band = SenkoThemeIsLight() ? 0.33f : 0.80f;
+    _wordShimmer.colors = [NSArray arrayWithObjects:
+        (id)[UIColor colorWithWhite:base alpha:1.0f].CGColor,
+        (id)[UIColor colorWithWhite:band alpha:1.0f].CGColor,
+        (id)[UIColor colorWithWhite:base alpha:1.0f].CGColor, nil];
+    _wordShimmer.startPoint = CGPointMake(0.0f, 0.5f);
+    _wordShimmer.endPoint = CGPointMake(1.0f, 0.5f);
+    _wordShimmer.frame = wordmark.frame;
+    _wordMask.frame = _wordShimmer.bounds;
+    _wordMask.string = wordmark.text;
+    _wordMask.font = (CFTypeRef)wordmark.font.fontName;
+    _wordMask.fontSize = wordmark.font.pointSize;
+    _wordMask.foregroundColor = [UIColor whiteColor].CGColor;
+    wordmark.textColor = [UIColor clearColor];
+    if (self.window && ![_wordShimmer animationForKey:@"senko.shimmer"]) {
+        CABasicAnimation *drift = [CABasicAnimation animationWithKeyPath:@"locations"];
+        drift.fromValue = [NSArray arrayWithObjects:@-1.0f, @-0.5f, @0.0f, nil];
+        drift.toValue = [NSArray arrayWithObjects:@1.0f, @1.5f, @2.0f, nil];
+        drift.duration = 4.2;
+        drift.repeatCount = HUGE_VALF;
+        [_wordShimmer addAnimation:drift forKey:@"senko.shimmer"];
+    }
+}
+
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    if (!self.window) [_wordShimmer removeAllAnimations];
+    else [self updateWordShimmer];
+}
+
 - (void)relocalize {
     gear.accessibilityLabel = SenkoLocalizedText(@"Settings");
     stats.accessibilityLabel = SenkoLocalizedText(@"Statistics");
@@ -851,6 +987,7 @@ static void SenkoHomeLayoutCard(SenkoHomeView *v, BOOL isFlag) {
     CGFloat wordY = wordInHeader ? headerY + floorf((btn - wordH) * 0.5f)
                                  : headerY + btn - 6.0f;
     wordmark.frame = CGRectMake(wordX, wordY, wordW, wordH);
+    [self updateWordShimmer];
 
     SenkoHomeLayoutCard(self, _serverIconIsFlag);
     if (wide) {

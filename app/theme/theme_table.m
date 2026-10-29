@@ -12,7 +12,9 @@ extern const SenkoThemeDef kSenkoThemeIos26;
 extern const SenkoThemeDef kSenkoThemeBoykisser;
 extern const SenkoThemeDef kSenkoThemeMiside;
 extern const SenkoThemeDef kSenkoThemeAero;
-extern const SenkoThemeDef kSenkoThemeMaterial;
+extern const SenkoThemeDef kSenkoThemeMaterialYou;
+extern const SenkoThemeDef kSenkoThemeMaterial5;
+extern const SenkoThemeDef kSenkoThemeHolo;
 
 static const SenkoThemeDef *const kTable[] = {
     &kSenkoThemeIos6,
@@ -22,7 +24,9 @@ static const SenkoThemeDef *const kTable[] = {
     &kSenkoThemeBoykisser,
     &kSenkoThemeMiside,
     &kSenkoThemeAero,
-    &kSenkoThemeMaterial,
+    &kSenkoThemeMaterialYou,
+    &kSenkoThemeMaterial5,
+    &kSenkoThemeHolo,
 };
 
 /* user themes join the builtin families here, so lookup, grouping, search and
