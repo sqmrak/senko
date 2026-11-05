@@ -283,6 +283,7 @@ static int run_managed(const char *ctl_path, const char *config_path,
         if (r > 0) loop_dispatch(&lp, pfd + loop_at, loop_n);
         /* helper jobs time out from dispatch, so it runs on a timeout too */
         if (r >= 0) ctl_server_dispatch(&cs, pfd + ctl_at, ctl_n);
+        if (cs.socket_failed) break;
 /* the backend can die between two control commands, and the redial schedule
    lives with the store that knows which server to dial */
         if (daemon_ctl_maintain(&dc) != 0)
@@ -296,7 +297,7 @@ static int run_managed(const char *ctl_path, const char *config_path,
         storefile_save(&cs.engine.store, &dc.settings, config_path);
     ctl_server_close(&cs);
     loop_close(&lp);
-    return 0;
+    return cs.socket_failed ? 1 : 0;
 }
 
 static void usage(const char *argv0) {

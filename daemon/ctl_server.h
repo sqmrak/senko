@@ -10,6 +10,7 @@
 #include "core/geo_update.h"
 #include "ctl_engine.h"
 #include "helper_jobs.h"
+#include "ctl_watch.h"
 #include "settings.h"
 
 #ifdef __cplusplus
@@ -20,8 +21,8 @@ extern "C" {
    STATUS), three list pings and a subscription refresh that holds its slot for
    the whole download already overran four, and the fifth was hung up on */
 #define CTL_SERVER_MAX_CLIENTS 16
-/* the listener, the result pipe, every client and every helper job */
-#define CTL_SERVER_POLL_MAX (2 + CTL_SERVER_MAX_CLIENTS + HELPER_JOB_MAX)
+/* the listener, the result pipe, the socket directory, clients and helpers */
+#define CTL_SERVER_POLL_MAX (3 + CTL_SERVER_MAX_CLIENTS + HELPER_JOB_MAX)
 #define CTL_CLIENT_OUT_MAX (1024 * 1024)
 
 typedef int (*ctl_apply_fn)(void *ctx, const ctl_action_t *action);
@@ -138,6 +139,10 @@ typedef struct {
 
 typedef struct {
     int           listen_fd;
+    ctl_watch_t   socket_watch;
+    uint64_t      socket_dev;
+    uint64_t      socket_ino;
+    int           socket_failed;
     char          sock_path[108]; /* unix socket path */
     char          token_path[108];
     char          token[40];

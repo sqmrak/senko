@@ -525,7 +525,42 @@ static void test_roundtrip(void) {
        b.servers[6].net == VL_NET_GRPC);
 }
 
+/* this panel returns xray profiles to the ios user agent and a base64 link
+   list to generic clients; the addresses and credentials here are synthetic */
+static void test_ip_fronted_subscription(void) {
+    static const char links[] =
+        "vless://" UUID "@192.0.2.10:443?encryption=none&security=tls&type=ws&"
+        "sni=front.example&fp=chrome&alpn=http%2F1.1&path=%2Ftunnel#ws\n"
+        "hysteria2://secret@192.0.2.11:443?sni=hy.example&"
+        "fm=%7B%22quicParams%22%3A%7B%22congestion%22%3A%22brutal%22%7D%7D#hy\n"
+        "vless://" UUID "@192.0.2.12:6443?encryption=none&security=reality&"
+        "type=grpc&sni=grpc.example&fp=chrome&pbk=" PBK "&sid=ab&"
+        "serviceName=service&mode=gun#grpc\n"
+        "vless://" UUID "@192.0.2.13:443?encryption=none&security=tls&type=ws&"
+        "sni=front.example&fp=chrome&path=%2Ftunnel#ws2\n";
+    static vl_server_t servers[8];
+    char encoded[4096];
+    size_t encoded_len = 0, count = 0;
+    cfg_import_stats_t stats;
+    ok("encode generic panel feed", b64_encode((const unsigned char *)links, strlen(links),
+                                                 encoded, sizeof encoded, &encoded_len) == 0);
+    ok("base64 panel feed parses", cfg_parse_subscription_rows(encoded, encoded_len, servers, 8,
+                                                                &count, &stats) == CFG_OK &&
+       count == 4 && stats.skipped == 0);
+    ok("ip websocket retains the server name for tls and host",
+       count >= 1 && servers[0].net == VL_NET_WS && servers[0].security == VL_SEC_TLS &&
+       strcmp(servers[0].sni, "front.example") == 0 &&
+       strcmp(servers[0].ws_host, "front.example") == 0 &&
+       strcmp(servers[0].path, "/tunnel") == 0);
+    ok("hysteria entry is retained", count >= 2 && servers[1].proto == VL_PROTO_HYSTERIA2 &&
+       strcmp(servers[1].pass, "secret") == 0 && strcmp(servers[1].sni, "hy.example") == 0);
+    ok("reality grpc keeps service and stream", count >= 3 && servers[2].net == VL_NET_GRPC &&
+       servers[2].security == VL_SEC_REALITY && !strcmp(servers[2].path, "/service/Tun") &&
+       !strcmp(servers[2].sni, "grpc.example"));
+}
+
 int main(void) {
+    test_ip_fronted_subscription();
     test_roundtrip();
     test_vless();
     test_trojan();

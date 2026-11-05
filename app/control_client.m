@@ -10,7 +10,55 @@
 #import <string.h>
 #import <errno.h>
 #import <stdio.h>
+#import <stdlib.h>
 #import <sys/stat.h>
+
+static BOOL senkoSaveKaringBackup(NSString *stage) {
+    const char *path = [stage fileSystemRepresentation];
+    static const char prefix[] = "/var/tmp/senko-karing-";
+    if (!path || strncmp(path, prefix, sizeof prefix - 1) || strlen(path) != sizeof prefix - 1 + 6)
+        return NO;
+    for (const char *p = path + sizeof prefix - 1; *p; ++p)
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9')))
+            return NO;
+    int source = open(path, O_RDONLY | O_NOFOLLOW);
+    if (source < 0) return NO;
+    struct stat st;
+    if (fstat(source, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
+        (unsigned long long)st.st_size > 16ULL * 1024ULL * 1024ULL) {
+        close(source);
+        (void)unlink(path);
+        return NO;
+    }
+    char temporary[] = "/var/mobile/Documents/.senko-karing-XXXXXX";
+    int target = mkstemp(temporary);
+    if (target < 0) { close(source); (void)unlink(path); return NO; }
+    BOOL ok = fchmod(target, 0600) == 0;
+    unsigned long long total = 0;
+    char buffer[16384];
+    while (ok) {
+        ssize_t n = read(source, buffer, sizeof buffer);
+        if (n == 0) break;
+        if (n < 0) { if (errno == EINTR) continue; ok = NO; break; }
+        total += (unsigned long long)n;
+        if (total > 16ULL * 1024ULL * 1024ULL) { ok = NO; break; }
+        size_t off = 0;
+        while (off < (size_t)n) {
+            ssize_t written = write(target, buffer + off, (size_t)n - off);
+            if (written > 0) off += (size_t)written;
+            else if (written < 0 && errno == EINTR) continue;
+            else { ok = NO; break; }
+        }
+    }
+    if (total != (unsigned long long)st.st_size) ok = NO;
+    if (ok && fsync(target) != 0) ok = NO;
+    if (close(source) != 0) ok = NO;
+    if (close(target) != 0) ok = NO;
+    if (ok && rename(temporary, "/var/mobile/Documents/senko-karing.backup.zip") != 0) ok = NO;
+    if (!ok) (void)unlink(temporary);
+    (void)unlink(path);
+    return ok;
+}
 
 @implementation SenkoServer
 - (void)dealloc {
@@ -816,6 +864,22 @@ static SenkoRoutingProfile *parseROUTING(NSString *line) {
 
 - (void)exportBackup:(void (^)(NSString *))done {
     [self sendCommand:@"EXPORT" timeoutMs:5000 reply:done];
+}
+
+- (void)exportKaringBackup:(void (^)(NSString *))done {
+    [self sendCommand:@"KARINGEXPORT" timeoutMs:10000 reply:^(NSString *reply) {
+        if (![reply hasPrefix:@"OK "]) { if (done) done(reply); return; }
+        NSString *stage = [[reply substringFromIndex:3] stringByTrimmingCharactersInSet:
+                           [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+            BOOL ok = senkoSaveKaringBackup(stage);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (done) done(ok ? @"OK Karing backup exported" : @"ERR could not save Karing backup");
+            });
+            [pool drain];
+        });
+    }];
 }
 
 - (void)restoreBackup:(void (^)(NSString *))done {

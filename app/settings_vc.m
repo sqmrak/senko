@@ -690,11 +690,12 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
 - (void)showBackupMenu {
     UIAlertView *pick = [[[UIAlertView alloc]
         initWithTitle:SenkoLocalizedText(@"Backup")
-              message:nil
+              message:SenkoLocalizedText(@"Karing export includes servers and subscriptions.")
              delegate:self
     cancelButtonTitle:SenkoLocalizedText(@"Cancel")
     otherButtonTitles:SenkoLocalizedText(@"Export backup"),
-                      SenkoLocalizedText(@"Restore backup"), nil] autorelease];
+                      SenkoLocalizedText(@"Restore backup"),
+                      SenkoLocalizedText(@"Export Karing backup"), nil] autorelease];
     pick.tag = 4207;
     [pick show];
 }
@@ -714,6 +715,14 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
     [_ctl exportBackup:^(NSString *reply) {
         NSString *msg = [reply hasPrefix:@"OK "] ?
             SenkoLocalizedText(@"Saved to Documents/senko-backup.senko") : reply;
+        [self showBackupMessage:msg ?: SenkoLocalizedText(@"Backup export failed")];
+    }];
+}
+
+- (void)exportKaringBackup {
+    [_ctl exportKaringBackup:^(NSString *reply) {
+        NSString *msg = [reply hasPrefix:@"OK "] ?
+            SenkoLocalizedText(@"Saved to Documents/senko-karing.backup.zip") : reply;
         [self showBackupMessage:msg ?: SenkoLocalizedText(@"Backup export failed")];
     }];
 }
@@ -814,7 +823,8 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
     if (alert.tag == 4207) {
         if (buttonIndex == alert.cancelButtonIndex) return;
         if (buttonIndex == alert.firstOtherButtonIndex) [self exportBackup];
-        else [self openBackupBrowser];
+        else if (buttonIndex == alert.firstOtherButtonIndex + 1) [self openBackupBrowser];
+        else [self exportKaringBackup];
         return;
     }
     if (alert.tag == 4205) {

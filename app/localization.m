@@ -428,6 +428,9 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"Import file", @"Импорт файла");
     SenkoAddTranslation(@"Export configuration", @"Экспорт конфигурации");
     SenkoAddTranslation(@"Restore configuration", @"Восстановить конфигурацию");
+    SenkoAddTranslation(@"Karing export includes servers and subscriptions.", @"Экспорт Karing включает серверы и подписки.");
+    SenkoAddTranslation(@"Export Karing backup", @"Экспорт для Karing");
+    SenkoAddTranslation(@"Saved to Documents/senko-karing.backup.zip", @"Сохранено в Documents/senko-karing.backup.zip");
     SenkoAddTranslation(@"Export backup", @"Экспорт резервной копии");
     SenkoAddTranslation(@"Restore backup", @"Восстановить резервную копию");
     SenkoAddTranslation(@"Save a config file to Documents", @"Сохранить файл конфигурации в Documents");
@@ -943,6 +946,9 @@ static void SenkoBuildTranslations(void) {
     SenkoAddChineseTranslation(@"Light", @"浅色");
     SenkoAddChineseTranslation(@"System Logs", @"系统日志");
     SenkoAddChineseTranslation(@"senkod + awg combined", @"senkod + awg 合并日志");
+    SenkoAddChineseTranslation(@"Karing export includes servers and subscriptions.", @"Karing 导出包含服务器和订阅。");
+    SenkoAddChineseTranslation(@"Export Karing backup", @"导出 Karing 备份");
+    SenkoAddChineseTranslation(@"Saved to Documents/senko-karing.backup.zip", @"已保存到 Documents/senko-karing.backup.zip");
     SenkoAddChineseTranslation(@"Export backup", @"导出备份");
     SenkoAddChineseTranslation(@"Restore backup", @"恢复备份");
     SenkoAddChineseTranslation(@"Save a config file to Documents", @"将配置文件保存到 Documents");

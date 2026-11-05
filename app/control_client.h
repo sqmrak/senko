@@ -194,6 +194,7 @@ NSString *SenkoControlStateFromReply(NSString *reply, long *uptime);
 /* issue a new device id, so a panel that binds to one sees a new device */
 - (void)resetDeviceHWID:(void (^)(NSString *hwid, NSString *error))done;
 - (void)exportBackup:(void (^)(NSString *reply))done;
+- (void)exportKaringBackup:(void (^)(NSString *reply))done;
 - (void)restoreBackup:(void (^)(NSString *reply))done;
 
 - (void)startAWGAtPath:(NSString *)path reply:(void (^)(NSString *status))done;
