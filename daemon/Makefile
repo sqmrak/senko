@@ -13,7 +13,7 @@ QUIC_CFLAGS := $(shell pkg-config --cflags $(QUIC_PKGS) 2>/dev/null)
 QUIC_LDFLAGS := $(shell pkg-config --libs $(QUIC_PKGS) 2>/dev/null || echo -lngtcp2 -lngtcp2_crypto_ossl -lnghttp3)
 LDFLAGS ?=
 
-CORE_SRC = core/vless.c core/b64.c core/config.c core/share_link.c core/rules.c core/geo.c core/routing_profile.c core/routing_sync.c core/geo_update.c core/plist_bundle_id.c core/dns_msg.c core/dns_cache.c core/profiles.c core/happ.c core/happ_crypt5.c core/third_party/cJSON.c core/net_safe.c core/socks5.c core/senko_trace.c core/senko_replay.c core/senko_upload.c core/senko_time.c core/real_probe.c core/net_diag.c core/senko_clock.c core/grpc_core.c core/h2_core.c \
+CORE_SRC = core/karing_backup.c core/karing_zip.c core/vless.c core/b64.c core/config.c core/share_link.c core/rules.c core/geo.c core/routing_profile.c core/routing_sync.c core/geo_update.c core/plist_bundle_id.c core/dns_msg.c core/dns_cache.c core/profiles.c core/happ.c core/happ_crypt5.c core/third_party/cJSON.c core/net_safe.c core/socks5.c core/senko_trace.c core/senko_replay.c core/senko_upload.c core/senko_time.c core/real_probe.c core/net_diag.c core/senko_clock.c core/grpc_core.c core/h2_core.c \
            core/vless_conn.c core/session.c core/store.c core/control.c \
            core/ctl_engine.c core/http.c core/url.c core/subfetch.c \
            core/transport_tcp.c core/transport_tls.c core/transport_ws.c \
@@ -34,7 +34,7 @@ MLKEM768_SRC = core/third_party/mlkem768/kem.c core/third_party/mlkem768/indcpa.
                core/third_party/mlkem768/symmetric-shake.c core/third_party/mlkem768/fips202.c \
                core/third_party/mlkem768/randombytes.c
 CORE_SRC += $(MLKEM768_SRC)
-DAEMON_SRC = app_owner.c dialer.c loop.c ctl_server.c daemon_ctl.c storefile.c settings.c status.c \
+DAEMON_SRC = ctl_watch.c app_owner.c dialer.c loop.c ctl_server.c daemon_ctl.c storefile.c settings.c status.c \
              app_proxy.c egress.c senko_core_config.c senko_core_backend.c \
              awg_utun.c awg_route.c awg_pfroute.c legacy_ios.c proc_detach.c \
              route_socket.c tun_dialer.c tun_loop.c tun_opener.c tun_stack.c tun_tcp.c tun_udp.c \

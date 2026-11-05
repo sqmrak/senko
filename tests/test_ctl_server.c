@@ -423,7 +423,146 @@ static int auth_client(ctl_server_t *s, int cli, const char *sock) {
     return strstr(buf, "OK ") != NULL;
 }
 
+static void test_removed_control_socket(void) {
+    char dir[] = "/tmp/senko-watch-XXXXXX";
+    char path[108], token[120], reply[512];
+    static ctl_server_t watched;
+    apply_rec_t rec;
+    memset(&rec, 0, sizeof rec);
+    if (!mkdtemp(dir)) { ok("socket watch directory", 0); return; }
+    snprintf(path, sizeof path, "%s/control.sock", dir);
+    token_path_from_sock(path, token, sizeof token);
+    if (ctl_server_init(&watched, path, mock_apply, &rec) != CTLS_OK) {
+        ok("socket watch initialization", 0);
+        rmdir(dir);
+        return;
+    }
+    int original = connect_unix(path);
+    ok("client connected before socket removal", original >= 0);
+    if (original >= 0) {
+        set_nonblock(original);
+        for (int i = 0; i < 4; ++i) ctl_server_step(&watched, 2);
+        ok("client authenticated before socket removal", auth_client(&watched, original, path));
+    }
+    ok("remove socket and token", unlink(path) == 0 && unlink(token) == 0);
+    ok("directory event restores socket", ctl_server_step(&watched, 1000) == CTLS_OK);
+    struct stat st;
+    ok("socket restored with private permissions", lstat(path, &st) == 0 && S_ISSOCK(st.st_mode) && (st.st_mode & 0007) == 0);
+    ok("token restored with private permissions", lstat(token, &st) == 0 && S_ISREG(st.st_mode) && (st.st_mode & 0007) == 0);
+    int fresh = connect_unix(path);
+    ok("new client connects to restored socket", fresh >= 0);
+    if (fresh >= 0) {
+        set_nonblock(fresh);
+        for (int i = 0; i < 4; ++i) ctl_server_step(&watched, 2);
+        ok("new client authenticates with restored token", auth_client(&watched, fresh, path));
+    }
+    if (original >= 0) {
+        write(original, "STATUS\n", 7);
+        exchange(&watched, original, reply, sizeof reply);
+        ok("existing client remains connected", strstr(reply, "STATE ") != NULL);
+        close(original);
+    }
+    if (fresh >= 0) close(fresh);
+    ctl_server_close(&watched);
+    rmdir(dir);
+}
+
+static void test_replaced_control_socket(void) {
+    char dir[] = "/tmp/senko-watch-XXXXXX";
+    char path[108], token[120];
+    static ctl_server_t watched;
+    apply_rec_t rec;
+    memset(&rec, 0, sizeof rec);
+    if (!mkdtemp(dir)) { ok("replacement watch directory", 0); return; }
+    snprintf(path, sizeof path, "%s/control.sock", dir);
+    token_path_from_sock(path, token, sizeof token);
+    if (ctl_server_init(&watched, path, mock_apply, &rec) != CTLS_OK) {
+        ok("replacement watch initialization", 0);
+        rmdir(dir);
+        return;
+    }
+    ok("remove socket for replacement", unlink(path) == 0);
+    FILE *foreign = fopen(path, "w");
+    ok("create replacement file", foreign != NULL);
+    if (foreign) { fputs("preserve", foreign); fclose(foreign); }
+    ok("replacement stops the server", ctl_server_step(&watched, 1000) == CTLS_ERR);
+    ctl_server_close(&watched);
+    struct stat st;
+    ok("replacement file remains untouched", lstat(path, &st) == 0 && S_ISREG(st.st_mode));
+    unlink(path);
+    unlink(token);
+    rmdir(dir);
+}
+
+static void test_foreign_control_socket(void) {
+    char dir[] = "/tmp/senko-watch-XXXXXX";
+    char path[108], token[120];
+    static ctl_server_t watched;
+    apply_rec_t rec;
+    memset(&rec, 0, sizeof rec);
+    if (!mkdtemp(dir)) { ok("foreign socket directory", 0); return; }
+    snprintf(path, sizeof path, "%s/control.sock", dir);
+    token_path_from_sock(path, token, sizeof token);
+    if (ctl_server_init(&watched, path, mock_apply, &rec) != CTLS_OK) {
+        ok("foreign socket initialization", 0);
+        rmdir(dir);
+        return;
+    }
+    ok("remove socket before foreign bind", unlink(path) == 0);
+    int foreign = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof addr);
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof addr.sun_path, "%s", path);
+    ok("foreign socket binds", foreign >= 0 && bind(foreign, (struct sockaddr *)&addr, sizeof addr) == 0 &&
+       listen(foreign, 1) == 0);
+    ok("foreign socket stops the server", ctl_server_step(&watched, 1000) == CTLS_ERR);
+    ctl_server_close(&watched);
+    struct stat st;
+    ok("foreign socket remains untouched", lstat(path, &st) == 0 && S_ISSOCK(st.st_mode));
+    if (foreign >= 0) close(foreign);
+    unlink(path); unlink(token); rmdir(dir);
+}
+
+static void test_replaced_socket_directory(void) {
+    char base[] = "/tmp/senko-watch-XXXXXX";
+    char dir[108], old[108], path[108], old_socket[128], old_token[128];
+    static ctl_server_t watched;
+    apply_rec_t rec;
+    memset(&rec, 0, sizeof rec);
+    if (!mkdtemp(base)) { ok("socket mount fixture", 0); return; }
+    snprintf(dir, sizeof dir, "%s/current", base);
+    snprintf(old, sizeof old, "%s/old", base);
+    snprintf(path, sizeof path, "%s/current/control.sock", base);
+    snprintf(old_socket, sizeof old_socket, "%s/old/control.sock", base);
+    snprintf(old_token, sizeof old_token, "%s/old/control.token", base);
+    if (mkdir(dir, 0700) != 0 || ctl_server_init(&watched, path, mock_apply, &rec) != CTLS_OK) {
+        ok("socket mount fixture initialization", 0);
+        rmdir(dir); rmdir(base);
+        return;
+    }
+    ok("replace socket directory", rename(dir, old) == 0 && mkdir(dir, 0700) == 0);
+    ok("directory event rearms socket watch", ctl_server_step(&watched, 1000) == CTLS_OK);
+    struct stat st;
+    ok("socket is reachable in the replacement directory", lstat(path, &st) == 0 && S_ISSOCK(st.st_mode));
+    int client = connect_unix(path);
+    ok("client connects after directory replacement", client >= 0);
+    if (client >= 0) {
+        set_nonblock(client);
+        for (int i = 0; i < 4; ++i) ctl_server_step(&watched, 2);
+        ok("restored directory retains authentication", auth_client(&watched, client, path));
+        close(client);
+    }
+    ctl_server_close(&watched);
+    unlink(old_socket); unlink(old_token);
+    rmdir(old); rmdir(dir); rmdir(base);
+}
+
 int main(void) {
+    test_replaced_socket_directory();
+    test_foreign_control_socket();
+    test_removed_control_socket();
+    test_replaced_control_socket();
     const char *path = "/tmp/senko_ctltest.sock";
     const char *block_path = "/tmp/senko_ctltest.block";
 

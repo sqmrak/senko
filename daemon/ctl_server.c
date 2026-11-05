@@ -6,6 +6,7 @@
 #include "core/url.h"
 #include "core/config.h"
 #include "core/happ.h"
+#include "core/karing_backup.h"
 #include "core/store.h"
 #include "core/geo_update.h"
 #include "core/routing_sync.h"
@@ -46,6 +47,25 @@
 /* one connect has to answer while a client is still waiting, and every attempt
    carries a dns lookup, a handshake and a verify probe */
 #define CTL_FAILOVER_MAX_TRIES 8
+
+static int write_karing_backup(const uint8_t *data, size_t len, char *path, size_t cap) {
+    const char *pattern = "/var/tmp/senko-karing-XXXXXX";
+    if (!path || strlen(pattern) + 1 > cap) return -1;
+    snprintf(path, cap, "%s", pattern);
+    int fd = mkstemp(path);
+    if (fd < 0) return -1;
+    int ok = fchmod(fd, 0600) == 0 && fchown(fd, 501, 501) == 0;
+    size_t off = 0;
+    while (ok && off < len) {
+        ssize_t n = write(fd, data + off, len - off);
+        if (n > 0) off += (size_t)n;
+        else if (n < 0 && errno == EINTR) continue;
+        else ok = 0;
+    }
+    if (close(fd) != 0) ok = 0;
+    if (!ok) (void)unlink(path);
+    return ok ? 0 : -1;
+}
 
 static int awg_tunnel_running(const ctl_server_t *s) {
     return s->awg_busy && s->awg_busy(s->apply_ctx);
@@ -162,6 +182,43 @@ static int tighten_sock_perms(const char *path) {
     return chmod(path, 0660);
 }
 
+/* ios boot cleanup can remove a bound unix socket without closing its fd */
+static int repair_control_socket(ctl_server_t *s) {
+    struct stat st;
+    if (lstat(s->sock_path, &st) == 0) {
+        if (!S_ISSOCK(st.st_mode) || (uint64_t)st.st_dev != s->socket_dev ||
+            (uint64_t)st.st_ino != s->socket_ino) return -1;
+        restore_missing_token(s);
+        return 0;
+    }
+    if (errno != ENOENT) return -1;
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof addr);
+    addr.sun_family = AF_UNIX;
+    memcpy(addr.sun_path, s->sock_path, strlen(s->sock_path) + 1);
+    if (bind(fd, (struct sockaddr *)&addr, sizeof addr) != 0) { close(fd); return -1; }
+    if (lstat(s->sock_path, &st) != 0 || !S_ISSOCK(st.st_mode)) { close(fd); return -1; }
+    uint64_t dev = (uint64_t)st.st_dev, ino = (uint64_t)st.st_ino;
+    if (tighten_sock_perms(s->sock_path) != 0 || listen(fd, CTL_SERVER_MAX_CLIENTS) != 0) {
+        struct stat current;
+        if (lstat(s->sock_path, &current) == 0 && S_ISSOCK(current.st_mode) &&
+            (uint64_t)current.st_dev == dev && (uint64_t)current.st_ino == ino)
+            (void)unlink(s->sock_path);
+        close(fd);
+        return -1;
+    }
+    set_nonblock(fd);
+    close(s->listen_fd);
+    s->listen_fd = fd;
+    s->socket_dev = dev;
+    s->socket_ino = ino;
+    restore_missing_token(s);
+    fprintf(stderr, "senkod: control socket was removed, listening again at %s\n", s->sock_path);
+    return 0;
+}
+
 static int token_equal(const char *a, const char *b) {
     size_t al = a ? strlen(a) : 0;
     size_t bl = b ? strlen(b) : 0;
@@ -180,6 +237,8 @@ ctls_status_t ctl_server_init(ctl_server_t *s, const char *path,
     if (!s || !path) return CTLS_ERR_ARG;
     memset(s, 0, sizeof *s);
     s->listen_fd = -1;
+    s->socket_watch.fd = -1;
+    s->socket_watch.directory_fd = -1;
     s->ping_pipe[0] = -1;
     s->ping_pipe[1] = -1;
     for (size_t i = 0; i < CTL_SERVER_MAX_CLIENTS; ++i) s->clients[i].fd = -1;
@@ -254,8 +313,33 @@ ctls_status_t ctl_server_init(ctl_server_t *s, const char *path,
         s->ping_pipe[0] = s->ping_pipe[1] = -1;
         return CTLS_ERR_AUTH;
     }
+    struct stat socket_stat;
+    memset(&socket_stat, 0, sizeof socket_stat);
+    if (lstat(path, &socket_stat) != 0 || !S_ISSOCK(socket_stat.st_mode) ||
+        ctl_watch_open(&s->socket_watch, path) != 0) {
+        fprintf(stderr, "senkod: cannot watch control socket directory: %s\n", strerror(errno));
+        close(fd);
+        struct stat current;
+        if (S_ISSOCK(socket_stat.st_mode) && lstat(path, &current) == 0 &&
+            S_ISSOCK(current.st_mode) && current.st_dev == socket_stat.st_dev &&
+            current.st_ino == socket_stat.st_ino)
+            (void)unlink(path);
+        (void)unlink(s->token_path);
+        close(s->ping_pipe[0]);
+        close(s->ping_pipe[1]);
+        s->ping_pipe[0] = s->ping_pipe[1] = -1;
+        return CTLS_ERR_BIND;
+    }
+    s->socket_dev = (uint64_t)socket_stat.st_dev;
+    s->socket_ino = (uint64_t)socket_stat.st_ino;
     set_nonblock(fd);
     s->listen_fd = fd;
+    if (ctl_watch_refresh(&s->socket_watch, path, 0) != 0 || repair_control_socket(s) != 0) {
+        fprintf(stderr, "senkod: control socket disappeared during startup\n");
+        s->socket_failed = 1;
+        ctl_server_close(s);
+        return CTLS_ERR_BIND;
+    }
     return CTLS_OK;
 }
 
@@ -749,7 +833,7 @@ static int fetch_body_alloc(ctl_server_t *s, const char *url,
 #define FWCONF_MAX (64 * 1024)
 #define FWLINE_MAX 512
 
-#define IMPORT_STAGE_MAX (512 * 1024)
+#define IMPORT_STAGE_MAX (16 * 1024 * 1024)
 
 /* the panel host is the only name a bare subscription url carries */
 static void sub_name_from_url(const char *url, char *out, size_t cap) {
@@ -1015,16 +1099,29 @@ static int read_whole_file(const char *path, size_t max_bytes,
     if (!path || !out || !out_len) return -1;
     *out = NULL;
     *out_len = 0;
-    FILE *f = fopen(path, "rb");
-    if (!f) return -1;
-    unsigned char *buf = (unsigned char *)malloc(max_bytes);
-    if (!buf) { fclose(f); return -1; }
-    size_t got = fread(buf, 1, max_bytes, f);
-    int overflowed = (got == max_bytes && fgetc(f) != EOF);
-    fclose(f);
-    if (overflowed) { free(buf); return -1; }
+    int fd = open(path, O_RDONLY | O_NOFOLLOW);
+    if (fd < 0) return -1;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
+        (uint64_t)st.st_size > max_bytes) { close(fd); return -1; }
+    size_t size = (size_t)st.st_size;
+    unsigned char *buf = malloc(size + 1);
+    if (!buf) { close(fd); return -1; }
+    size_t got = 0;
+    while (got < size) {
+        ssize_t n = read(fd, buf + got, size - got);
+        if (n > 0) got += (size_t)n;
+        else if (n < 0 && errno == EINTR) continue;
+        else { free(buf); close(fd); return -1; }
+    }
+    unsigned char extra;
+    ssize_t n;
+    do { n = read(fd, &extra, 1); } while (n < 0 && errno == EINTR);
+    int close_result = close(fd);
+    if (n != 0 || close_result != 0) { free(buf); return -1; }
+    buf[size] = 0;
     *out = buf;
-    *out_len = got;
+    *out_len = size;
     return 0;
 }
 
@@ -1792,6 +1889,23 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
         cmd.kind == CTL_CMD_CLEAR_MANUAL || cmd.kind == CTL_CMD_RESTORE)
         cancel_retry(s);
 
+    if (cmd.kind == CTL_CMD_KARING_EXPORT) {
+        char reply[160]; size_t rn = 0;
+        uint8_t *data = NULL; size_t len = 0;
+        char path[64];
+        int ok = karing_export(&s->engine.store, &data, &len) == 0;
+        if (ok) ok = write_karing_backup(data, len, path, sizeof path) == 0;
+        free(data);
+        if (ok) {
+            if (ctl_build_ok(path, reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+        } else if (ctl_build_err("Karing export failed: a server may have unsupported settings or the file could not be written",
+                                 reply, sizeof reply, &rn) == CTL_OK) {
+            client_write(c, reply, rn);
+        }
+        return;
+    }
+
     if (cmd.kind == CTL_CMD_EXPORT || cmd.kind == CTL_CMD_RESTORE) {
         char reply[128]; size_t rn = 0;
         int restore = cmd.kind == CTL_CMD_RESTORE;
@@ -2256,6 +2370,31 @@ static void dispatch_line(ctl_server_t *s, ctl_client_t *c,
             return;
         }
         (void)unlink(SENKO_IMPORT_STAGE);
+
+        if (blen >= 4 && memcmp(blob, "PK\003\004", 4) == 0) {
+            karing_import_result_t result;
+            if (tunnel_reads_rules(s)) {
+                free(blob);
+                if (ctl_build_err("disconnect before importing a Karing backup", reply, sizeof reply, &rn) == CTL_OK)
+                    client_write(c, reply, rn);
+                return;
+            }
+            int ok = karing_import(&s->engine.store, blob, blen, &result) == 0;
+            free(blob);
+            if (!ok) {
+                if (ctl_build_err("Karing backup is invalid, unsupported, or already imported", reply, sizeof reply, &rn) == CTL_OK)
+                    client_write(c, reply, rn);
+                return;
+            }
+            forget_pings(s);
+            if (s->persist) s->persist(s->apply_ctx, &s->engine.store);
+            char msg[200];
+            snprintf(msg, sizeof msg, "imported %zu subscription(s), %zu server(s), %zu skipped",
+                     result.subscriptions, result.servers, result.skipped);
+            if (ctl_build_ok(msg, reply, sizeof reply, &rn) == CTL_OK)
+                client_write(c, reply, rn);
+            return;
+        }
 
         cfg_content_t kind = cfg_content_kind((const char *)blob, blen);
         if (kind == CFG_CONTENT_UNKNOWN) {
@@ -2739,6 +2878,12 @@ size_t ctl_server_prepare(ctl_server_t *s, struct pollfd *pfd, size_t cap,
     s->poll_slot[nf] = -1;
     nf++;
 
+    pfd[nf].fd = s->socket_watch.fd;
+    pfd[nf].events = POLLIN;
+    pfd[nf].revents = 0;
+    s->poll_slot[nf] = -4;
+    nf++;
+
     for (size_t i = 0; i < CTL_SERVER_MAX_CLIENTS; ++i) {
         if (s->clients[i].fd < 0) continue;
         pfd[nf].fd = s->clients[i].fd;
@@ -2782,6 +2927,16 @@ void ctl_server_dispatch(ctl_server_t *s, const struct pollfd *pfd, size_t count
 
     for (size_t i = 2; i < count; ++i) {
         int slot = s->poll_slot[i];
+        if (slot == -4 && pfd[i].revents) {
+            int event = (pfd[i].revents & (POLLERR | POLLHUP | POLLNVAL)) ? -1 :
+                        ctl_watch_drain(&s->socket_watch);
+            if (event < 0 || ctl_watch_refresh(&s->socket_watch, s->sock_path, event > 0) != 0 ||
+                repair_control_socket(s) != 0) {
+                fprintf(stderr, "senkod: control socket directory changed or cannot be restored\n");
+                s->socket_failed = 1;
+            }
+            continue;
+        }
         if (slot < 0 || slot >= CTL_SERVER_MAX_CLIENTS) continue;
         ctl_client_t *c = &s->clients[slot];
         if (c->fd < 0) continue;
@@ -2804,7 +2959,7 @@ ctls_status_t ctl_server_step(ctl_server_t *s, int timeout_ms) {
         return (errno == EINTR) ? CTLS_OK : CTLS_ERR;
     }
     ctl_server_dispatch(s, pfd, nf);
-    return CTLS_OK;
+    return s->socket_failed ? CTLS_ERR : CTLS_OK;
 }
 
 void ctl_server_broadcast(ctl_server_t *s, const char *line, size_t len) {
@@ -2838,8 +2993,13 @@ void ctl_server_close(ctl_server_t *s) {
     for (size_t i = 0; i < CTL_SERVER_MAX_CLIENTS; ++i)
         if (s->clients[i].fd >= 0) drop_client(&s->clients[i]);
     if (s->listen_fd >= 0) { close(s->listen_fd); s->listen_fd = -1; }
-    if (s->sock_path[0]) (void)remove_stale_socket(s->sock_path);
-    if (s->token_path[0]) (void)unlink(s->token_path);
+    ctl_watch_close(&s->socket_watch);
+    struct stat socket_stat;
+    if (s->sock_path[0] && lstat(s->sock_path, &socket_stat) == 0 &&
+        S_ISSOCK(socket_stat.st_mode) && (uint64_t)socket_stat.st_dev == s->socket_dev &&
+        (uint64_t)socket_stat.st_ino == s->socket_ino)
+        (void)unlink(s->sock_path);
+    if (!s->socket_failed && s->token_path[0]) (void)unlink(s->token_path);
     s->token[0] = '\0';
     if (s->ping_pipe[0] >= 0) close(s->ping_pipe[0]);
     if (s->ping_pipe[1] >= 0) close(s->ping_pipe[1]);

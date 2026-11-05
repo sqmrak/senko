@@ -69,6 +69,7 @@ HOST_TESTS = test_ctl_server test_autoconnect test_session_direct test_config_co
              test_app_proxy test_senko_core_config test_net_safe test_legacy_ios \
              test_subinfo test_profiles test_amnezia_bundle test_amnezia_qr test_happ_links \
              test_b64 test_traffic test_loop_traffic test_rules
+HOST_TESTS += test_karing_backup
 HOST_TESTS += test_dns_msg test_chacha_poly test_awg_tunnel_neon
 HOST_TESTS += test_dns_cache
 HOST_TESTS += test_trojan
@@ -123,6 +124,8 @@ test-native:
 	bash ../scripts/test_native_core.sh
 
 test: $(HOST_TESTS)
+	./test_karing_backup
+	python3 test_karing_zip.py
 	python3 test_launchd_install.py
 	python3 check_emoji_assets.py
 	./test_blake2b256
@@ -635,26 +638,29 @@ HELPER_SRC = $(DAEMON)/helper_jobs.c $(DAEMON)/senkod_helper.c \
              $(DAEMON)/route_socket.c $(CORE)/route_message.c \
              $(CORE)/awg_config.c $(CORE)/awg_handshake.c $(CORE)/reality_crypto.c $(MLKEM768_SRC) $(TIME)
 
-test_ctl_server: test_ctl_server.c $(DAEMON)/ctl_server.c $(CORE)/ctl_engine.c \
+test_ctl_server: test_ctl_server.c $(DAEMON)/ctl_server.c $(DAEMON)/ctl_watch.c $(CORE)/karing_backup.c $(CORE)/karing_zip.c $(CORE)/ctl_engine.c \
                  $(CORE)/control.c $(CORE)/store.c $(CORE)/routing_sync.c $(CORE)/url.c $(NET_SAFE) \
                  $(DAEMON)/settings.c $(DAEMON)/egress.c \
                  $(DAEMON)/legacy_ios.c $(CFG_SRC) $(CORE)/dns_msg.c $(HELPER_SRC)
-	$(CC) $(CFLAGS) $(TLS_CFLAGS) -I$(DAEMON) test_ctl_server.c $(DAEMON)/ctl_server.c \
+	$(CC) $(CFLAGS) $(TLS_CFLAGS) -I$(DAEMON) test_ctl_server.c $(DAEMON)/ctl_server.c $(DAEMON)/ctl_watch.c \
 	      $(CORE)/ctl_engine.c $(CORE)/control.c $(CORE)/store.c $(CORE)/routing_sync.c $(CORE)/url.c \
-	      $(DAEMON)/settings.c $(DAEMON)/egress.c $(DAEMON)/legacy_ios.c \
-	      $(NET_SAFE) $(CFG_SRC) $(CORE)/dns_msg.c $(HELPER_SRC) -o $@ $(TLS_LDFLAGS)
+	      $(CORE)/karing_backup.c $(CORE)/karing_zip.c $(DAEMON)/settings.c $(DAEMON)/egress.c $(DAEMON)/legacy_ios.c \
+	      $(NET_SAFE) $(CFG_SRC) $(CORE)/dns_msg.c $(HELPER_SRC) -o $@ $(TLS_LDFLAGS) -lz
 
-test_autoconnect: test_autoconnect.c $(DAEMON)/ctl_server.c $(CORE)/ctl_engine.c \
+test_autoconnect: test_autoconnect.c $(DAEMON)/ctl_server.c $(DAEMON)/ctl_watch.c $(CORE)/karing_backup.c $(CORE)/karing_zip.c $(CORE)/ctl_engine.c \
                  $(CORE)/control.c $(CORE)/store.c $(CORE)/routing_sync.c $(CORE)/url.c $(NET_SAFE) \
                  $(DAEMON)/settings.c $(DAEMON)/egress.c \
                  $(DAEMON)/legacy_ios.c $(CFG_SRC) $(CORE)/dns_msg.c $(HELPER_SRC)
-	$(CC) $(CFLAGS) $(TLS_CFLAGS) -I$(DAEMON) test_autoconnect.c $(DAEMON)/ctl_server.c \
+	$(CC) $(CFLAGS) $(TLS_CFLAGS) -I$(DAEMON) test_autoconnect.c $(DAEMON)/ctl_server.c $(DAEMON)/ctl_watch.c \
 	      $(CORE)/ctl_engine.c $(CORE)/control.c $(CORE)/store.c $(CORE)/routing_sync.c $(CORE)/url.c \
-	      $(DAEMON)/settings.c $(DAEMON)/egress.c $(DAEMON)/legacy_ios.c \
-	      $(NET_SAFE) $(CFG_SRC) $(CORE)/dns_msg.c $(HELPER_SRC) -o $@ $(TLS_LDFLAGS)
+	      $(CORE)/karing_backup.c $(CORE)/karing_zip.c $(DAEMON)/settings.c $(DAEMON)/egress.c $(DAEMON)/legacy_ios.c \
+	      $(NET_SAFE) $(CFG_SRC) $(CORE)/dns_msg.c $(HELPER_SRC) -o $@ $(TLS_LDFLAGS) -lz
 
 test_profiles: test_profiles.c $(CFG_SRC)
 	$(CC) $(CFLAGS) $(TLS_CFLAGS) test_profiles.c $(CFG_SRC) -o $@ $(TLS_LDFLAGS)
+
+test_karing_backup: test_karing_backup.c $(CORE)/karing_backup.c $(CORE)/karing_zip.c $(CORE)/store.c $(CORE)/url.c $(NET_SAFE) $(CFG_SRC)
+	$(CC) $(CFLAGS) $(TLS_CFLAGS) $^ -o $@ $(TLS_LDFLAGS) -lz
 
 test_happ_links: test_happ_links.c $(CFG_SRC)
 	$(CC) $(CFLAGS) $(TLS_CFLAGS) test_happ_links.c $(CFG_SRC) -o $@ $(TLS_LDFLAGS)

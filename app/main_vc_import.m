@@ -481,6 +481,12 @@ static BOOL SenkoLooksLikeSubscriptionURL(NSString *s) {
         [av show];
         return;
     }
+    NSDictionary *attributes = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:NULL];
+    if ([[attributes objectForKey:NSFileSize] unsignedLongLongValue] > 16ULL * 1024ULL * 1024ULL) {
+        [self setLastErr:@"the import file exceeds 16 MB"];
+        [self applyState];
+        return;
+    }
     NSData *body = [NSData dataWithContentsOfFile:path];
     if (![body length]) {
         [self setLastErr:@"the file is empty or could not be read"];

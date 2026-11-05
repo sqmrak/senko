@@ -531,10 +531,10 @@ awg_hs_status_t awg_handshake_establish_fd(int fd, int cancel_fd, const awg_conf
     int64_t deadline = senko_now_ms() + (timeout_ms > 0 ? timeout_ms : 5000);
     /* itime is how often awg 1.5 re-emits the junk train while a handshake is
        still unanswered. a repeat of the same initiation would be refused as a
-       replayed timestamp, so the initiation is rebuilt with it. without itime
-       it is still resent every second: while the kernel resolves the next hop
-       it holds only the first packet of a burst, so after an idle spell the
-       junk went out and the initiation behind it was dropped (ios 5.1.1) */
+       replayed timestamp, so the initiation is rebuilt with it. the first
+       retry is capped at one second: while the kernel resolves the
+       next hop it can drop the initiation behind the junk burst (ios 5.1.1),
+       and a configured rekey timeout can exceed the whole connect deadline */
     uint16_t retry_seconds = 0;
     if (awg_range_pick(cfg->timers[AWG_TIMER_REKEY_TIMEOUT], 0,
                        &retry_seconds) != 0) {
@@ -545,7 +545,7 @@ awg_hs_status_t awg_handshake_establish_fd(int fd, int cancel_fd, const awg_conf
     }
     const int64_t resend_ms = retry_seconds ? (int64_t)retry_seconds * 1000 :
                               (cfg->itime ? (int64_t)cfg->itime * 1000 : 1000);
-    int64_t resend_at = senko_now_ms() + resend_ms;
+    int64_t resend_at = senko_now_ms() + (resend_ms < 1000 ? resend_ms : 1000);
     uint16_t max_attempts = 0;
     if (awg_range_pick(cfg->timers[AWG_TIMER_MAX_ATTEMPTS], 18,
                        &max_attempts) != 0) {

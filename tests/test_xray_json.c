@@ -299,7 +299,45 @@ static const char k_uri_list[] =
     "vless://11111111-1111-4111-8111-111111111111@1.1.1.1:443"
     "?security=reality&type=tcp&flow=xtls-rprx-vision&pbk=" PBK "&sid=00#uri\n";
 
+/* the panel's ios response puts ip-fronted nodes in separate xray profiles */
+static void test_ip_fronted_panel(void) {
+    static const char body[] =
+        "[{\"remarks\":\"ws\",\"outbounds\":[{\"protocol\":\"vless\","
+        "\"settings\":{\"vnext\":[{\"address\":\"192.0.2.10\",\"port\":443,"
+        "\"users\":[{\"id\":\"11111111-1111-4111-8111-111111111111\",\"encryption\":\"none\"}]}]},"
+        "\"streamSettings\":{\"network\":\"ws\",\"security\":\"tls\","
+        "\"wsSettings\":{\"path\":\"/tunnel\"},\"tlsSettings\":{\"serverName\":\"front.example\","
+        "\"fingerprint\":\"chrome\",\"alpn\":[\"http/1.1\"]}}},{\"protocol\":\"freedom\"}]},"
+        "{\"remarks\":\"hy\",\"outbounds\":[{\"protocol\":\"hysteria\","
+        "\"settings\":{\"version\":2,\"address\":\"192.0.2.11\",\"port\":443},"
+        "\"streamSettings\":{\"network\":\"hysteria\",\"security\":\"tls\","
+        "\"tlsSettings\":{\"serverName\":\"hy.example\"},\"hysteriaSettings\":{\"version\":2,\"auth\":\"secret\"},"
+        "\"finalmask\":{\"quicParams\":{\"brutalUp\":\"2000 mbps\",\"brutalDown\":\"2000 mbps\","
+        "\"congestion\":\"brutal\",\"maxIdleTimeout\":20,\"keepAlivePeriod\":10}}}}]},"
+        "{\"remarks\":\"grpc\",\"outbounds\":[{\"protocol\":\"vless\","
+        "\"settings\":{\"vnext\":[{\"address\":\"192.0.2.12\",\"port\":6443,"
+        "\"users\":[{\"id\":\"11111111-1111-4111-8111-111111111111\",\"encryption\":\"none\"}]}]},"
+        "\"streamSettings\":{\"network\":\"grpc\",\"security\":\"reality\","
+        "\"grpcSettings\":{\"serviceName\":\"service\",\"authority\":\"\",\"mode\":false},"
+        "\"realitySettings\":{\"serverName\":\"grpc.example\",\"fingerprint\":\"chrome\","
+        "\"publicKey\":\"" PBK "\",\"shortId\":\"ab\"}}}]}]";
+    static vl_server_t nodes[8];
+    size_t count = 0;
+    cfg_import_stats_t stats;
+    ok("ip-fronted xray feed parses", cfg_parse_subscription_rows(body, strlen(body), nodes, 8,
+                                                                    &count, &stats) == CFG_OK &&
+       count == 3 && stats.skipped == 0);
+    ok("xray websocket uses sni as host", count >= 1 && nodes[0].net == VL_NET_WS &&
+       !strcmp(nodes[0].sni, "front.example") && !strcmp(nodes[0].ws_host, "front.example") &&
+       !strcmp(nodes[0].path, "/tunnel"));
+    ok("xray hysteria is retained", count >= 2 && nodes[1].proto == VL_PROTO_HYSTERIA2 &&
+       !strcmp(nodes[1].pass, "secret"));
+    ok("xray reality grpc preserves service", count >= 3 && nodes[2].net == VL_NET_GRPC &&
+       nodes[2].security == VL_SEC_REALITY && !strcmp(nodes[2].path, "/service/Tun"));
+}
+
 int main(void) {
+    test_ip_fronted_panel();
     vl_server_t srv[16];
     size_t n = 0;
     size_t i;

@@ -65,6 +65,31 @@ static int test_response(void) {
     return bad;
 }
 
+static int test_first_retry(void) {
+    static awg_config_t cfg;
+    awg_handshake_t hs;
+    char reason[160];
+    int fd[2], bad = 0, count = 0;
+    awg_config_init(&cfg);
+    memcpy(cfg.private_key, response_private_key, AWG_KEY_LEN);
+    memcpy(cfg.peer_public_key, response_peer_public_key, AWG_KEY_LEN);
+    cfg.timers[AWG_TIMER_REKEY_TIMEOUT].min = 7;
+    cfg.timers[AWG_TIMER_REKEY_TIMEOUT].max = 7;
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, fd) != 0) return 1;
+    bad |= expect(awg_handshake_establish_fd(fd[0], -1, &cfg, 1600, &hs,
+                  reason, sizeof reason) == AWG_HS_ERR_TIMEOUT, "silent peer times out");
+    struct pollfd pfd = {fd[1], POLLIN, 0};
+    uint8_t packet[2048];
+    while (poll(&pfd, 1, 0) > 0) {
+        if (recv(fd[1], packet, sizeof packet, 0) <= 0) break;
+        ++count;
+    }
+    bad |= expect(count == 2, "initial handshake retries before a long rekey timeout");
+    close(fd[0]);
+    close(fd[1]);
+    return bad;
+}
+
 static int test_warp_profiles(void) {
     static const struct { size_t i1_len; size_t i2_len; } profiles[] = {
         {1249, 0}, {347, 244}
@@ -154,6 +179,7 @@ int main(void) {
     char reason[128];
     int bad = 0;
     bad |= test_response();
+    bad |= test_first_retry();
     bad |= test_warp_profiles();
     uint8_t vector_key[32], vector_out[32];
     static const uint8_t vector_expected[32] = {0xa2,0x81,0xf7,0x25,0x75,0x49,0x69,0xa7,0x02,0xf6,0xfe,0x36,0xfc,0x59,0x1b,0x7d,0xef,0x86,0x6e,0x4b,0x70,0x17,0x3e,0xce,0x40,0x2f,0xc0,0x1c,0x06,0x4d,0x6b,0x65};

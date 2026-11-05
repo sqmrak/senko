@@ -29,6 +29,7 @@ typedef enum {
     CTL_CMD_MOVE_MANUAL,
     CTL_CMD_SET_SUB_HEADER,
     CTL_CMD_EXPORT,
+    CTL_CMD_KARING_EXPORT,
     CTL_CMD_RESTORE,
     CTL_CMD_CHECK,
     CTL_CMD_HWID, /* report the device id sent to subscription panels */

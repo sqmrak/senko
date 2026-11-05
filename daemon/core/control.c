@@ -302,6 +302,10 @@ ctl_status_t ctl_parse_cmd(const char *line, size_t len, ctl_cmd_t *out) {
         out->kind = CTL_CMD_CLEAR_MANUAL;
         return CTL_OK;
     }
+    if (verb_is(line, len, "KARINGEXPORT", &rest, &rl) && rl == 0) {
+        out->kind = CTL_CMD_KARING_EXPORT;
+        return CTL_OK;
+    }
     if (verb_is(line, len, "EXPORT", &rest, &rl) && rl == 0) {
         out->kind = CTL_CMD_EXPORT;
         return CTL_OK;

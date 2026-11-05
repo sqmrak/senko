@@ -19,7 +19,7 @@
 
 - vless: tcp, tls, reality, websocket, xhttp, grpc
 - vmess: aead, tcp, tls, websocket, xhttp, grpc; below ios 12 tcp, udp and dns
-- hysteria2: salamander, pinned certificate; below ios 12 tcp and dns only
+- hysteria2: salamander, pinned certificate; below ios 12 tcp and dns only; xray `quicParams` rates and timers are not imported
 - amneziawg
 - socks5, http(s)
 
@@ -32,6 +32,14 @@ subscriptions: uri lists, base64, happ, xray/sing-box json, clash yaml, shadowro
 - same button per subscription: refresh, ping, details, edit, remove
 - refresh and ping icons: instant checks
 - tap a heading: show or hide its servers
+
+## karing backups
+
+- import a Karing ZIP through add, import from file; existing subscriptions are kept
+- settings, backup, export Karing backup writes `Documents/senko-karing.backup.zip`
+- the archive contains servers and subscriptions, not settings or routing rules
+- the export fails if a server uses settings that cannot be represented without loss
+- imports reject certificate pins and other connection options the parser cannot preserve
 
 ## routing
 
