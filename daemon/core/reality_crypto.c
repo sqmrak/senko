@@ -13,8 +13,8 @@
 
 /* arm64 keeps openssl's assembly; the armv7 openssl has none, and the force
    switch lets a neon host exercise this path in the tests */
-#if (defined(__arm__) && (defined(__ARM_NEON__) || defined(__ARM_NEON))) || \
-    defined(SENKO_FORCE_NEON_AEAD)
+#if (defined(__ARM_NEON__) || defined(__ARM_NEON)) && \
+    (defined(__arm__) || defined(SENKO_FORCE_NEON_AEAD))
 #define RC_OWN_CHACHA 1
 #include "chacha_poly.inc"
 #endif

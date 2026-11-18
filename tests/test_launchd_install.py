@@ -469,19 +469,21 @@ class StatusHookPlacement(unittest.TestCase):
         self.assertEqual(self.enable('').returncode, 0)
         self.assertFalse((self.target / 'senkostatus.dylib').exists())
 
-    def test_ios_12_keeps_the_status_payload_and_installs_the_hook(self):
+    def test_ios_12_to_16_keeps_the_status_payload_and_installs_the_hook(self):
         source = POSTINST.read_text()
-        start = source.index('if [ "$IOS_MAJOR" -ge 13 ]')
+        start = source.index('if [ "$IOS_MAJOR" -ge 12 ]')
         end = source.index('\nif [ -e "${SUBSTRATE_DIR}/senkostatus.dylib" ]', start)
         policy = source[start:end]
-        for jbroot in ('', '/var/jb'):
-            with self.subTest(jbroot=jbroot):
-                script = '''
-IOS_MAJOR=12
-JBROOT="$1"
-STATUS_DYLIB="$2"
-STATUS_PLIST="$3"
-SUBSTRATE_DIR="$4"
+        for ios_major in (12, 13, 14, 15, 16):
+            for jbroot in ('', '/var/jb'):
+                with self.subTest(ios_major=ios_major, jbroot=jbroot):
+                    target = self.base / ('substrate-%d-%s' % (ios_major, 'rootless' if jbroot else 'rootful'))
+                    script = '''
+IOS_MAJOR="$1"
+JBROOT="$2"
+STATUS_DYLIB="$3"
+STATUS_PLIST="$4"
+SUBSTRATE_DIR="$5"
 disable_senkotlsfix_hooks() { :; }
 remove_rootful_legacy_links() { :; }
 remove_modern_tls_payload() { :; }
@@ -489,14 +491,14 @@ substrate_installed() { return 0; }
 %s
 %s
 ''' % (shell_function(POSTINST, 'enable_senkostatus_hooks'), policy)
-                result = subprocess.run(['/bin/sh', '-c', script, 'test', jbroot,
-                                         str(self.dylib), str(self.plist), str(self.target)],
-                                        capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertTrue(self.dylib.is_file())
-                self.assertTrue(self.plist.is_file())
-                self.assertTrue((self.target / 'senkostatus.dylib').is_file())
-                self.assertTrue((self.target / 'senkostatus.plist').is_file())
+                    result = subprocess.run(['/bin/sh', '-c', script, 'test', str(ios_major), jbroot,
+                                             str(self.dylib), str(self.plist), str(target)],
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertTrue(self.dylib.is_file())
+                    self.assertTrue(self.plist.is_file())
+                    self.assertTrue((target / 'senkostatus.dylib').is_file())
+                    self.assertTrue((target / 'senkostatus.plist').is_file())
 
 
 if __name__ == '__main__':

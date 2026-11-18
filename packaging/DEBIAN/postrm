@@ -9,7 +9,13 @@ if [ -e /var/jb/.procursus_strapped ] || \
 else
   JBROOT=
 fi
-SUBSTRATE_DIR=${JBROOT}/Library/MobileSubstrate/DynamicLibraries
+if [ -d "${JBROOT}/usr/lib/TweakInject" ] && [ ! -d "${JBROOT}/Library/MobileSubstrate/DynamicLibraries" ]; then
+  SUBSTRATE_DIR=${JBROOT}/usr/lib/TweakInject
+elif [ -d /usr/lib/TweakInject ] && [ ! -d /Library/MobileSubstrate/DynamicLibraries ]; then
+  SUBSTRATE_DIR=/usr/lib/TweakInject
+else
+  SUBSTRATE_DIR=${JBROOT}/Library/MobileSubstrate/DynamicLibraries
+fi
 UICACHE=${JBROOT}/usr/bin/uicache
 [ -x "$UICACHE" ] || UICACHE=/usr/bin/uicache
 
@@ -84,7 +90,10 @@ case "$1" in
           "${SUBSTRATE_DIR}/senkotlsfix.plist" \
           /var/mobile/Library/Preferences/com.senko.status.state \
           /var/mobile/Library/Preferences/com.senko.status.log \
-          /var/mobile/Library/Preferences/com.senko.status.off >/dev/null 2>&1 || true
+          /var/mobile/Library/Preferences/com.senko.status.off \
+          /var/jb/var/mobile/Library/Preferences/com.senko.status.state \
+          /var/jb/var/mobile/Library/Preferences/com.senko.status.log \
+          /var/jb/var/mobile/Library/Preferences/com.senko.status.off >/dev/null 2>&1 || true
     remove_rootful_layout
     # the icon cache is rebuilt only after the bundle is gone: rebuilding it
     # first recorded senko again, and a tester on ios 10 kept an icon that

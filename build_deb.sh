@@ -231,7 +231,7 @@ echo "==> senkostatus armv7"
 "${TC}/clang" -target arm-apple-darwin11 -B "${TC}" \
   -fno-objc-arc -Wall -Wextra -O2 -fPIC \
   -arch armv7 -miphoneos-version-min=4.3 -isysroot "${SDK_V7}" \
-  "${ROOT}/status/senko_status.m" \
+  "${ROOT}/status/senko_status.m" "${ROOT}/status/VPNStatusBar.m" \
   -o "${SLICE}/senkostatus-armv7.dylib" \
   -dynamiclib \
   -Wl,-no_warn_inits \
@@ -243,7 +243,7 @@ echo "==> senkostatus arm64"
 "${TC}/clang" -target arm64-apple-darwin -B "${TC}" \
   -fno-objc-arc -Wall -Wextra -O2 -fPIC ${ARM64_ROOT_FLAGS} \
   -arch arm64 -miphoneos-version-min=7.0 -isysroot "${SDK_V64}" \
-  "${ROOT}/status/senko_status.m" \
+  "${ROOT}/status/senko_status.m" "${ROOT}/status/VPNStatusBar.m" \
   -o "${SLICE}/senkostatus-arm64.dylib" \
   -dynamiclib \
   -Wl,-no_warn_inits \
@@ -255,7 +255,8 @@ echo "==> senkostatus arm64e"
 "${TC}/clang" -target arm64e-apple-darwin -B "${TC}" \
   -fno-objc-arc -Wall -Wextra -O2 -fPIC ${ARM64_ROOT_FLAGS} \
   -arch arm64e -miphoneos-version-min=12.0 -isysroot "${SDK_VE}" \
-  "${ROOT}/status/senko_status.m" -o "${SLICE}/senkostatus-arm64e.dylib" \
+  "${ROOT}/status/senko_status.m" "${ROOT}/status/VPNStatusBar.m" \
+  -o "${SLICE}/senkostatus-arm64e.dylib" \
   -dynamiclib -Wl,-no_warn_inits -install_name "${ARM64_STATUS_INSTALL_NAME}" \
   -framework Foundation -framework UIKit -framework CoreFoundation -lobjc
 "${TC}/ldid" -S "${SLICE}/senkostatus-arm64e.dylib"
