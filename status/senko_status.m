@@ -1,6 +1,11 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
 #include <stddef.h>
+#include <string.h>
 
 #import "VPNStatusBar.h"
 
@@ -40,6 +45,39 @@ static int SenkoDataConnectionType(void) {
     return call(telephony, sel);
 }
 
+static BOOL SenkoEn0HasLiveAddress(void) {
+    struct ifaddrs *list = NULL;
+    if (getifaddrs(&list) != 0) return NO;
+    BOOL live = NO;
+    for (struct ifaddrs *it = list; it; it = it->ifa_next) {
+        if (!it->ifa_name || !it->ifa_addr) continue;
+        if (strcmp(it->ifa_name, "en0") != 0) continue;
+        if ((it->ifa_flags & (IFF_UP | IFF_RUNNING)) != (IFF_UP | IFF_RUNNING))
+            continue;
+        if (it->ifa_addr->sa_family == AF_INET) {
+            uint32_t ip = ntohl(((const struct sockaddr_in *)it->ifa_addr)->sin_addr.s_addr);
+            if (ip != 0 && (ip & 0xff000000U) != 0x7f000000U &&
+                (ip & 0xffff0000U) != 0xa9fe0000U) {
+                live = YES;
+                break;
+            }
+        }
+    }
+    freeifaddrs(list);
+    return live;
+}
+
+static BOOL SenkoWiFiIsLive(id wifi) {
+    if (!wifi) return NO;
+    BOOL enabled = YES;
+    if (SenkoCallBool(wifi, sel_registerName("wiFiEnabled"), &enabled) && !enabled)
+        return NO;
+    BOOL associated = YES;
+    if (SenkoCallBool(wifi, sel_registerName("isAssociated"), &associated) && !associated)
+        return NO;
+    return SenkoEn0HasLiveAddress();
+}
+
 /* the three facts the wifi glyph is drawn from, for the log */
 static NSString *SenkoNetworkFacts(void) {
     id wifi = SenkoSharedObject(@"SBWiFiManager", @selector(sharedInstance),
@@ -60,25 +98,16 @@ static NSString *SenkoNetworkFacts(void) {
             SenkoDataConnectionType(), have_primary ? (int)primary : -1, using_wifi];
 }
 
-/* springboard draws the wifi glyph only while configd's primary interface is
-   the wifi interface: SBWiFiManager -_primaryInterfaceChanged: sets the flag
-   SBTelephonyManager -dataConnectionType reads (ios 6.1 springboard). a senko
-   tunnel is primary while it carries the system dns, so the glyph and the vpn
-   badge beside it vanished for as long as it ran. the tunnel still leaves by
-   wifi, and senkod writes which interface it rides into the state file */
+/* springboard on legacy ios draws the wifi glyph only while configd's primary
+   interface is the wifi interface: SBWiFiManager -_primaryInterfaceChanged:
+   sets the flag SBTelephonyManager -dataConnectionType reads (ios 6.1).
+   on ios 13+ senkod keeps the kernel utun delegate in sync via
+   UTUN_OPT_SET_DELEGATE_INTERFACE, so SBWiFiManager is left untouched there */
 static void (*gSenkoOrigPrimaryChanged)(id, SEL, BOOL) = NULL;
 static BOOL gSenkoWiFiHookTried = NO;
 
-static BOOL SenkoWiFiIsAssociated(id wifi) {
-    if (!wifi) return NO;
-    BOOL associated = YES;
-    if (SenkoCallBool(wifi, sel_registerName("isAssociated"), &associated))
-        return associated;
-    return YES;
-}
-
 static void SenkoPrimaryInterfaceChanged(id self, SEL _cmd, BOOL primary) {
-    if (!primary && VPNStatusBarTunnelRidesWiFi() && SenkoWiFiIsAssociated(self)) {
+    if (!primary && VPNStatusBarTunnelRidesWiFi() && SenkoWiFiIsLive(self)) {
         primary = YES;
         VPNStatusBarLog(@"configd made the tunnel primary; wifi kept, the tunnel rides it");
         gSenkoOrigPrimaryChanged(self, _cmd, primary);
@@ -120,12 +149,13 @@ static void SenkoRefreshWiFi(void) {
     if (!gSenkoOrigPrimaryChanged || !VPNStatusBarTunnelRidesWiFi()) return;
     id wifi = SenkoSharedObject(@"SBWiFiManager", @selector(sharedInstance),
                                 @selector(sharedWiFiManager));
-    if (!wifi || !SenkoWiFiIsAssociated(wifi)) return;
+    if (!wifi || !SenkoWiFiIsLive(wifi)) return;
     SenkoPrimaryInterfaceChanged(wifi, sel_registerName("_primaryInterfaceChanged:"), YES);
 }
 
 static void SenkoPostApply(BOOL enabled, NSString *via) {
     (void)enabled;
+    if (objc_getClass("STStatusBarDataBoolEntry") != Nil) return;
     SenkoRefreshWiFi();
     if (![via isEqualToString:@"cached"]) {
         VPNStatusBarLog(SenkoNetworkFacts());

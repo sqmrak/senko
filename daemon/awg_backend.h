@@ -101,6 +101,10 @@ int awg_backend_saved_profile(char *path, size_t cap);
 int awg_backend_describe(awg_backend_t *backend, int index, char *key, size_t key_cap,
                          char *value, size_t value_cap);
 
+/* update the utun delegate interface when Wi-Fi / cellular changes while
+   connected; returns 1 if changed, 0 otherwise */
+int awg_backend_update_delegate(awg_backend_t *backend, const char *physical_ifname);
+
 #ifdef __cplusplus
 }
 #endif

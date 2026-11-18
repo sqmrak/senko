@@ -30,6 +30,9 @@
 #include <arpa/inet.h>
 #include <sys/time.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <notify.h>
+#endif
 
 static volatile sig_atomic_t g_stop = 0;
 /* the managed loop sleeps in poll() with no timeout while idle, so a signal
@@ -252,11 +255,26 @@ static int run_managed(const char *ctl_path, const char *config_path,
         return 1;
     }
 
+    int net_fd = -1;
+#if defined(__APPLE__)
+    int net_token = NOTIFY_TOKEN_INVALID;
+    if (notify_register_file_descriptor("com.apple.system.config.network_change",
+                                        &net_fd, 0, &net_token) == NOTIFY_STATUS_OK &&
+        net_fd >= 0) {
+        int fl = fcntl(net_fd, F_GETFL, 0);
+        if (fl >= 0) (void)fcntl(net_fd, F_SETFL, fl | O_NONBLOCK);
+        (void)fcntl(net_fd, F_SETFD, FD_CLOEXEC);
+    } else {
+        net_fd = -1;
+        net_token = NOTIFY_TOKEN_INVALID;
+    }
+#endif
+
 /* one poll for every owner on this thread, waiting only as long as the
    nearest deadline any of them has: a fixed beat woke an idle ios device
    many times a second */
     while (!g_stop) {
-        struct pollfd pfd[2 + LOOP_POLL_MAX + CTL_SERVER_POLL_MAX];
+        struct pollfd pfd[3 + LOOP_POLL_MAX + CTL_SERVER_POLL_MAX];
         int timeout_ms = daemon_ctl_wait_ms(&dc);
         size_t n = 0;
         pfd[n].fd = g_signal_pipe[0];
@@ -266,6 +284,14 @@ static int run_managed(const char *ctl_path, const char *config_path,
         int ended_fd = daemon_ctl_wait_fd(&dc);
         if (ended_fd >= 0) {
             pfd[n].fd = ended_fd;
+            pfd[n].events = POLLIN;
+            pfd[n].revents = 0;
+            n++;
+        }
+        size_t net_idx = (size_t)-1;
+        if (net_fd >= 0) {
+            net_idx = n;
+            pfd[n].fd = net_fd;
             pfd[n].events = POLLIN;
             pfd[n].revents = 0;
             n++;
@@ -282,6 +308,11 @@ static int run_managed(const char *ctl_path, const char *config_path,
             fprintf(stderr, "senkod: poll failed (errno %d)\n", errno);
             break;
         }
+        if (r > 0 && net_idx != (size_t)-1 && (pfd[net_idx].revents & POLLIN)) {
+            char drain[64];
+            while (read(net_fd, drain, sizeof drain) > 0) {}
+            daemon_ctl_sync_network(&dc);
+        }
         if (r > 0) loop_dispatch(&lp, pfd + loop_at, loop_n);
         /* helper jobs time out from dispatch, so it runs on a timeout too */
         if (r >= 0) ctl_server_dispatch(&cs, pfd + ctl_at, ctl_n);
@@ -293,6 +324,9 @@ static int run_managed(const char *ctl_path, const char *config_path,
         ctl_server_tick(&cs);
     }
 
+#if defined(__APPLE__)
+    if (net_token != NOTIFY_TOKEN_INVALID) (void)notify_cancel(net_token);
+#endif
     fprintf(stderr, "senkod: shutting down\n");
     daemon_ctl_shutdown(&dc);
     if (config_path && config_path[0])
