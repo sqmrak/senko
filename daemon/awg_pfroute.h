@@ -7,6 +7,8 @@
 int awg_pfroute_probe_get4(const char *destination, char *detail, size_t detail_cap);
 int awg_pfroute_probe_host4(const char *destination, const char *gateway, char *detail, size_t detail_cap);
 int awg_pfroute_gateway4(const char *destination, char *gateway, size_t gateway_cap);
+int awg_pfroute_gateway_and_if4(const char *destination, char *gateway, size_t gateway_cap,
+                                char *ifname, size_t ifname_cap);
 int awg_pfroute_host4(int add, const char *destination, const char *gateway);
 int awg_pfroute_net4_if(int add, const char *network, const char *netmask, const char *ifname);
 int awg_pfroute_net6_if(int add, const char *network, const char *netmask, const char *ifname);

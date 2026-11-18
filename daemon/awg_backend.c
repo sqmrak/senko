@@ -3,6 +3,7 @@
 #include "awg_backend.h"
 
 #include "awg_route.h"
+#include "awg_utun.h"
 #include "core/senko_time.h"
 #include "direct_socket.h"
 #include "legacy_ios.h"
@@ -152,6 +153,10 @@ static void *run(void *arg) {
         snprintf(why, sizeof why, "cannot open a utun device (errno %d)",
                  b->device.last_errno);
         goto done;
+    }
+    if (awg_utun_set_delegate(b->device.fd, input.physical_ifname) == 0) {
+        fprintf(stderr, "senkod: amneziawg delegated %s to %s\n",
+                b->device.ifname, input.physical_ifname);
     }
     awg_route_plan_t address;
     if (awg_route_plan_for_interface(&b->cfg, b->device.ifname, &address) != 0 ||

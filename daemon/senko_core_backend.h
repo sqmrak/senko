@@ -12,6 +12,7 @@ typedef struct {
     pid_t child;
     int tun_fd;
     int active;
+    char physical_ifname[32];
     awg_route_plan_t route;
     utun_dns_t dns;
     traffic_counter_t upload;
