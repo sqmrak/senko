@@ -63,6 +63,8 @@ typedef struct {
    without every one of them growing a parameter */
     ctl_check_trace_t *trace;
     pthread_mutex_t probe_route_lock;
+    char           last_delegate_ifname[32];
+    int            have_delegate;
 } daemon_ctl_t;
 
 void daemon_ctl_init(daemon_ctl_t *d, loop_t *loop, const char *config_path);
@@ -75,6 +77,8 @@ void daemon_ctl_shutdown(daemon_ctl_t *d);
 
 /* tear down routes if the separate senko-core exits unexpectedly */
 int daemon_ctl_maintain(daemon_ctl_t *d);
+/* sync utun delegate and status bar physical link when Wi-Fi/cellular toggles */
+void daemon_ctl_sync_network(daemon_ctl_t *d);
 /* what the main poll needs for daemon_ctl_maintain: a descriptor that turns
    readable when the embedded tunnel thread dies (-1 when there is none), and
    the longest wait before the next look (-1 for no limit) */

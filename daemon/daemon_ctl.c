@@ -1,6 +1,7 @@
 #define _DEFAULT_SOURCE /* expose getaddrinfo */
 
 #include "daemon_ctl.h"
+#include "awg_utun.h"
 #include "storefile.h"
 #include "status.h"
 
@@ -145,6 +146,45 @@ void daemon_ctl_shutdown(daemon_ctl_t *d) {
     pthread_mutex_destroy(&d->probe_route_lock);
     OPENSSL_cleanse(&d->started, sizeof d->started);
     d->started_set = 0;
+    d->have_delegate = 0;
+    d->last_delegate_ifname[0] = '\0';
+}
+
+void daemon_ctl_sync_network(daemon_ctl_t *d) {
+    if (!d) return;
+    int awg_up = awg_backend_busy(&d->awg);
+    int utun_up = d->embedded_utun.active && d->embedded_utun.device.fd >= 0;
+    int core_up = d->senko_core.active && d->senko_core.tun_fd >= 0;
+    if (!awg_up && !utun_up && !core_up) {
+        d->have_delegate = 0;
+        d->last_delegate_ifname[0] = '\0';
+        return;
+    }
+
+    char live[32];
+    if (awg_utun_detect_live_physical(live, sizeof live) != 0) return;
+    if (d->have_delegate && strcmp(d->last_delegate_ifname, live) == 0) return;
+
+    int updated = 0;
+    if (core_up) {
+        (void)awg_utun_set_delegate(d->senko_core.tun_fd, live);
+        updated = 1;
+    }
+    if (utun_up) {
+        (void)awg_utun_set_delegate(d->embedded_utun.device.fd, live);
+        updated = 1;
+    }
+    if (awg_up) {
+        if (awg_backend_update_delegate(&d->awg, live)) updated = 1;
+    }
+    if (!updated) return;
+
+    snprintf(d->last_delegate_ifname, sizeof d->last_delegate_ifname, "%s", live);
+    d->have_delegate = 1;
+    fprintf(stderr, "senkod: network changed, utun delegate -> %s\n",
+            live[0] ? live : "(none)");
+    if (live[0]) status_set_on(live);
+    else status_set(1);
 }
 
 /* senko-core is a child process with no descriptor that closes on its exit,
@@ -510,7 +550,11 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
             OPENSSL_cleanse(&d->started, sizeof d->started);
             d->started_set = 0;
             /* the badge belongs to amneziawg while that tunnel runs */
-            if (!awg_backend_busy(&d->awg)) status_set(0);
+            if (!awg_backend_busy(&d->awg)) {
+                d->have_delegate = 0;
+                d->last_delegate_ifname[0] = '\0';
+                status_set(0);
+            }
             senko_core_backend_stop(&d->senko_core);
             app_proxy_stop(&d->app_proxy);
             utun_backend_stop(&d->embedded_utun);
@@ -2092,10 +2136,23 @@ int daemon_ctl_verify_tunnel(void *ctx, char *reason, size_t reason_cap) {
     } else {
         if (reason && reason_cap) reason[0] = '\0';
         /* show vpn after a real probe */
-        if (d && d->embedded_utun.active) status_set_on(d->embedded_utun.direct.ifname);
-        else if (d && d->senko_core.active && d->senko_core.physical_ifname[0])
+        if (d && d->embedded_utun.active) {
+            snprintf(d->last_delegate_ifname, sizeof d->last_delegate_ifname, "%s",
+                     d->embedded_utun.direct.ifname);
+            d->have_delegate = 1;
+            status_set_on(d->embedded_utun.direct.ifname);
+        } else if (d && d->senko_core.active && d->senko_core.physical_ifname[0]) {
+            snprintf(d->last_delegate_ifname, sizeof d->last_delegate_ifname, "%s",
+                     d->senko_core.physical_ifname);
+            d->have_delegate = 1;
             status_set_on(d->senko_core.physical_ifname);
-        else status_set(1);
+        } else {
+            if (d) {
+                d->last_delegate_ifname[0] = '\0';
+                d->have_delegate = 1;
+            }
+            status_set(1);
+        }
     }
     return r;
 }

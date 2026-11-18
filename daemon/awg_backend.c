@@ -273,6 +273,7 @@ done:
     /* describe reads the split under the lock, so it is hidden before it goes */
     pthread_mutex_lock(&b->lock);
     b->split = NULL;
+    b->state = stopped ? AWG_BACKEND_IDLE : AWG_BACKEND_ERROR;
     pthread_mutex_unlock(&b->lock);
     awg_split_close(split);
     utun_device_close(&b->device);
@@ -287,7 +288,6 @@ done:
         b->bytes_down += link->bytes_down;
     }
     b->link = NULL;
-    b->state = stopped ? AWG_BACKEND_IDLE : AWG_BACKEND_ERROR;
     snprintf(b->detail, sizeof b->detail, "%s", stopped ? "" : why);
     b->dns_state[0] = '\0';
     b->ifname[0] = '\0';
@@ -502,4 +502,16 @@ int awg_backend_describe(awg_backend_t *backend, int index, char *key, size_t ke
     }
     pthread_mutex_unlock(&backend->lock);
     return count;
+}
+
+int awg_backend_update_delegate(awg_backend_t *backend, const char *physical_ifname) {
+    if (!backend || !backend->initialized) return 0;
+    int ok = 0;
+    pthread_mutex_lock(&backend->lock);
+    if (backend->state == AWG_BACKEND_CONNECTED && backend->device.fd >= 0) {
+        (void)awg_utun_set_delegate(backend->device.fd, physical_ifname);
+        ok = 1;
+    }
+    pthread_mutex_unlock(&backend->lock);
+    return ok;
 }

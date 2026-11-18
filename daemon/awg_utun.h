@@ -11,8 +11,13 @@ extern "C" {
 int awg_utun_open(char *ifname, size_t ifname_cap);
 
 /* bind the utun interface to the physical interface carrying the tunnel
-   (XNU UTUN_OPT_SET_DELEGATE_INTERFACE) so iOS keeps Wi-Fi / NWPath state */
+   (XNU UTUN_OPT_SET_DELEGATE_INTERFACE) so iOS keeps Wi-Fi / NWPath state.
+   pass NULL or "" to clear the delegate when no physical link is up */
 int awg_utun_set_delegate(int fd, const char *physical_ifname);
+
+/* inspect live physical interfaces: prefers en0 (Wi-Fi) with a non-link-local
+   address, then pdp_ip* (cellular), else writes "" */
+int awg_utun_detect_live_physical(char *out, size_t out_cap);
 
 #ifdef __cplusplus
 }
