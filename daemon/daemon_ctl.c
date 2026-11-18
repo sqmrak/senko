@@ -2093,6 +2093,8 @@ int daemon_ctl_verify_tunnel(void *ctx, char *reason, size_t reason_cap) {
         if (reason && reason_cap) reason[0] = '\0';
         /* show vpn after a real probe */
         if (d && d->embedded_utun.active) status_set_on(d->embedded_utun.direct.ifname);
+        else if (d && d->senko_core.active && d->senko_core.physical_ifname[0])
+            status_set_on(d->senko_core.physical_ifname);
         else status_set(1);
     }
     return r;

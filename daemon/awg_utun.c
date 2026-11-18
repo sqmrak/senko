@@ -24,6 +24,9 @@
 #ifndef UTUN_OPT_IFNAME
 #define UTUN_OPT_IFNAME 2
 #endif
+#ifndef UTUN_OPT_SET_DELEGATE_INTERFACE
+#define UTUN_OPT_SET_DELEGATE_INTERFACE 15
+#endif
 
 #define SENKO_MAX_KCTL_NAME 96
 
@@ -79,11 +82,26 @@ int awg_utun_open(char *ifname, size_t ifname_cap) {
     return fd;
 }
 
+int awg_utun_set_delegate(int fd, const char *physical_ifname) {
+    if (fd < 0 || !physical_ifname || !physical_ifname[0]) return -1;
+    size_t len = strlen(physical_ifname);
+    if (len > 15) return -1; /* IFNAMSIZ - 1 */
+    return setsockopt(fd, SYSPROTO_CONTROL, UTUN_OPT_SET_DELEGATE_INTERFACE,
+                      physical_ifname, (socklen_t)len);
+}
+
 #else
 
 int awg_utun_open(char *ifname, size_t ifname_cap) {
     (void)ifname;
     (void)ifname_cap;
+    errno = ENOTSUP;
+    return -1;
+}
+
+int awg_utun_set_delegate(int fd, const char *physical_ifname) {
+    (void)fd;
+    (void)physical_ifname;
     errno = ENOTSUP;
     return -1;
 }

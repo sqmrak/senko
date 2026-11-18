@@ -3,6 +3,7 @@
 #include "utun_backend.h"
 
 #include "awg_route.h"
+#include "awg_utun.h"
 #include "core/transport_pick.h"
 #include "core/senko_time.h"
 #include "../common/senko_paths.h"
@@ -529,6 +530,10 @@ int utun_backend_start(utun_backend_t *backend, const vl_server_t *server,
         route_errno_append(backend->error, sizeof backend->error,
                            backend->device.last_errno);
         goto failed;
+    }
+    if (awg_utun_set_delegate(backend->device.fd, input.physical_ifname) == 0) {
+        fprintf(stderr, "senkod: delegated %s to %s\n",
+                backend->device.ifname, input.physical_ifname);
     }
     snprintf(input.ifname, sizeof input.ifname, "%s", backend->device.ifname);
     if (tun_plan_build(&input, &backend->plan) != TUN_PLAN_OK) {

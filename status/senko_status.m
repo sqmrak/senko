@@ -69,8 +69,16 @@ static NSString *SenkoNetworkFacts(void) {
 static void (*gSenkoOrigPrimaryChanged)(id, SEL, BOOL) = NULL;
 static BOOL gSenkoWiFiHookTried = NO;
 
+static BOOL SenkoWiFiIsAssociated(id wifi) {
+    if (!wifi) return NO;
+    BOOL associated = YES;
+    if (SenkoCallBool(wifi, sel_registerName("isAssociated"), &associated))
+        return associated;
+    return YES;
+}
+
 static void SenkoPrimaryInterfaceChanged(id self, SEL _cmd, BOOL primary) {
-    if (!primary && VPNStatusBarTunnelRidesWiFi()) {
+    if (!primary && VPNStatusBarTunnelRidesWiFi() && SenkoWiFiIsAssociated(self)) {
         primary = YES;
         VPNStatusBarLog(@"configd made the tunnel primary; wifi kept, the tunnel rides it");
         gSenkoOrigPrimaryChanged(self, _cmd, primary);
@@ -112,13 +120,12 @@ static void SenkoRefreshWiFi(void) {
     if (!gSenkoOrigPrimaryChanged || !VPNStatusBarTunnelRidesWiFi()) return;
     id wifi = SenkoSharedObject(@"SBWiFiManager", @selector(sharedInstance),
                                 @selector(sharedWiFiManager));
-    if (!wifi) return;
+    if (!wifi || !SenkoWiFiIsAssociated(wifi)) return;
     SenkoPrimaryInterfaceChanged(wifi, sel_registerName("_primaryInterfaceChanged:"), YES);
 }
 
 static void SenkoPostApply(BOOL enabled, NSString *via) {
     (void)enabled;
-    if (objc_getClass("STStatusBarDataBoolEntry") != Nil) return;
     SenkoRefreshWiFi();
     if (![via isEqualToString:@"cached"]) {
         VPNStatusBarLog(SenkoNetworkFacts());

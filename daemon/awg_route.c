@@ -204,11 +204,21 @@ void awg_route_plan_down(const awg_route_plan_t *plan) {
 int awg_route_gateway_for_endpoint(const char *endpoint, char *gateway, size_t gateway_cap) {
     return awg_pfroute_gateway4(endpoint, gateway, gateway_cap);
 }
+int awg_route_gateway_and_if_for_endpoint(const char *endpoint, char *gateway, size_t gateway_cap,
+                                          char *ifname, size_t ifname_cap) {
+    return awg_pfroute_gateway_and_if4(endpoint, gateway, gateway_cap, ifname, ifname_cap);
+}
 #else
 int awg_route_plan_up(const awg_route_plan_t *plan) { (void)plan; return -1; }
 void awg_route_plan_down(const awg_route_plan_t *plan) { (void)plan; }
 int awg_route_gateway_for_endpoint(const char *endpoint, char *gateway, size_t gateway_cap) {
     (void)endpoint; (void)gateway; (void)gateway_cap; return -1;
+}
+int awg_route_gateway_and_if_for_endpoint(const char *endpoint, char *gateway, size_t gateway_cap,
+                                          char *ifname, size_t ifname_cap) {
+    (void)endpoint; (void)gateway; (void)gateway_cap;
+    if (ifname && ifname_cap) ifname[0] = '\0';
+    return -1;
 }
 int awg_route_interface_up(const awg_route_plan_t *plan) { (void)plan; return -1; }
 #endif

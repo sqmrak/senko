@@ -149,7 +149,10 @@ int senko_core_backend_start(senko_core_backend_t *backend, const vl_server_t *s
         set_reason(reason, reason_cap, "the bundled TLS roots are missing, senko-core cannot verify servers on this ios");
         return -1;
     }
-    if (awg_route_gateway_for_endpoint(endpoint_ip, gateway, sizeof gateway) != 0) {
+    backend->physical_ifname[0] = '\0';
+    if (awg_route_gateway_and_if_for_endpoint(endpoint_ip, gateway, sizeof gateway,
+                                              backend->physical_ifname,
+                                              sizeof backend->physical_ifname) != 0) {
         set_reason(reason, reason_cap,
                    "no route to the server, check that wifi or cellular is connected");
         if (reason && reason_cap) vpn_conflict_explain(reason, reason_cap, NULL);
@@ -159,6 +162,11 @@ int senko_core_backend_start(senko_core_backend_t *backend, const vl_server_t *s
     if (backend->tun_fd < 0) {
         set_reason(reason, reason_cap, "utun interface could not be opened");
         return -1;
+    }
+    if (backend->physical_ifname[0] &&
+        awg_utun_set_delegate(backend->tun_fd, backend->physical_ifname) == 0) {
+        fprintf(stderr, "senkod: senko-core delegated %s to %s\n",
+                ifname, backend->physical_ifname);
     }
     memset(&route_config, 0, sizeof route_config);
     snprintf(route_config.addresses[0], sizeof route_config.addresses[0], "198.18.0.1/32");
@@ -212,6 +220,7 @@ void senko_core_backend_stop(senko_core_backend_t *backend) {
     utun_dns_withdraw(&backend->dns);
     if (backend->active) awg_route_plan_down(&backend->route);
     backend->active = 0;
+    backend->physical_ifname[0] = '\0';
     memset(&backend->upload, 0, sizeof backend->upload);
     memset(&backend->download, 0, sizeof backend->download);
     if (backend->child > 0) {

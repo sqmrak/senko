@@ -104,15 +104,29 @@ int awg_pfroute_probe_get4(const char *destination, char *detail, size_t detail_
     return gateway && gateway->sa_family == AF_INET ? 0 : -1;
 }
 
-int awg_pfroute_gateway4(const char *destination, char *gateway, size_t gateway_cap) {
+int awg_pfroute_gateway_and_if4(const char *destination, char *gateway, size_t gateway_cap,
+                                char *ifname, size_t ifname_cap) {
     unsigned char buffer[256];
     ssize_t got = 0;
+    if (ifname && ifname_cap) ifname[0] = '\0';
     if (!gateway || gateway_cap == 0 ||
         route_get4(destination, buffer, sizeof buffer, &got) != 0)
         return -1;
     const struct sockaddr *sa = route_gateway(buffer, got);
     if (!sa || sa->sa_family != AF_INET || sa->sa_len < sizeof(struct sockaddr_in)) return -1;
-    return inet_ntop(AF_INET, &((const struct sockaddr_in *)sa)->sin_addr, gateway, gateway_cap) ? 0 : -1;
+    if (!inet_ntop(AF_INET, &((const struct sockaddr_in *)sa)->sin_addr, gateway, gateway_cap))
+        return -1;
+    if (ifname && ifname_cap > 1) {
+        const struct awg_rt_msghdr *hdr = (const struct awg_rt_msghdr *)buffer;
+        char resolved[IFNAMSIZ];
+        if (hdr->rtm_index && if_indextoname(hdr->rtm_index, resolved))
+            snprintf(ifname, ifname_cap, "%s", resolved);
+    }
+    return 0;
+}
+
+int awg_pfroute_gateway4(const char *destination, char *gateway, size_t gateway_cap) {
+    return awg_pfroute_gateway_and_if4(destination, gateway, gateway_cap, NULL, 0);
 }
 
 static int route_host_change(int type, const char *destination, const char *gateway) {
@@ -201,6 +215,13 @@ int awg_pfroute_probe_get4(const char *destination, char *detail, size_t detail_
 }
 int awg_pfroute_probe_host4(const char *destination, const char *gateway, char *detail, size_t detail_cap) {
     (void)destination; (void)gateway; if (detail && detail_cap) snprintf(detail, detail_cap, "pf_route unavailable"); return -1;
+}
+int awg_pfroute_gateway4(const char *destination, char *gateway, size_t gateway_cap) { (void)destination; (void)gateway; (void)gateway_cap; return -1; }
+int awg_pfroute_gateway_and_if4(const char *destination, char *gateway, size_t gateway_cap,
+                                char *ifname, size_t ifname_cap) {
+    (void)destination; (void)gateway; (void)gateway_cap;
+    if (ifname && ifname_cap) ifname[0] = '\0';
+    return -1;
 }
 int awg_pfroute_host4(int add, const char *destination, const char *gateway) { (void)add; (void)destination; (void)gateway; return -1; }
 int awg_pfroute_net4_if(int add, const char *network, const char *netmask, const char *ifname) { (void)add; (void)network; (void)netmask; (void)ifname; return -1; }
