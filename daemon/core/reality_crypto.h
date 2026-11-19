@@ -115,6 +115,19 @@ rc_status_t rc_chacha20poly1305_open(const uint8_t key[32], const uint8_t iv[RC_
                                      const uint8_t tag[RC_GCM_TAGLEN],
                                      uint8_t *pt);
 
+typedef struct rc_chacha20poly1305_ctx rc_chacha20poly1305_ctx_t;
+/* one owner at a time, a fresh key and nonce are supplied for every packet */
+rc_chacha20poly1305_ctx_t *rc_chacha20poly1305_ctx_new(void);
+void rc_chacha20poly1305_ctx_free(rc_chacha20poly1305_ctx_t *ctx);
+rc_status_t rc_chacha20poly1305_seal_cached(rc_chacha20poly1305_ctx_t *ctx,
+                                            const uint8_t key[32], const uint8_t iv[RC_GCM_IVLEN],
+                                            const uint8_t *pt, size_t pt_len,
+                                            uint8_t *ct, uint8_t tag[RC_GCM_TAGLEN]);
+rc_status_t rc_chacha20poly1305_open_cached(rc_chacha20poly1305_ctx_t *ctx,
+                                            const uint8_t key[32], const uint8_t iv[RC_GCM_IVLEN],
+                                            const uint8_t *ct, size_t ct_len,
+                                            const uint8_t tag[RC_GCM_TAGLEN], uint8_t *pt);
+
 /* amneziawg header protection: an unauthenticated chacha20 keystream xor, safe
    in place because a stream cipher's keystream does not depend on the data */
 rc_status_t rc_chacha20_xor(const uint8_t key[32], const uint8_t nonce[12],

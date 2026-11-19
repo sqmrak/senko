@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "awg_handshake.h"
+#include "reality_crypto.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -36,6 +37,7 @@ typedef struct {
     uint64_t recv_window[AWG_REPLAY_WORDS];
     uint32_t udp_window;
     int have_recv_counter;
+    rc_chacha20poly1305_ctx_t *crypto; /* owned by the link, may be NULL */
 } awg_tunnel_t;
 
 void awg_tunnel_init(awg_tunnel_t *tunnel, const awg_config_t *cfg);

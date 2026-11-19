@@ -29,7 +29,8 @@ typedef enum {
     AWG_LINK_STOPPED     =  0, /* the owner asked through wake_fd */
     AWG_LINK_ERR_DEVICE  = -1, /* the utun descriptor failed */
     AWG_LINK_ERR_UDP     = -2, /* the server socket failed */
-    AWG_LINK_ERR_EXPIRED = -3  /* the server stopped answering handshakes */
+    AWG_LINK_ERR_EXPIRED = -3, /* the server stopped answering handshakes */
+    AWG_LINK_ERR_CRYPTO  = -4  /* the cipher contexts could not be created */
 } awg_link_status_t;
 
 typedef struct {
@@ -51,6 +52,7 @@ typedef struct {
     /* the keys before the last renewal: the server keeps sending with them
        for a moment after it answered */
     awg_tunnel_t previous;
+    rc_chacha20poly1305_ctx_t *crypto;
     int have_previous;
     awg_handshake_t pending;
     int rekey_pending;
@@ -67,8 +69,12 @@ typedef struct {
 
     uint64_t bytes_up;
     uint64_t bytes_down;
-    uint32_t renewals; /* one word, so another thread can read it whole */
-    uint32_t dropped;  /* packets refused by the kernel, the peer or the crypto */
+    uint32_t renewals;
+    uint32_t dropped;
+    uint32_t dropped_udp;
+    uint32_t dropped_device;
+    uint32_t dropped_inbound;
+    uint32_t dropped_outbound;
 
     uint8_t frame[UTUN_FRAME_MAX];
     uint8_t wire[AWG_DATAGRAM_MAX];

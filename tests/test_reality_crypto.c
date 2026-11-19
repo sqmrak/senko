@@ -98,12 +98,40 @@ static void test_chacha_roundtrip(void) {
        hex_eq(out, pt, sizeof pt));
 }
 
+static void test_chacha_cached(void) {
+    rc_chacha20poly1305_ctx_t *ctx = rc_chacha20poly1305_ctx_new();
+    ok("cached chacha allocation", ctx != NULL);
+    if (!ctx) return;
+    uint8_t key[32] = {0}, iv[12] = {0}, plain[1280], a[1280], b[1280], out[1280];
+    uint8_t tag_a[16], tag_b[16];
+    const size_t lengths[] = {0, 1, 64, 127, 1280};
+    for (size_t i = 0; i < sizeof plain; ++i) plain[i] = (uint8_t)i;
+    for (size_t i = 0; i < sizeof lengths / sizeof lengths[0]; ++i) {
+        size_t len = lengths[i];
+        key[0] = (uint8_t)(i + 1);
+        iv[0] = (uint8_t)(i + 11);
+        ok("cached chacha matches a fresh cipher",
+           rc_chacha20poly1305_seal(key, iv, NULL, 0, plain, len, a, tag_a) == RC_OK &&
+           rc_chacha20poly1305_seal_cached(ctx, key, iv, plain, len, b, tag_b) == RC_OK &&
+           memcmp(a, b, len) == 0 && memcmp(tag_a, tag_b, sizeof tag_a) == 0);
+        tag_b[0] ^= 1;
+        ok("cached chacha rejects a bad tag",
+           rc_chacha20poly1305_open_cached(ctx, key, iv, b, len, tag_b, out) != RC_OK);
+        tag_b[0] ^= 1;
+        ok("cached chacha recovers after a bad tag",
+           rc_chacha20poly1305_open_cached(ctx, key, iv, b, len, tag_b, out) == RC_OK &&
+           memcmp(out, plain, len) == 0);
+    }
+    rc_chacha20poly1305_ctx_free(ctx);
+}
+
 int main(void) {
     fails = 0;
     test_hkdf_rfc5869_a1();
     test_x25519_roundtrip();
     test_aes256gcm_roundtrip();
     test_chacha_roundtrip();
+    test_chacha_cached();
     if (fails) {
         printf("%d reality_crypto checks failed\n", fails);
         return 1;

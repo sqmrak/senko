@@ -57,6 +57,8 @@ static int pick_timers(awg_link_t *link) {
 
 void awg_link_clear(awg_link_t *link) {
     if (!link) return;
+    rc_chacha20poly1305_ctx_free(link->crypto);
+    link->crypto = NULL;
     OPENSSL_cleanse(&link->current, sizeof link->current);
     OPENSSL_cleanse(&link->previous, sizeof link->previous);
     OPENSSL_cleanse(&link->pending, sizeof link->pending);
@@ -161,6 +163,7 @@ static int accept_renewal(awg_link_t *link, const awg_handshake_t *answered) {
     return 0;
 }
 
+    link->current.crypto = link->crypto;
 /* server to device. -1 when the socket or the device failed */
 static int pump_udp(awg_link_t *link, uint64_t *down, int *device_dead) {
     for (int i = 0; i < AWG_LINK_BURST; ++i) {
@@ -246,6 +249,16 @@ awg_link_status_t awg_link_begin(awg_link_t *link, char *reason, size_t reason_c
        them arrives, so a link with nothing to send would leave the server's
        first packets waiting for a timer */
     if (send_keepalive(link) != 0) {
+    if (!link->crypto) {
+        link->crypto = rc_chacha20poly1305_ctx_new();
+        if (!link->crypto) {
+            if (reason && reason_cap)
+                snprintf(reason, reason_cap, "cannot allocate amneziawg cipher contexts");
+            return AWG_LINK_ERR_CRYPTO;
+        }
+        link->current.crypto = link->crypto;
+        link->previous.crypto = link->crypto;
+    }
         set_reason(reason, reason_cap, "the udp socket to the server failed (errno %d)", errno);
         return AWG_LINK_ERR_UDP;
     }

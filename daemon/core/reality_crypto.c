@@ -1,6 +1,7 @@
 #include "reality_crypto.h"
 
 #include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <openssl/evp.h>
@@ -371,6 +372,79 @@ rc_status_t rc_chacha20poly1305_open(const uint8_t key[32], const uint8_t iv[RC_
 
     EVP_CIPHER_CTX_free(ctx);
     return rc;
+#endif
+}
+
+struct rc_chacha20poly1305_ctx {
+#ifndef RC_OWN_CHACHA
+    EVP_CIPHER_CTX *seal;
+    EVP_CIPHER_CTX *open;
+#else
+    int unused;
+#endif
+};
+
+rc_chacha20poly1305_ctx_t *rc_chacha20poly1305_ctx_new(void) {
+    rc_chacha20poly1305_ctx_t *ctx = calloc(1, sizeof *ctx);
+    if (!ctx) return NULL;
+#ifndef RC_OWN_CHACHA
+    ctx->seal = EVP_CIPHER_CTX_new();
+    ctx->open = EVP_CIPHER_CTX_new();
+    if (!ctx->seal || !ctx->open ||
+        EVP_EncryptInit_ex(ctx->seal, EVP_chacha20_poly1305(), NULL, NULL, NULL) != 1 ||
+        EVP_DecryptInit_ex(ctx->open, EVP_chacha20_poly1305(), NULL, NULL, NULL) != 1) {
+        rc_chacha20poly1305_ctx_free(ctx);
+        return NULL;
+    }
+#endif
+    return ctx;
+}
+
+void rc_chacha20poly1305_ctx_free(rc_chacha20poly1305_ctx_t *ctx) {
+    if (!ctx) return;
+#ifndef RC_OWN_CHACHA
+    EVP_CIPHER_CTX_free(ctx->seal);
+    EVP_CIPHER_CTX_free(ctx->open);
+#endif
+    free(ctx);
+}
+
+rc_status_t rc_chacha20poly1305_seal_cached(rc_chacha20poly1305_ctx_t *ctx,
+                                            const uint8_t key[32], const uint8_t iv[RC_GCM_IVLEN],
+                                            const uint8_t *pt, size_t pt_len,
+                                            uint8_t *ct, uint8_t tag[RC_GCM_TAGLEN]) {
+    if (!ctx) return rc_chacha20poly1305_seal(key, iv, NULL, 0, pt, pt_len, ct, tag);
+    if (!key || !iv || !ct || !tag || (pt_len && !pt) || pt_len > INT_MAX) return RC_ERR_ARG;
+#ifdef RC_OWN_CHACHA
+    cp_aead_seal(key, iv, NULL, 0, pt, pt_len, ct, tag);
+    return RC_OK;
+#else
+    int len = 0, tail = 0;
+    if (EVP_EncryptInit_ex(ctx->seal, NULL, NULL, key, iv) != 1 ||
+        (pt_len && EVP_EncryptUpdate(ctx->seal, ct, &len, pt, (int)pt_len) != 1) ||
+        EVP_EncryptFinal_ex(ctx->seal, ct + len, &tail) != 1 ||
+        EVP_CIPHER_CTX_ctrl(ctx->seal, EVP_CTRL_AEAD_GET_TAG, RC_GCM_TAGLEN, tag) != 1)
+        return RC_ERR_CRYPTO;
+    return RC_OK;
+#endif
+}
+
+rc_status_t rc_chacha20poly1305_open_cached(rc_chacha20poly1305_ctx_t *ctx,
+                                            const uint8_t key[32], const uint8_t iv[RC_GCM_IVLEN],
+                                            const uint8_t *ct, size_t ct_len,
+                                            const uint8_t tag[RC_GCM_TAGLEN], uint8_t *pt) {
+    if (!ctx) return rc_chacha20poly1305_open(key, iv, NULL, 0, ct, ct_len, tag, pt);
+    if (!key || !iv || !ct || !tag || !pt || ct_len > INT_MAX) return RC_ERR_ARG;
+#ifdef RC_OWN_CHACHA
+    return cp_aead_open(key, iv, NULL, 0, ct, ct_len, tag, pt) == 0 ? RC_OK : RC_ERR_CRYPTO;
+#else
+    int len = 0, tail = 0;
+    if (EVP_DecryptInit_ex(ctx->open, NULL, NULL, key, iv) != 1 ||
+        (ct_len && EVP_DecryptUpdate(ctx->open, pt, &len, ct, (int)ct_len) != 1) ||
+        EVP_CIPHER_CTX_ctrl(ctx->open, EVP_CTRL_AEAD_SET_TAG, RC_GCM_TAGLEN, (void *)tag) != 1 ||
+        EVP_DecryptFinal_ex(ctx->open, pt + len, &tail) != 1)
+        return RC_ERR_CRYPTO;
+    return RC_OK;
 #endif
 }
 

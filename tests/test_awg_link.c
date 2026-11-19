@@ -171,6 +171,7 @@ int main(void) {
     pipe(wake2);
     static awg_link_t orphan;
     awg_link_init(&orphan, &cfg, &device, udp[0], wake2[0], &client.handshake, senko_now_ms());
+    awg_link_clear(&stale);
     close(dev[1]);
     runner_t r2 = { &orphan, AWG_LINK_STOPPED, "" };
     pthread_create(&thread, NULL, run, &r2);
@@ -187,6 +188,7 @@ int main(void) {
         fprintf(stderr, "%d awg link check(s) failed\n", failures);
         return 1;
     }
+    awg_link_clear(&orphan);
     puts("all awg link checks passed");
     return 0;
 }

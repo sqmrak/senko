@@ -161,8 +161,8 @@ awg_tun_status_t awg_tunnel_seal(awg_tunnel_t *tunnel,
     nonce_for_counter(counter, nonce);
     if (packet_len) memmove(wire + 16, packet, packet_len);
     if (padded_len > packet_len) memset(wire + 16 + packet_len, 0, padded_len - packet_len);
-    int ok = rc_chacha20poly1305_seal(tunnel->handshake.send_key, nonce, NULL, 0,
-                                      wire + 16, padded_len, wire + 16, tag) == RC_OK;
+    int ok = rc_chacha20poly1305_seal_cached(tunnel->crypto, tunnel->handshake.send_key, nonce,
+                                             wire + 16, padded_len, wire + 16, tag) == RC_OK;
     if (ok) memcpy(wire + 16 + padded_len, tag, sizeof tag);
     OPENSSL_cleanse(nonce, sizeof nonce);
     OPENSSL_cleanse(tag, sizeof tag);
@@ -198,8 +198,8 @@ awg_tun_status_t awg_tunnel_open(awg_tunnel_t *tunnel,
     if (plain_len > cap) return AWG_TUN_ERR_SPACE;
     uint8_t nonce[12];
     nonce_for_counter(counter, nonce);
-    int ok = rc_chacha20poly1305_open(tunnel->handshake.recv_key, nonce, NULL, 0,
-                                      wire + 16, plain_len, wire + 16 + plain_len, out) == RC_OK;
+    int ok = rc_chacha20poly1305_open_cached(tunnel->crypto, tunnel->handshake.recv_key, nonce,
+                                             wire + 16, plain_len, wire + 16 + plain_len, out) == RC_OK;
     OPENSSL_cleanse(nonce, sizeof nonce);
     if (!ok) return AWG_TUN_ERR_AUTH;
     if (packet_len > tunnel->udp_window) tunnel->udp_window = (uint32_t)packet_len;
