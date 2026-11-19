@@ -531,10 +531,12 @@ int utun_backend_start(utun_backend_t *backend, const vl_server_t *server,
                            backend->device.last_errno);
         goto failed;
     }
-    if (awg_utun_set_delegate(backend->device.fd, input.physical_ifname) == 0) {
+    if (awg_utun_set_delegate(backend->device.fd, input.physical_ifname) == 0)
         fprintf(stderr, "senkod: delegated %s to %s\n",
                 backend->device.ifname, input.physical_ifname);
-    }
+    else
+        fprintf(stderr, "senkod: delegate of %s failed (errno %d)\n",
+                backend->device.ifname, errno);
     snprintf(input.ifname, sizeof input.ifname, "%s", backend->device.ifname);
     if (tun_plan_build(&input, &backend->plan) != TUN_PLAN_OK) {
         reason_set(backend->error, sizeof backend->error, "utun route plan is invalid");

@@ -257,7 +257,8 @@ static int run_managed(const char *ctl_path, const char *config_path,
 
     int net_fd = -1;
 #if defined(__APPLE__)
-    int net_token = NOTIFY_TOKEN_INVALID;
+    /* the ios 5 sdk has no NOTIFY_TOKEN_INVALID, net_fd tells if it registered */
+    int net_token = -1;
     if (notify_register_file_descriptor("com.apple.system.config.network_change",
                                         &net_fd, 0, &net_token) == NOTIFY_STATUS_OK &&
         net_fd >= 0) {
@@ -266,7 +267,6 @@ static int run_managed(const char *ctl_path, const char *config_path,
         (void)fcntl(net_fd, F_SETFD, FD_CLOEXEC);
     } else {
         net_fd = -1;
-        net_token = NOTIFY_TOKEN_INVALID;
     }
 #endif
 
@@ -325,7 +325,7 @@ static int run_managed(const char *ctl_path, const char *config_path,
     }
 
 #if defined(__APPLE__)
-    if (net_token != NOTIFY_TOKEN_INVALID) (void)notify_cancel(net_token);
+    if (net_fd >= 0) (void)notify_cancel(net_token);
 #endif
     fprintf(stderr, "senkod: shutting down\n");
     daemon_ctl_shutdown(&dc);

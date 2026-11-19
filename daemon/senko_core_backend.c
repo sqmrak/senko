@@ -163,10 +163,13 @@ int senko_core_backend_start(senko_core_backend_t *backend, const vl_server_t *s
         set_reason(reason, reason_cap, "utun interface could not be opened");
         return -1;
     }
-    if (backend->physical_ifname[0] &&
-        awg_utun_set_delegate(backend->tun_fd, backend->physical_ifname) == 0) {
-        fprintf(stderr, "senkod: senko-core delegated %s to %s\n",
-                ifname, backend->physical_ifname);
+    if (backend->physical_ifname[0]) {
+        if (awg_utun_set_delegate(backend->tun_fd, backend->physical_ifname) == 0)
+            fprintf(stderr, "senkod: senko-core delegated %s to %s\n",
+                    ifname, backend->physical_ifname);
+        else
+            fprintf(stderr, "senkod: senko-core delegate of %s failed (errno %d)\n",
+                    ifname, errno);
     }
     memset(&route_config, 0, sizeof route_config);
     snprintf(route_config.addresses[0], sizeof route_config.addresses[0], "198.18.0.1/32");

@@ -154,10 +154,12 @@ static void *run(void *arg) {
                  b->device.last_errno);
         goto done;
     }
-    if (awg_utun_set_delegate(b->device.fd, input.physical_ifname) == 0) {
+    if (awg_utun_set_delegate(b->device.fd, input.physical_ifname) == 0)
         fprintf(stderr, "senkod: amneziawg delegated %s to %s\n",
                 b->device.ifname, input.physical_ifname);
-    }
+    else
+        fprintf(stderr, "senkod: amneziawg delegate of %s failed (errno %d)\n",
+                b->device.ifname, errno);
     awg_route_plan_t address;
     if (awg_route_plan_for_interface(&b->cfg, b->device.ifname, &address) != 0 ||
         awg_route_interface_up(&address) != 0) {
@@ -270,7 +272,9 @@ done:
             utun_leftovers_forget();
         b->routes_active = 0;
     }
-    /* describe reads the split under the lock, so it is hidden before it goes */
+    /* describe reads the split under the lock, so it is hidden before it goes.
+       the state leaves CONNECTED here too, before utun_device_close, so a
+       delegate update from the daemon thread never hits a closed descriptor */
     pthread_mutex_lock(&b->lock);
     b->split = NULL;
     b->state = stopped ? AWG_BACKEND_IDLE : AWG_BACKEND_ERROR;
@@ -505,13 +509,18 @@ int awg_backend_describe(awg_backend_t *backend, int index, char *key, size_t ke
 }
 
 int awg_backend_update_delegate(awg_backend_t *backend, const char *physical_ifname) {
-    if (!backend || !backend->initialized) return 0;
-    int ok = 0;
+    if (!backend || !backend->initialized) {
+        errno = ENOTCONN;
+        return -1;
+    }
+    int rc = -1;
+    int saved = ENOTCONN;
     pthread_mutex_lock(&backend->lock);
     if (backend->state == AWG_BACKEND_CONNECTED && backend->device.fd >= 0) {
-        (void)awg_utun_set_delegate(backend->device.fd, physical_ifname);
-        ok = 1;
+        rc = awg_utun_set_delegate(backend->device.fd, physical_ifname);
+        saved = errno;
     }
     pthread_mutex_unlock(&backend->lock);
-    return ok;
+    errno = saved;
+    return rc;
 }

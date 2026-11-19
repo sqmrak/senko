@@ -34,8 +34,8 @@ int awg_route_plan_up(const awg_route_plan_t *plan);
 /* remove only routes created by this plan before taking the interface down */
 void awg_route_plan_down(const awg_route_plan_t *plan);
 
-/* query the physical gateway before split routes change route lookup */
-int awg_route_gateway_for_endpoint(const char *endpoint, char *gateway, size_t gateway_cap);
+/* query the physical gateway and its interface before split routes change
+   route lookup */
 int awg_route_gateway_and_if_for_endpoint(const char *endpoint, char *gateway, size_t gateway_cap,
                                           char *ifname, size_t ifname_cap);
 

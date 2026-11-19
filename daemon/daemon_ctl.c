@@ -133,6 +133,28 @@ static void prepare_routing(daemon_ctl_t *d) {
     }
 }
 
+/* the status file also tells the legacy springboard hook which interface the
+   tunnel rides, so it is updated even where the kernel refuses the delegate
+   (ios 12 and older have no UTUN_OPT_SET_DELEGATE_INTERFACE) */
+static void delegate_note(daemon_ctl_t *d, const char *ifname) {
+    snprintf(d->last_delegate_ifname, sizeof d->last_delegate_ifname, "%s", ifname);
+    d->have_delegate = 1;
+    if (ifname[0]) status_set_on(ifname);
+    else status_set(1);
+}
+
+static void delegate_forget(daemon_ctl_t *d) {
+    d->have_delegate = 0;
+    d->last_delegate_ifname[0] = '\0';
+}
+
+static int delegate_apply(const char *who, int fd, const char *ifname) {
+    if (awg_utun_set_delegate(fd, ifname) == 0) return 0;
+    fprintf(stderr, "senkod: %s delegate to %s failed (errno %d)\n", who,
+            ifname[0] ? ifname : "(none)", errno);
+    return -1;
+}
+
 void daemon_ctl_shutdown(daemon_ctl_t *d) {
     if (!d) return;
     status_set(0);
@@ -146,8 +168,7 @@ void daemon_ctl_shutdown(daemon_ctl_t *d) {
     pthread_mutex_destroy(&d->probe_route_lock);
     OPENSSL_cleanse(&d->started, sizeof d->started);
     d->started_set = 0;
-    d->have_delegate = 0;
-    d->last_delegate_ifname[0] = '\0';
+    delegate_forget(d);
 }
 
 void daemon_ctl_sync_network(daemon_ctl_t *d) {
@@ -156,8 +177,7 @@ void daemon_ctl_sync_network(daemon_ctl_t *d) {
     int utun_up = d->embedded_utun.active && d->embedded_utun.device.fd >= 0;
     int core_up = d->senko_core.active && d->senko_core.tun_fd >= 0;
     if (!awg_up && !utun_up && !core_up) {
-        d->have_delegate = 0;
-        d->last_delegate_ifname[0] = '\0';
+        delegate_forget(d);
         return;
     }
 
@@ -165,26 +185,23 @@ void daemon_ctl_sync_network(daemon_ctl_t *d) {
     if (awg_utun_detect_live_physical(live, sizeof live) != 0) return;
     if (d->have_delegate && strcmp(d->last_delegate_ifname, live) == 0) return;
 
-    int updated = 0;
-    if (core_up) {
-        (void)awg_utun_set_delegate(d->senko_core.tun_fd, live);
-        updated = 1;
-    }
-    if (utun_up) {
-        (void)awg_utun_set_delegate(d->embedded_utun.device.fd, live);
-        updated = 1;
-    }
+    if (core_up) (void)delegate_apply("senko-core", d->senko_core.tun_fd, live);
+    if (utun_up) (void)delegate_apply("embedded utun", d->embedded_utun.device.fd, live);
+    int awg_set = 0;
     if (awg_up) {
-        if (awg_backend_update_delegate(&d->awg, live)) updated = 1;
+        if (awg_backend_update_delegate(&d->awg, live) == 0) {
+            awg_set = 1;
+        } else if (errno != ENOTCONN) {
+            fprintf(stderr, "senkod: amneziawg delegate to %s failed (errno %d)\n",
+                    live[0] ? live : "(none)", errno);
+        }
     }
-    if (!updated) return;
+    /* a tunnel that is still connecting delegates itself in its start path */
+    if (!core_up && !utun_up && !awg_set) return;
 
-    snprintf(d->last_delegate_ifname, sizeof d->last_delegate_ifname, "%s", live);
-    d->have_delegate = 1;
     fprintf(stderr, "senkod: network changed, utun delegate -> %s\n",
             live[0] ? live : "(none)");
-    if (live[0]) status_set_on(live);
-    else status_set(1);
+    delegate_note(d, live);
 }
 
 /* senko-core is a child process with no descriptor that closes on its exit,
@@ -551,8 +568,7 @@ int daemon_ctl_apply(void *ctx, const ctl_action_t *action) {
             d->started_set = 0;
             /* the badge belongs to amneziawg while that tunnel runs */
             if (!awg_backend_busy(&d->awg)) {
-                d->have_delegate = 0;
-                d->last_delegate_ifname[0] = '\0';
+                delegate_forget(d);
                 status_set(0);
             }
             senko_core_backend_stop(&d->senko_core);
@@ -2136,23 +2152,9 @@ int daemon_ctl_verify_tunnel(void *ctx, char *reason, size_t reason_cap) {
     } else {
         if (reason && reason_cap) reason[0] = '\0';
         /* show vpn after a real probe */
-        if (d && d->embedded_utun.active) {
-            snprintf(d->last_delegate_ifname, sizeof d->last_delegate_ifname, "%s",
-                     d->embedded_utun.direct.ifname);
-            d->have_delegate = 1;
-            status_set_on(d->embedded_utun.direct.ifname);
-        } else if (d && d->senko_core.active && d->senko_core.physical_ifname[0]) {
-            snprintf(d->last_delegate_ifname, sizeof d->last_delegate_ifname, "%s",
-                     d->senko_core.physical_ifname);
-            d->have_delegate = 1;
-            status_set_on(d->senko_core.physical_ifname);
-        } else {
-            if (d) {
-                d->last_delegate_ifname[0] = '\0';
-                d->have_delegate = 1;
-            }
-            status_set(1);
-        }
+        if (d && d->embedded_utun.active) delegate_note(d, d->embedded_utun.direct.ifname);
+        else if (d && d->senko_core.active) delegate_note(d, d->senko_core.physical_ifname);
+        else status_set(1);
     }
     return r;
 }

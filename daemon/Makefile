@@ -13,7 +13,7 @@ QUIC_CFLAGS := $(shell pkg-config --cflags $(QUIC_PKGS) 2>/dev/null)
 QUIC_LDFLAGS := $(shell pkg-config --libs $(QUIC_PKGS) 2>/dev/null || echo -lngtcp2 -lngtcp2_crypto_ossl -lnghttp3)
 LDFLAGS ?=
 
-CORE_SRC = core/karing_backup.c core/karing_zip.c core/vless.c core/b64.c core/config.c core/share_link.c core/rules.c core/geo.c core/routing_profile.c core/routing_sync.c core/geo_update.c core/plist_bundle_id.c core/dns_msg.c core/dns_cache.c core/profiles.c core/happ.c core/happ_crypt5.c core/incy.c core/third_party/cJSON.c core/net_safe.c core/socks5.c core/senko_trace.c core/senko_replay.c core/senko_upload.c core/senko_time.c core/real_probe.c core/net_diag.c core/senko_clock.c core/grpc_core.c core/h2_core.c \
+CORE_SRC = core/karing_backup.c core/karing_zip.c core/vless.c core/b64.c core/config.c core/share_link.c core/rules.c core/geo.c core/routing_profile.c core/routing_sync.c core/geo_update.c core/plist_bundle_id.c core/dns_msg.c core/dns_cache.c core/profiles.c core/happ.c core/happ_crypt5.c core/incy.c core/third_party/cJSON.c core/net_safe.c core/iface_addr.c core/socks5.c core/senko_trace.c core/senko_replay.c core/senko_upload.c core/senko_time.c core/real_probe.c core/net_diag.c core/senko_clock.c core/grpc_core.c core/h2_core.c \
            core/vless_conn.c core/session.c core/store.c core/control.c \
            core/ctl_engine.c core/http.c core/url.c core/subfetch.c core/amnezia_bundle.c core/amnezia_gateway.c \
            core/transport_tcp.c core/transport_tls.c core/transport_ws.c \

@@ -74,6 +74,7 @@ HOST_TESTS = test_ctl_server test_autoconnect test_session_direct test_config_co
              test_b64 test_traffic test_loop_traffic test_rules
 HOST_TESTS += test_karing_backup
 HOST_TESTS += test_device_model
+HOST_TESTS += test_iface_addr
 HOST_TESTS += test_blake3 test_vlenc_conn test_transport_enc
 HOST_TESTS += test_dns_msg test_chacha_poly test_awg_tunnel_neon
 HOST_TESTS += test_dns_cache
@@ -186,6 +187,7 @@ test: $(HOST_TESTS)
 	./test_awg_handshake
 	./test_awg_tunnel
 	./test_awg_route
+	./test_iface_addr
 	./test_xray_json
 	./test_b64
 	./test_url_headers
@@ -427,6 +429,9 @@ test_awg_tunnel_neon: test_awg_tunnel.c $(CORE)/awg_tunnel.c $(CORE)/awg_tunnel.
 
 test_awg_route: test_awg_route.c $(DAEMON)/awg_route.c $(DAEMON)/awg_route.h $(CORE)/awg_config.c $(CORE)/b64.c
 	$(CC) $(CFLAGS) -I$(DAEMON) test_awg_route.c $(DAEMON)/awg_route.c $(CORE)/awg_config.c $(CORE)/b64.c -o $@ -lcrypto
+
+test_iface_addr: test_iface_addr.c $(CORE)/iface_addr.c $(CORE)/iface_addr.h
+	$(CC) $(CFLAGS) test_iface_addr.c $(CORE)/iface_addr.c -o $@
 
 test_config_compat: test_config_compat.c $(CFG_SRC) $(CORE)/config.h $(CORE)/b64.h $(CORE)/happ.h
 	$(CC) $(CFLAGS) $(TLS_CFLAGS) test_config_compat.c $(CFG_SRC) -o $@ $(TLS_LDFLAGS)

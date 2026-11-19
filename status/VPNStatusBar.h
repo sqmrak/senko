@@ -11,34 +11,32 @@ extern "C" {
 #define SENKO_VPN_STOPPED_NOTIFICATION "com.customproxy.vpn.stopped"
 #define SENKO_STATUS_CHANGED_NOTIFICATION "com.senko.status.changed"
 
-/* Initialize status bar hooks, restore persisted state across resprings, and
-   register Darwin notification listeners. Safe to call multiple times; only
-   activates inside com.apple.springboard. */
+/* installs the hooks, restores the state across resprings and registers the
+   darwin listeners. does nothing outside springboard, safe to call twice */
 void InitVPNStatusBar(void);
 
-/* Enable or disable the fake VPN status bar indicator, persist the state
-   across resprings, and trigger an immediate status bar refresh. */
+/* turns the badge on or off, persists it and redraws the status bar now */
 void SetVPNStatusBarEnabled(BOOL enabled);
 
-/* Return the current fake VPN status bar state. */
+/* the badge state springboard is drawing */
 BOOL IsVPNStatusBarEnabled(void);
 
-/* Reload state from the shared state file (respecting com.senko.status.off)
-   and schedule a status bar refresh. */
+/* rereads the state file, honouring the com.senko.status.off marker, and
+   schedules a redraw */
 void SyncVPNStatusBarFromState(void);
 
-/* Return YES when the persisted state records a tunnel riding a Wi-Fi
-   interface (e.g. "1 en0"), used on legacy iOS to keep the Wi-Fi glyph. */
+/* YES when the state file says the tunnel rides wifi ("1 en0"), which the
+   ios 4 to 6 springboard needs to keep its wifi glyph */
 BOOL VPNStatusBarTunnelRidesWiFi(void);
 
-/* Append a diagnostic line to the bounded status bar log ring. */
+/* appends a line to the status log, which restarts at 32 KiB */
 void VPNStatusBarLog(NSString *line);
 
-/* Register an optional callback invoked after each status bar apply pass. */
+/* calls back after every redraw pass, with the path that refreshed the bar */
 void VPNStatusBarSetPostApplyCallback(void (*callback)(BOOL enabled, NSString *via));
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* SENKO_VPN_STATUS_BAR_H */
+#endif

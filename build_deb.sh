@@ -232,6 +232,7 @@ echo "==> senkostatus armv7"
   -fno-objc-arc -Wall -Wextra -O2 -fPIC \
   -arch armv7 -miphoneos-version-min=4.3 -isysroot "${SDK_V7}" \
   "${ROOT}/status/senko_status.m" "${ROOT}/status/VPNStatusBar.m" \
+  "${ROOT}/daemon/core/iface_addr.c" \
   -o "${SLICE}/senkostatus-armv7.dylib" \
   -dynamiclib \
   -Wl,-no_warn_inits \
@@ -244,6 +245,7 @@ echo "==> senkostatus arm64"
   -fno-objc-arc -Wall -Wextra -O2 -fPIC ${ARM64_ROOT_FLAGS} \
   -arch arm64 -miphoneos-version-min=7.0 -isysroot "${SDK_V64}" \
   "${ROOT}/status/senko_status.m" "${ROOT}/status/VPNStatusBar.m" \
+  "${ROOT}/daemon/core/iface_addr.c" \
   -o "${SLICE}/senkostatus-arm64.dylib" \
   -dynamiclib \
   -Wl,-no_warn_inits \
@@ -256,6 +258,7 @@ echo "==> senkostatus arm64e"
   -fno-objc-arc -Wall -Wextra -O2 -fPIC ${ARM64_ROOT_FLAGS} \
   -arch arm64e -miphoneos-version-min=12.0 -isysroot "${SDK_VE}" \
   "${ROOT}/status/senko_status.m" "${ROOT}/status/VPNStatusBar.m" \
+  "${ROOT}/daemon/core/iface_addr.c" \
   -o "${SLICE}/senkostatus-arm64e.dylib" \
   -dynamiclib -Wl,-no_warn_inits -install_name "${ARM64_STATUS_INSTALL_NAME}" \
   -framework Foundation -framework UIKit -framework CoreFoundation -lobjc

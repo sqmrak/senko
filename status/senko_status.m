@@ -1,13 +1,14 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
-#include <arpa/inet.h>
+/* the ios 5 sdk net/if.h uses struct sockaddr without including it */
+#include <sys/socket.h>
 #include <ifaddrs.h>
 #include <net/if.h>
-#include <netinet/in.h>
 #include <stddef.h>
 #include <string.h>
 
 #import "VPNStatusBar.h"
+#include "../daemon/core/iface_addr.h"
 
 static id SenkoSharedObject(NSString *className, SEL first, SEL second) {
     Class cls = NSClassFromString(className);
@@ -54,13 +55,9 @@ static BOOL SenkoEn0HasLiveAddress(void) {
         if (strcmp(it->ifa_name, "en0") != 0) continue;
         if ((it->ifa_flags & (IFF_UP | IFF_RUNNING)) != (IFF_UP | IFF_RUNNING))
             continue;
-        if (it->ifa_addr->sa_family == AF_INET) {
-            uint32_t ip = ntohl(((const struct sockaddr_in *)it->ifa_addr)->sin_addr.s_addr);
-            if (ip != 0 && (ip & 0xff000000U) != 0x7f000000U &&
-                (ip & 0xffff0000U) != 0xa9fe0000U) {
-                live = YES;
-                break;
-            }
+        if (iface_addr_usable(it->ifa_addr)) {
+            live = YES;
+            break;
         }
     }
     freeifaddrs(list);
@@ -89,11 +86,7 @@ static NSString *SenkoNetworkFacts(void) {
     BOOL have_primary = SenkoCallBool(wifi, sel_registerName("isPrimaryInterface"), &primary);
     int using_wifi = -1;
     Ivar ivar = telephony ? class_getInstanceVariable([telephony class], "_usingWifi") : NULL;
-#if __has_feature(objc_arc)
-    if (ivar) using_wifi = (*((const unsigned char *)(__bridge const void *)telephony + ivar_getOffset(ivar))) & 1;
-#else
     if (ivar) using_wifi = (*((const unsigned char *)telephony + ivar_getOffset(ivar))) & 1;
-#endif
     return [NSString stringWithFormat:@"data=%d wifi_primary=%d using_wifi=%d",
             SenkoDataConnectionType(), have_primary ? (int)primary : -1, using_wifi];
 }

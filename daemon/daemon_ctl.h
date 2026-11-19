@@ -77,7 +77,8 @@ void daemon_ctl_shutdown(daemon_ctl_t *d);
 
 /* tear down routes if the separate senko-core exits unexpectedly */
 int daemon_ctl_maintain(daemon_ctl_t *d);
-/* sync utun delegate and status bar physical link when Wi-Fi/cellular toggles */
+/* rebinds the tunnel delegate and the status file to the current physical
+   link after configd reports a network change */
 void daemon_ctl_sync_network(daemon_ctl_t *d);
 /* what the main poll needs for daemon_ctl_maintain: a descriptor that turns
    readable when the embedded tunnel thread dies (-1 when there is none), and

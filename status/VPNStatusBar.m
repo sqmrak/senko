@@ -222,7 +222,7 @@ static void VPNWritePersistedState(BOOL enabled) {
         char existing[32];
         ssize_t n = VPNReadStateBuffer(existing, sizeof existing);
         if (n > 0 && existing[0] == '1') {
-            /* preserve "1 en0\n" written by senkod for legacy Wi-Fi glyph checks */
+            /* senkod writes "1 en0", and the legacy wifi check reads the interface back */
             return;
         }
         memcpy(body, "1\n", 3);
@@ -471,12 +471,12 @@ static void VPNUpdateVPNItem(id self, SEL _cmd) {
 
     if (outermost && isAgg && boolEntryCls) {
         if (active && __atomic_load_n(&gCachedVPNItemIndex, __ATOMIC_ACQUIRE) < 0) {
-            /* seed vpnEntry before orig so equality-checking aggregators emit
-               _notifyItemChanged: and reveal the dynamic VPN item index */
+            /* seed vpnEntry before the original runs: an aggregator that compares
+               old and new then emits _notifyItemChanged:, which reveals the vpn item index */
             VPNSetSystemStatusVPNEntry(self, boolEntryCls, YES, NO, YES);
         } else if (!active && __atomic_load_n(&gForcedSystemStatusVPN, __ATOMIC_ACQUIRE)) {
-            /* clear our forced entry before orig so a real NetworkExtension VPN
-               can re-enable it while an idle system leaves it disabled */
+            /* clear the forced entry first, so a real NetworkExtension vpn can set
+               it again and an idle system leaves it off */
             VPNSetSystemStatusVPNEntry(self, boolEntryCls, NO, YES, NO);
         }
     }
@@ -832,9 +832,10 @@ void SyncVPNStatusBarFromState(void) {
     VPNScheduleApply(NO);
 }
 
-static int gSenkoNotifyToken = NOTIFY_TOKEN_INVALID;
-static int gStartNotifyToken = NOTIFY_TOKEN_INVALID;
-static int gStopNotifyToken = NOTIFY_TOKEN_INVALID;
+/* the ios 5 sdk has no NOTIFY_TOKEN_INVALID, and the tokens live as long as springboard */
+static int gSenkoNotifyToken = -1;
+static int gStartNotifyToken = -1;
+static int gStopNotifyToken = -1;
 
 void InitVPNStatusBar(void) {
     if (!VPNIsSpringBoardProcess()) return;
