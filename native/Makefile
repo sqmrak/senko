@@ -1,7 +1,6 @@
 # build the iOS 9+ packet tunnel extension and its in-process Senko-core
 
-THEOS ?= $(error set THEOS=/path/to/theos)
-TC ?= $(if $(SENKO_TC),$(SENKO_TC),$(THEOS)/toolchain/linux/iphone/bin)
+TC ?= $(if $(SENKO_TC),$(SENKO_TC),$(error set SENKO_TC=/path/to/toolchain/bin))
 SDK ?= $(if $(SENKO_SDK_V64),$(SENKO_SDK_V64),$(error set SENKO_SDK_V64=/path/to/iPhoneOS.sdk))
 LDID ?= $(TC)/ldid
 GO ?= $(if $(SENKO_GO),$(SENKO_GO),$(error set SENKO_GO=/path/to/go1.27.1))
@@ -12,7 +11,7 @@ CC := $(TC)/clang -target arm64-apple-darwin -B $(TC)
 CFLAGS := -fno-objc-arc -fblocks -fapplication-extension -Wall -Wextra -O2 \
 	$(ARCH) -isysroot $(SDK) -I. -I$(SDK)/usr/include
 # the go archive keeps ~50k local symbols the final clang link would copy in;
-# -x drops them before ldid signs, where build_deb.sh's strip would break the seal
+# -x drops them before ldid signs, where the later strip in the package would break the seal
 LDFLAGS := $(ARCH) -isysroot $(SDK) -fapplication-extension -Wl,-dead_strip -Wl,-x \
 	-framework Foundation -framework NetworkExtension -framework CoreFoundation \
 	-framework Security -lresolv -lobjc

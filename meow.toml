@@ -1,0 +1,886 @@
+# make everything outperform without waiting
+# by sqmrak :3
+
+# parallel incremental build of the senko binaries, see tools/meow
+# the compile graph, the package and its checks live here, the host tests in tests/tests.toml.
+# dependency builds (openssl, mbedtls, ngtcp2, senko-core) stay in scripts/, they are prebuilt
+# into the shared cache and only run while a result is missing
+
+# `meow build` with no name builds the release package
+default = ["release"]
+
+# the host test programs, one table each
+include = ["tests/tests.toml"]
+
+[vars]
+TC = "${SENKO_TC}"
+MBED = "${SENKO_MBED}"
+# the release deb lands next to the sources unless SENKO_DEB_DIR names another directory
+DEB_DIR = "${SENKO_DEB_DIR:-${root}}"
+
+[slice.armv7]
+cc = "${TC}/clang"
+ar = "${TC}/llvm-ar"
+flags = ["-target", "arm-apple-darwin11", "-B", "${TC}", "-arch", "armv7",
+         "-miphoneos-version-min=4.3", "-isysroot", "${SDK}"]
+[slice.armv7.vars]
+SDK = "${SENKO_SDK_V7}"
+OSSL = "${SENKO_OSSL_V7}"
+QUIC = "${SENKO_QUIC}/armv7"
+CRT = "${SENKO_CRT_V7}"
+
+[slice.arm64]
+cc = "${TC}/clang"
+ar = "${TC}/llvm-ar"
+flags = ["-target", "arm64-apple-darwin", "-B", "${TC}", "-arch", "arm64",
+         "-miphoneos-version-min=7.0", "-isysroot", "${SDK}"]
+[slice.arm64.vars]
+SDK = "${SENKO_SDK_V64}"
+OSSL = "${SENKO_OSSL_V64}"
+QUIC = "${SENKO_QUIC}/arm64"
+
+# arm64e is only used by the injected libraries, arm64e devices run arm64 executables
+[slice.arm64e]
+cc = "${TC}/clang"
+ar = "${TC}/llvm-ar"
+flags = ["-target", "arm64e-apple-darwin", "-B", "${TC}", "-arch", "arm64e",
+         "-miphoneos-version-min=12.0", "-isysroot", "${SDK}"]
+[slice.arm64e.vars]
+SDK = "${SENKO_SDK_VE:-${SENKO_SDK_V64}}"
+
+# vendored zbar builds without warnings
+[target.zbar]
+slices = ["armv7", "arm64"]
+link = "none"
+cflags = ["-O2", "-w", "-DSENKO_ZBAR_IOS", "-fmacro-prefix-map=app/=",
+          "-Iapp/third_party/zbar/include", "-Iapp/third_party/zbar/zbar",
+          "-Iapp/third_party/zbar/zbar/decoder", "-Iapp/third_party/zbar/zbar/qrcode"]
+[[target.zbar.src]]
+files = [
+  "app/third_party/zbar/zbar/config.c",
+  "app/third_party/zbar/zbar/error.c",
+  "app/third_party/zbar/zbar/symbol.c",
+  "app/third_party/zbar/zbar/image.c",
+  "app/third_party/zbar/zbar/refcnt.c",
+  "app/third_party/zbar/zbar/img_scanner.c",
+  "app/third_party/zbar/zbar/scanner.c",
+  "app/third_party/zbar/zbar/decoder.c",
+  "app/third_party/zbar/zbar/misc.c",
+  "app/third_party/zbar/zbar/decoder/qr_finder.c",
+  "app/third_party/zbar/zbar/qrcode/qrdec.c",
+  "app/third_party/zbar/zbar/qrcode/qrdectxt.c",
+  "app/third_party/zbar/zbar/qrcode/rs.c",
+  "app/third_party/zbar/zbar/qrcode/isaac.c",
+  "app/third_party/zbar/zbar/qrcode/bch15_5.c",
+  "app/third_party/zbar/zbar/qrcode/binarize.c",
+  "app/third_party/zbar/zbar/qrcode/util.c",
+]
+
+[target.app]
+slices = ["armv7", "arm64"]
+objects_from = ["zbar"]
+output = "build/${slice}/senko"
+cflags = ["-fno-objc-arc", "-fblocks", "-Wall", "-Wextra", "-O2", "-fmacro-prefix-map=app/=",
+          "-Iapp", "-Iapp/theme", "-Iapp/third_party/zbar/include",
+          "-Iapp/third_party/zbar/zbar", "-Iapp/third_party/zbar/zbar/decoder",
+          "-Iapp/third_party/zbar/zbar/qrcode"]
+ldflags = ["-framework", "UIKit", "-framework", "Foundation",
+           "-framework", "CFNetwork", "-framework", "CoreText",
+           "-framework", "CoreGraphics", "-framework", "QuartzCore",
+           "-framework", "AudioToolbox",
+           "-weak_framework", "AVFoundation",
+           "-weak_framework", "CoreMedia", "-weak_framework", "CoreVideo",
+           "-lz", "-liconv"]
+[target.app.per_slice.armv7]
+# ios 8 draws popovers and action sheets as empty dark boxes in an armv7 binary
+# whose sdk field reads 4.3, so the field stays 5.0 while the target is 4.3
+ldflags = ["-nostartfiles", "${CRT}", "-Wl,-sdk_version,5.0"]
+[target.app.per_slice.arm64]
+cflags = ["-DSENKO_ROOTLESS=1"]
+[[target.app.src]]
+files = [
+  "app/app_main.m",
+  "app/crash_report.m",
+  "app/localization.m",
+  "app/emoji_text.m",
+  "app/main_vc.m",
+  "app/main_vc_decor.m",
+  "app/main_vc_list.m",
+  "app/main_vc_tunnel.m",
+  "app/main_vc_import.m",
+  "app/settings_vc.m",
+  "app/routing_vc.m",
+  "app/routing_ui.m",
+  "app/app_routing_vc.m",
+  "app/app_catalog.m",
+  "app/profile_entries_vc.m",
+  "app/theme_edit_vc.m",
+  "app/about_vc.m",
+  "app/device_model.c",
+  "app/senko_motion.c",
+  "app/logs_vc.m",
+  "app/edit_server_vc.m",
+  "app/edit_awg_vc.m",
+  "app/premium_country_vc.m",
+  "app/main_vc_premium.m",
+  "app/edit_subscription_vc.m",
+  "app/subscription_info_vc.m",
+  "app/file_import_vc.m",
+  "app/ui_style.m",
+  "app/ui_chrome_shared.m",
+  "app/ui_chrome_icons.m",
+  "app/ui_chrome_status.m",
+  "app/ui_chrome_bar.m",
+  "app/control_client.m",
+  "app/native_vpn.m",
+  "app/qr_scan.m",
+  "app/server_cell.m",
+  "app/home_view.m",
+  "app/card_kit.m",
+  "app/server_picker.m",
+  "app/stats_vc.m",
+  "app/server_sheet.m",
+  "app/update_install.m",
+  "app/boykisser_field.m",
+  "app/bubble_field.m",
+  "app/empty_state.m",
+  "app/themes_vc.m",
+  "app/rules_vc.m",
+  "app/senko_dialog.m",
+  "app/senko_animation.m",
+  "app/dev_table_vc.m",
+  "app/dev_menu_vc.m",
+  "app/dev_checks_vc.m",
+  "app/dev_console_vc.m",
+  "app/dev_tools_vc.m",
+  "app/meow.m",
+  "app/material.m",
+  "daemon/core/b64.c",
+  "daemon/core/control.c",
+  "daemon/core/amnezia_bundle.c",
+  "daemon/core/amnezia_qr.c",
+  "daemon/core/third_party/cJSON.c",
+  "app/theme/theme_core.m",
+  "app/theme/theme_table.m",
+  "app/theme/theme_custom.m",
+  "app/theme/theme_ios6.m",
+  "app/theme/theme_ios7.m",
+  "app/theme/theme_ios16.m",
+  "app/theme/theme_ios26.m",
+  "app/theme/theme_boykisser.m",
+  "app/theme/theme_miside.m",
+  "app/theme/theme_aero.m",
+  "app/theme/theme_android.m",
+]
+
+[target.lwip]
+slices = ["armv7", "arm64"]
+needs = ["openssl-${slice}", "quic"]
+link = "archive"
+output = "build/${slice}/libsenko_lwip.a"
+cflags = ["-std=c99", "-Wall", "-Wextra", "-O2", "-DSENKO_RELEASE", "-fmacro-prefix-map=daemon/=",
+          "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon",
+          "-I${OSSL}/include", "-I${QUIC}/include",
+          "-Idaemon/lwip_port", "-Idaemon/third_party/lwip/src/include"]
+[target.lwip.per_slice.arm64]
+# lwipopts.h sizes the flow tables by profile, and only 64-bit slices get the large one
+cflags = ["-DSENKO_LWIP_PROFILE_LARGE", "-DSENKO_ROOTLESS=1"]
+[[target.lwip.src]]
+files = [
+  "daemon/third_party/lwip/src/core/*.c",
+  "daemon/third_party/lwip/src/core/ipv4/*.c",
+  "daemon/third_party/lwip/src/core/ipv6/*.c",
+  "daemon/lwip_port/lwip_sys.c",
+]
+
+[target.senkod]
+slices = ["armv7", "arm64"]
+needs = ["lwip", "openssl-${slice}", "quic"]
+output = "build/${slice}/senkod"
+cflags = ["-std=c99", "-Wall", "-Wextra", "-O2", "-DSENKO_RELEASE", "-fmacro-prefix-map=daemon/=",
+          "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon",
+          "-I${OSSL}/include", "-I${QUIC}/include",
+          "-Idaemon/lwip_port", "-Idaemon/third_party/lwip/src/include"]
+# static openssl and quic keep the runtime dependency limited to libsystem, and
+# dead_strip drops unreachable archive code so both slices stay small
+ldflags = ["-Wl,-dead_strip", "build/${slice}/libsenko_lwip.a",
+           "${QUIC}/lib/libngtcp2.a", "${QUIC}/lib/libnghttp3.a",
+           "${OSSL}/lib/libssl.a", "${OSSL}/lib/libcrypto.a", "-lz",
+           "-framework", "CoreFoundation", "-framework", "SystemConfiguration",
+           # a __RESTRICT segment makes dyld ignore DYLD_INSERT_LIBRARIES, so a
+           # tweak cannot hook connect() inside the root daemon
+           "-Wl,-sectcreate,__RESTRICT,__restrict,/dev/null"]
+post = [["${TC}/ldid", "-S", "${out}"]]
+[target.senkod.per_slice.armv7]
+ldflags = ["-nostartfiles", "${CRT}"]
+[target.senkod.per_slice.arm64]
+cflags = ["-DSENKO_LWIP_PROFILE_LARGE", "-DSENKO_ROOTLESS=1"]
+[[target.senkod.src]]
+files = [
+  "daemon/core/karing_backup.c",
+  "daemon/core/karing_zip.c",
+  "daemon/core/vless.c",
+  "daemon/core/b64.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/routing_sync.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/plist_bundle_id.c",
+  "daemon/core/dns_msg.c",
+  "daemon/core/dns_cache.c",
+  "daemon/core/profiles.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/third_party/cJSON.c",
+  "daemon/core/net_safe.c", "daemon/core/iface_addr.c",
+  "daemon/core/socks5.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+  "daemon/core/senko_time.c",
+  "daemon/core/vless_conn.c",
+  "daemon/core/session.c",
+  "daemon/core/real_probe.c",
+  "daemon/core/net_diag.c",
+  "daemon/core/senko_clock.c",
+  "daemon/core/store.c",
+  "daemon/core/control.c",
+  "daemon/core/ctl_engine.c",
+  "daemon/core/http.c",
+  "daemon/core/url.c",
+  "daemon/core/subfetch.c",
+  "daemon/core/amnezia_bundle.c",
+  "daemon/core/amnezia_gateway.c",
+  "daemon/core/transport_tcp.c",
+  "daemon/core/transport_tls.c",
+  "daemon/core/transport_ws.c",
+  "daemon/core/transport_xhttp.c",
+  "daemon/core/transport_pick.c",
+  "daemon/core/transport_enc.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/vlenc_conn.c",
+  "daemon/core/blake3.c",
+  "daemon/core/grpc_core.c",
+  "daemon/core/h2_core.c",
+  "daemon/core/hpack.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/reality_auth.c",
+  "daemon/core/tls_clienthello.c",
+  "daemon/core/tls13_kdf.c",
+  "daemon/core/tls13_keysched.c",
+  "daemon/core/tls13_record.c",
+  "daemon/core/tls13_transcript.c",
+  "daemon/core/tls13_handshake.c",
+  "daemon/core/reality_handshake.c",
+  "daemon/core/socks5_client.c",
+  "daemon/core/http_client.c",
+  "daemon/core/vision.c",
+  "daemon/core/awg_config.c",
+  "daemon/core/awg_handshake.c",
+  "daemon/core/awg_tunnel.c",
+  "daemon/core/trojan_client.c",
+  "daemon/core/shadowsocks_client.c",
+  "daemon/core/vmess_client.c",
+  "daemon/core/blake2b256.c",
+  "daemon/core/hy2_proto.c",
+  "daemon/core/backend_state.c",
+  "daemon/core/endpoint_pool.c",
+  "daemon/core/probe_stats.c",
+  "daemon/core/route_message.c",
+  "daemon/core/tun_flow.c",
+  "daemon/core/tun_nat.c",
+  "daemon/core/tun_plan.c",
+  "daemon/core/utun_frame.c",
+  "daemon/core/vless_udp.c",
+  "daemon/core/dns_policy.c",
+  "daemon/core/tun_policy.c",
+  "daemon/core/flow_split.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/premium.c",
+  "daemon/ctl_watch.c",
+  "daemon/app_owner.c",
+  "daemon/dialer.c",
+  "daemon/loop.c",
+  "daemon/ctl_server.c",
+  "daemon/daemon_ctl.c",
+  "daemon/storefile.c",
+  "daemon/settings.c",
+  "daemon/status.c",
+  "daemon/app_proxy.c",
+  "daemon/egress.c",
+  "daemon/senko_core_config.c",
+  "daemon/senko_core_backend.c",
+  "daemon/awg_utun.c",
+  "daemon/awg_route.c",
+  "daemon/awg_pfroute.c",
+  "daemon/legacy_ios.c",
+  "daemon/proc_detach.c",
+  "daemon/route_socket.c",
+  "daemon/tun_dialer.c",
+  "daemon/tun_loop.c",
+  "daemon/tun_opener.c",
+  "daemon/tun_stack.c",
+  "daemon/tun_tcp.c",
+  "daemon/tun_udp.c",
+  "daemon/hy2_engine.c",
+  "daemon/utun_device.c",
+  "daemon/utun_route.c",
+  "daemon/vpn_conflict.c",
+  "daemon/utun_dns.c",
+  "daemon/utun_backend.c",
+  "daemon/direct_socket.c",
+  "daemon/direct_dns.c",
+  "daemon/helper_jobs.c",
+  "daemon/senkod_helper.c",
+  "daemon/awg_link.c",
+  "daemon/awg_split.c",
+  "daemon/awg_backend.c",
+  "daemon/main.c",
+]
+
+[target.senkoctl]
+slices = ["armv7", "arm64"]
+needs = ["openssl-${slice}", "quic"]
+output = "build/${slice}/senkoctl"
+cflags = ["-std=c99", "-Wall", "-Wextra", "-O2", "-DSENKO_RELEASE", "-fmacro-prefix-map=daemon/=",
+          "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon",
+          "-I${OSSL}/include", "-I${QUIC}/include",
+          "-Idaemon/lwip_port", "-Idaemon/third_party/lwip/src/include"]
+ldflags = ["-Wl,-dead_strip"]
+post = [["${TC}/ldid", "-S", "${out}"]]
+[target.senkoctl.per_slice.armv7]
+ldflags = ["-nostartfiles", "${CRT}"]
+[target.senkoctl.per_slice.arm64]
+cflags = ["-DSENKO_LWIP_PROFILE_LARGE", "-DSENKO_ROOTLESS=1"]
+[[target.senkoctl.src]]
+files = ["daemon/senkoctl.c", "daemon/core/b64.c"]
+
+# injected libraries, one slice per cpu the tweak loader can hit
+[target.senkotlsfix]
+slices = ["armv7", "arm64", "arm64e"]
+needs = ["mbedtls"]
+output = "build/${slice}/senkotlsfix.dylib"
+cflags = ["-std=c99", "-Wall", "-Wextra", "-O2", "-fPIC",
+          "-fmacro-prefix-map=senkotlsfix/=", "-fmacro-prefix-map=daemon/=../daemon/",
+          "-Idaemon", "-I${MBED}/include", "-DMBEDTLS_PLATFORM_MS_TIME_ALT"]
+# static mbedtls keeps the dylib free of a device-side dependency
+ldflags = ["-dynamiclib", "-Wl,-no_warn_inits", "-install_name", "${INSTALL_NAME}",
+           "-framework", "Security", "-framework", "CoreFoundation",
+           "${MBED}/lib/libmbedtls-${slice}.a", "${MBED}/lib/libmbedx509-${slice}.a",
+           "${MBED}/lib/libmbedcrypto-${slice}.a"]
+post = [["${TC}/ldid", "-S", "${out}"]]
+[target.senkotlsfix.per_slice.armv7]
+vars = { INSTALL_NAME = "/usr/lib/senkotlsfix.dylib" }
+[target.senkotlsfix.per_slice.arm64]
+cflags = ["-DSENKO_ROOTLESS=1"]
+vars = { INSTALL_NAME = "/var/jb/usr/lib/senkotlsfix.dylib" }
+[target.senkotlsfix.per_slice.arm64e]
+cflags = ["-DSENKO_ROOTLESS=1"]
+vars = { INSTALL_NAME = "/var/jb/usr/lib/senkotlsfix.dylib" }
+[[target.senkotlsfix.src]]
+files = ["senkotlsfix/fishhook.c", "senkotlsfix/stl_gate.c", "senkotlsfix/stl_log.c",
+         "senkotlsfix/stl_proxy.c", "senkotlsfix/stl_roots.c", "senkotlsfix/stl_shadow.c",
+         "senkotlsfix/stl_trust.c", "senkotlsfix/stl_init.c", "senkotlsfix/ms_time_ios.c",
+         "senkotlsfix/builtins.c", "daemon/legacy_ios.c"]
+
+[target.senkostatus]
+slices = ["armv7", "arm64", "arm64e"]
+output = "build/${slice}/senkostatus.dylib"
+cflags = ["-fno-objc-arc", "-Wall", "-Wextra", "-O2", "-fPIC"]
+ldflags = ["-dynamiclib", "-Wl,-no_warn_inits", "-install_name", "${INSTALL_NAME}",
+           "-framework", "Foundation", "-framework", "UIKit",
+           "-framework", "CoreFoundation", "-lobjc"]
+post = [["${TC}/ldid", "-S", "${out}"]]
+[target.senkostatus.per_slice.armv7]
+vars = { INSTALL_NAME = "/usr/lib/senkostatus.dylib" }
+[target.senkostatus.per_slice.arm64]
+cflags = ["-DSENKO_ROOTLESS=1"]
+vars = { INSTALL_NAME = "/var/jb/usr/lib/senkostatus.dylib" }
+[target.senkostatus.per_slice.arm64e]
+cflags = ["-DSENKO_ROOTLESS=1"]
+vars = { INSTALL_NAME = "/var/jb/usr/lib/senkostatus.dylib" }
+[[target.senkostatus.src]]
+files = ["status/senko_status.m", "status/VPNStatusBar.m", "daemon/core/iface_addr.c"]
+
+# universal outputs: lipo, strip local symbols, sign
+[fat.senkod-fat]
+from = "senkod"
+lipo = "${TC}/lipo"
+output = "build/fat/senkod"
+post = [["${TC}/strip", "-x", "${out}"], ["${TC}/ldid", "-S", "${out}"]]
+
+[fat.senkoctl-fat]
+from = "senkoctl"
+lipo = "${TC}/lipo"
+output = "build/fat/senkoctl"
+post = [["${TC}/strip", "-x", "${out}"], ["${TC}/ldid", "-S", "${out}"]]
+
+[fat.senko-fat]
+from = "app"
+lipo = "${TC}/lipo"
+output = "build/fat/senko"
+post = [["${TC}/strip", "-x", "${out}"], ["${TC}/ldid", "-Sapp/entitlements.plist", "${out}"]]
+
+[fat.senkotlsfix-fat]
+from = "senkotlsfix"
+lipo = "${TC}/lipo"
+output = "build/fat/senkotlsfix.dylib"
+post = [["${TC}/strip", "-x", "${out}"], ["${TC}/ldid", "-S", "${out}"]]
+
+[fat.senkostatus-fat]
+from = "senkostatus"
+lipo = "${TC}/lipo"
+output = "build/fat/senkostatus.dylib"
+post = [["${TC}/strip", "-x", "${out}"], ["${TC}/ldid", "-S", "${out}"]]
+
+# dependency builds run only while an output is missing (bootstrap), so a finished
+# cache is never touched, build_mbedtls.sh would wipe it first. sources of the
+# dependencies are not tracked, delete the marker to force a rebuild
+[step.openssl-armv7]
+run = [["bash", "scripts/build_openssl_armv7.sh"]]
+outputs = ["${SENKO_OSSL_V7}/lib/libssl.a", "${SENKO_OSSL_V7}/lib/libcrypto.a",
+           "${SENKO_OSSL_V7}/.senko-ios-min-4.3"]
+bootstrap = true
+
+[step.openssl-arm64]
+run = [["bash", "scripts/build_openssl_arm64.sh"]]
+outputs = ["${SENKO_OSSL_V64}/lib/libssl.a", "${SENKO_OSSL_V64}/lib/libcrypto.a",
+           "${SENKO_OSSL_V64}/.senko-asm"]
+bootstrap = true
+
+# ngtcp2 needs SSL_set_quic_tls_cbs, which both openssl builds must have by now
+[step.quic]
+run = [["bash", "scripts/build_quic.sh"]]
+needs = ["openssl-armv7", "openssl-arm64"]
+outputs = ["${SENKO_QUIC}/armv7/lib/libngtcp2.a", "${SENKO_QUIC}/armv7/lib/libnghttp3.a",
+           "${SENKO_QUIC}/arm64/lib/libngtcp2.a", "${SENKO_QUIC}/arm64/lib/libnghttp3.a",
+           "${SENKO_QUIC}/.senko-quic"]
+keep = true
+
+[step.mbedtls]
+run = [["bash", "scripts/build_mbedtls.sh", "${MBED}"]]
+outputs = ["${MBED}/.senko-ios-min-4.3",
+           "${MBED}/lib/libmbedtls-armv7.a", "${MBED}/lib/libmbedx509-armv7.a",
+           "${MBED}/lib/libmbedcrypto-armv7.a",
+           "${MBED}/lib/libmbedtls-arm64.a", "${MBED}/lib/libmbedx509-arm64.a",
+           "${MBED}/lib/libmbedcrypto-arm64.a",
+           "${MBED}/lib/libmbedtls-arm64e.a", "${MBED}/lib/libmbedx509-arm64e.a",
+           "${MBED}/lib/libmbedcrypto-arm64e.a"]
+bootstrap = true
+
+# the packet tunnel extension is also senko-core, one arm64 go build for the package
+[step.native]
+run = [["make", "-C", "native", "clean", "all",
+        "TC=${TC}", "LDID=${TC}/ldid", "SDK=${SENKO_SDK_V64}",
+        "GO=${SENKO_GO}", "SENKO_CORE_SOURCE=${SENKO_CORE_SRC}", "BUILD=${root}/build/native"]]
+inputs = ["native/Makefile", "native/*.h", "native/go/*", "native/PacketTunnel/*",
+          "scripts/build_native_core.sh", "scripts/ensure_senko_core_distro.sh",
+          "scripts/prepare_core_overlay.sh", "scripts/patches/*.patch",
+          "daemon/core/control.c", "daemon/core/control.h", "daemon/core/traffic.h",
+          "${SENKO_CORE_SRC}/go.mod", "${SENKO_CORE_SRC}/go.sum",
+          "${SENKO_CORE_SRC}/**/*.go"]
+outputs = ["build/native/SenkoTunnel.appex/SenkoTunnel",
+           "build/native/SenkoTunnel.appex/Info.plist"]
+
+# the go tests of the native core, run by the pinned go toolchain
+[step.test-native]
+run = [["bash", "scripts/test_native_core.sh"]]
+inputs = ["native/go/*", "native/tests/*", "scripts/test_native_core.sh", "scripts/prepare_core_overlay.sh",
+          "scripts/patches/*.patch", "${SENKO_CORE_SRC}/go.mod", "${SENKO_CORE_SRC}/**/*.go"]
+stamp = "build/stamps/test-native"
+env = { SENKO_GO = "${SENKO_GO}", SENKO_CORE_SRC = "${SENKO_CORE_SRC}" }
+
+# the three files that name the version must agree, the control file is the source
+[step.version]
+run = [["${MEOW}", "check-version", "--expect", "${field:packaging/DEBIAN/control:Version}",
+        "--plist", "app/Info.plist", "CFBundleShortVersionString",
+        "--field", "app/app_common.h", "SENKO_VERSION"]]
+stamp = "build/stamps/version"
+
+# release checks on every binary that goes into the package
+[verify.check-senko]
+file = "build/fat/senko"
+slices = ["armv7", "arm64"]
+min_ios = "4.3"
+signed = true
+allow_dylibs = ["/usr/lib/", "/System/Library/Frameworks/"]
+
+[verify.check-senkod]
+file = "build/fat/senkod"
+slices = ["armv7", "arm64"]
+min_ios = "4.3"
+signed = true
+allow_dylibs = ["/usr/lib/", "/System/Library/Frameworks/"]
+
+[verify.check-senkoctl]
+file = "build/fat/senkoctl"
+slices = ["armv7", "arm64"]
+min_ios = "4.3"
+signed = true
+allow_dylibs = ["/usr/lib/", "/System/Library/Frameworks/"]
+
+# the injected libraries are loaded by name from /var/jb, one slice per cpu the loader can hit
+[verify.check-senkotlsfix]
+file = "build/fat/senkotlsfix.dylib"
+slices = ["armv7", "arm64", "arm64e"]
+min_ios = "4.3"
+signed = true
+allow_dylibs = ["/usr/lib/", "/System/Library/Frameworks/", "/var/jb/usr/lib/senkotlsfix.dylib"]
+
+[verify.check-senkostatus]
+file = "build/fat/senkostatus.dylib"
+slices = ["armv7", "arm64", "arm64e"]
+min_ios = "4.3"
+signed = true
+allow_dylibs = ["/usr/lib/", "/System/Library/Frameworks/", "/var/jb/usr/lib/senkostatus.dylib"]
+
+# the extension is one arm64 executable that carries senko-core
+[verify.check-tunnel]
+file = "build/native/SenkoTunnel.appex/SenkoTunnel"
+slices = ["arm64"]
+min_ios = "9.0"
+signed = true
+require_symbols = ["SenkoNativeRunFile"]
+needs = ["native"]
+
+# one universal package, every path under /var/jb except the preferences plist.
+# the payload is the same on rootful and rootless systems, postinst links the rootful layout
+[deb.release]
+output = "${DEB_DIR}/senko-v${field:packaging/DEBIAN/control:Version}.deb"
+control = "packaging/DEBIAN/control"
+packages = "${DEB_DIR}/senko-v${field:packaging/DEBIAN/control:Version}.Packages"
+scripts = { postinst = "packaging/DEBIAN/postinst", postrm = "packaging/DEBIAN/postrm", prerm = "packaging/DEBIAN/prerm" }
+needs = ["version", "test", "test-native", "native", "check-senko", "check-senkod", "check-senkoctl",
+         "check-senkotlsfix", "check-senkostatus", "check-tunnel"]
+forbid_setuid = true
+forbid_text = ["@SENKO_"]
+require = ["var/jb/usr/lib/senko/cacert.pem", "var/jb/usr/lib/senkotlsfix.dylib", "var/jb/usr/lib/senkostatus.dylib",
+           "var/jb/Applications/Senko.app/PlugIns/SenkoTunnel.appex/cacert.pem",
+           "var/jb/usr/lib/senko/launchd.sh", "var/jb/Library/LaunchDaemons/com.senko.senkod.plist",
+           "DEBIAN/control", "DEBIAN/md5sums"]
+require_exec = ["var/jb/Applications/Senko.app/senko", "var/jb/usr/bin/senkod", "var/jb/usr/bin/senkoctl",
+                "DEBIAN/postinst", "DEBIAN/postrm", "DEBIAN/prerm"]
+# a separate daemon, redsocks, setuid helpers, pf and substrate payloads are gone on purpose,
+# and nothing may write into the rootless sealed root
+forbid = ["var/jb/usr/bin/*awgd", "var/jb/usr/bin/redsocks-senko", "var/jb/usr/bin/senko-kick",
+          "var/jb/etc/pf.os", "var/jb/Library/MobileSubstrate", "Applications", "usr", "Library"]
+sh_check = ["var/jb/usr/lib/senko/launchd.sh", "DEBIAN/postinst", "DEBIAN/prerm"]
+contains = [
+  { file = "DEBIAN/control", text = "Architecture: all" },
+  { file = "DEBIAN/control", text = "Depends: firmware (>= 4.3)" },
+  { file = "DEBIAN/postinst", text = "/usr/lib/senko/launchd.sh" },
+  { file = "DEBIAN/prerm", text = "/usr/lib/senko/launchd.sh" },
+  { file = "DEBIAN/postinst", text = "install_rootful_layout" },
+  { file = "var/jb/Library/LaunchDaemons/com.senko.senkod.plist", text = "<string>/var/jb/usr/bin/senkod</string>" },
+]
+
+[[deb.release.file]]
+from = "packaging/var/mobile/Library/Preferences/com.senko.senkotlsfix.plist"
+to = "var/mobile/Library/Preferences/com.senko.senkotlsfix.plist"
+
+[[deb.release.file]]
+from = "packaging/Library/LaunchDaemons/com.senko.senkod.plist"
+to = "var/jb/Library/LaunchDaemons/com.senko.senkod.plist"
+
+[[deb.release.file]]
+from = "build/fat/senkotlsfix.dylib"
+to = "var/jb/usr/lib/senkotlsfix.dylib"
+mode = "755"
+
+[[deb.release.file]]
+from = "build/fat/senkostatus.dylib"
+to = "var/jb/usr/lib/senkostatus.dylib"
+mode = "755"
+
+[[deb.release.file]]
+from = "status/senkostatus.plist"
+to = "var/jb/usr/lib/senkostatus.plist"
+
+[[deb.release.file]]
+from = "senkotlsfix/substrate-filter.plist"
+to = "var/jb/usr/lib/senkotlsfix/substrate-filter.plist"
+
+[[deb.release.file]]
+from = "senkotlsfix/cacert.pem"
+to = "var/jb/usr/lib/senkotlsfix/cacert.pem"
+
+[[deb.release.file]]
+from = "senkotlsfix/cacert.pem"
+to = "var/jb/usr/lib/senko/cacert.pem"
+
+[[deb.release.file]]
+from = "build/fat/senkod"
+to = "var/jb/usr/bin/senkod"
+mode = "755"
+
+[[deb.release.file]]
+from = "build/fat/senkoctl"
+to = "var/jb/usr/bin/senkoctl"
+mode = "755"
+
+[[deb.release.file]]
+from = "packaging/var/jb/usr/lib/senko/launchd.sh"
+to = "var/jb/usr/lib/senko/launchd.sh"
+
+[[deb.release.file]]
+from = "packaging/var/jb/usr/lib/senko/head"
+to = "var/jb/usr/lib/senko/head"
+mode = "755"
+
+[[deb.release.file]]
+from = "packaging/senko-core-NOTICE"
+to = "var/jb/usr/share/doc/senko/senko-core-NOTICE"
+
+[[deb.release.file]]
+from = "${SENKO_CORE_SRC}/LICENSE"
+to = "var/jb/usr/share/doc/senko/senko-core-LICENSE"
+
+[[deb.release.file]]
+from = "scripts/patches/senko-core-trim-distro.patch"
+to = "var/jb/usr/share/doc/senko/senko-core-trim-distro.patch"
+
+[[deb.release.file]]
+from = "scripts/patches/senko-core-trim-conf.patch"
+to = "var/jb/usr/share/doc/senko/senko-core-trim-conf.patch"
+
+[[deb.release.file]]
+from = "packaging/zbar-NOTICE"
+to = "var/jb/usr/share/doc/senko/zbar-NOTICE"
+
+[[deb.release.file]]
+from = "app/third_party/zbar/COPYING"
+to = "var/jb/usr/share/doc/senko/zbar-LICENSE"
+
+[[deb.release.file]]
+from = "app/emoji/ATTRIBUTION.txt"
+to = "var/jb/usr/share/doc/senko/twemoji-ATTRIBUTION"
+
+[[deb.release.file]]
+from = "app/emoji/LICENSE-GRAPHICS"
+to = "var/jb/usr/share/doc/senko/twemoji-LICENSE"
+
+[[deb.release.file]]
+from = "build/fat/senko"
+to = "var/jb/Applications/Senko.app/senko"
+mode = "755"
+
+[[deb.release.file]]
+from = "app/Info.plist"
+to = "var/jb/Applications/Senko.app/Info.plist"
+
+[[deb.release.file]]
+from = "app/icons/Icon.png"
+to = "var/jb/Applications/Senko.app/Icon.png"
+
+[[deb.release.file]]
+from = "app/icons/Icon@2x.png"
+to = "var/jb/Applications/Senko.app/Icon@2x.png"
+
+[[deb.release.file]]
+from = "app/icons/Icon-72.png"
+to = "var/jb/Applications/Senko.app/Icon-72.png"
+
+[[deb.release.file]]
+from = "app/icons/Icon-72@2x.png"
+to = "var/jb/Applications/Senko.app/Icon-72@2x.png"
+
+[[deb.release.file]]
+from = "app/icons/Icon-60@2x.png"
+to = "var/jb/Applications/Senko.app/Icon-60@2x.png"
+
+[[deb.release.file]]
+from = "app/icons/Icon-60@3x.png"
+to = "var/jb/Applications/Senko.app/Icon-60@3x.png"
+
+[[deb.release.file]]
+from = "app/icons/Icon-76.png"
+to = "var/jb/Applications/Senko.app/Icon-76.png"
+
+[[deb.release.file]]
+from = "app/icons/Icon-76@2x.png"
+to = "var/jb/Applications/Senko.app/Icon-76@2x.png"
+
+[[deb.release.file]]
+from = "app/icons/Icon-83.5@2x.png"
+to = "var/jb/Applications/Senko.app/Icon-83.5@2x.png"
+
+[[deb.release.file]]
+from = "app/icons/sqmrak.jpg"
+to = "var/jb/Applications/Senko.app/sqmrak.jpg"
+
+[[deb.release.file]]
+from = "app/icons/boykisser.png"
+to = "var/jb/Applications/Senko.app/boykisser.png"
+
+[[deb.release.file]]
+from = "app/icons/senko-fall.png"
+to = "var/jb/Applications/Senko.app/senko-fall.png"
+
+[[deb.release.file]]
+from = "app/icons/meow.caf"
+to = "var/jb/Applications/Senko.app/meow.caf"
+
+[[deb.release.file]]
+from = "app/icons/meow.wav"
+to = "var/jb/Applications/Senko.app/meow.wav"
+
+[[deb.release.file]]
+from = "app/icons/ouch.wav"
+to = "var/jb/Applications/Senko.app/ouch.wav"
+
+[[deb.release.file]]
+from = "app/icons/miside-bg.jpg"
+to = "var/jb/Applications/Senko.app/miside-bg.jpg"
+
+[[deb.release.file]]
+from = "app/icons/frutiger-bg.jpg"
+to = "var/jb/Applications/Senko.app/frutiger-bg.jpg"
+
+[[deb.release.file]]
+from = "app/icons/frutiger-bg-dark.jpg"
+to = "var/jb/Applications/Senko.app/frutiger-bg-dark.jpg"
+
+[[deb.release.file]]
+from = "app/icons/frutiger-bg-dark-wide.jpg"
+to = "var/jb/Applications/Senko.app/frutiger-bg-dark-wide.jpg"
+
+[[deb.release.file]]
+from = "app/icons/server-placeholder.png"
+to = "var/jb/Applications/Senko.app/server-placeholder.png"
+
+[[deb.release.file]]
+from = "app/icons/ios26-bg-light.jpg"
+to = "var/jb/Applications/Senko.app/ios26-bg-light.jpg"
+
+[[deb.release.file]]
+from = "app/icons/ios26-bg-dark.jpg"
+to = "var/jb/Applications/Senko.app/ios26-bg-dark.jpg"
+
+[[deb.release.file]]
+from = "app/icons/Default.png"
+to = "var/jb/Applications/Senko.app/Default.png"
+
+[[deb.release.file]]
+from = "app/icons/Default@2x.png"
+to = "var/jb/Applications/Senko.app/Default@2x.png"
+
+[[deb.release.file]]
+from = "app/icons/Default-568h@2x.png"
+to = "var/jb/Applications/Senko.app/Default-568h@2x.png"
+
+[[deb.release.file]]
+from = "app/icons/Default-667h@2x.png"
+to = "var/jb/Applications/Senko.app/Default-667h@2x.png"
+
+[[deb.release.file]]
+from = "app/icons/Default-736h@3x.png"
+to = "var/jb/Applications/Senko.app/Default-736h@3x.png"
+
+[[deb.release.file]]
+from = "app/icons/Default-812h@3x.png"
+to = "var/jb/Applications/Senko.app/Default-812h@3x.png"
+
+[[deb.release.file]]
+from = "app/icons/Default-844h@3x.png"
+to = "var/jb/Applications/Senko.app/Default-844h@3x.png"
+
+[[deb.release.file]]
+from = "app/icons/Default-896h@2x.png"
+to = "var/jb/Applications/Senko.app/Default-896h@2x.png"
+
+[[deb.release.file]]
+from = "app/icons/Default-896h@3x.png"
+to = "var/jb/Applications/Senko.app/Default-896h@3x.png"
+
+[[deb.release.file]]
+from = "app/icons/Default-926h@3x.png"
+to = "var/jb/Applications/Senko.app/Default-926h@3x.png"
+
+[[deb.release.file]]
+from = "app/icons/Default-Portrait.png"
+to = "var/jb/Applications/Senko.app/Default-Portrait.png"
+
+[[deb.release.file]]
+from = "app/icons/Default-Portrait@2x.png"
+to = "var/jb/Applications/Senko.app/Default-Portrait@2x.png"
+
+[[deb.release.file]]
+from = "senkotlsfix/cacert.pem"
+to = "var/jb/Applications/Senko.app/PlugIns/SenkoTunnel.appex/cacert.pem"
+
+[[deb.release.tree]]
+from = "app/icons/flags"
+to = "var/jb/Applications/Senko.app"
+mode = "644"
+
+
+[[deb.release.tree]]
+from = "app/icons/glyphs"
+to = "var/jb/Applications/Senko.app"
+exclude = ["src"]
+mode = "644"
+
+
+[[deb.release.tree]]
+from = "app/emoji"
+to = "var/jb/Applications/Senko.app/emoji"
+mode = "644"
+
+
+[[deb.release.tree]]
+from = "build/native/SenkoTunnel.appex"
+to = "var/jb/Applications/Senko.app/PlugIns/SenkoTunnel.appex"
+
+[[deb.release.tree]]
+from = "senkotlsfix/roots"
+to = "var/jb/usr/lib/senkotlsfix/roots"
+mode = "644"
+
+
+
+# springboard icons for every slot, cut from the 2x icon. run `meow build icons-home` after
+# the artwork changes, the pngs are committed. point the master at a 1024 px file for sharp 3x
+# and ipad sizes. Icon@2x.png is the default master and is not written back
+[icons.home]
+master = "app/icons/Icon@2x.png"
+out = "app/icons"
+
+[icons.home.sizes]
+"Icon.png" = 57
+"Icon-72.png" = 72
+"Icon-72@2x.png" = 144
+"Icon-60@2x.png" = 120
+"Icon-60@3x.png" = 180
+"Icon-76.png" = 76
+"Icon-76@2x.png" = 152
+"Icon-83.5@2x.png" = 167
+
+# ui glyphs, white outlines the app tints at run time. `meow build glyphs-ui` after a source changes
+[glyphs.ui]
+src = ["app/icons/glyphs/src/*.svg"]
+out = "app/icons/glyphs"
+prefix = "glyph-"
+size = 24
+scales = [1, 2, 3]
+
+# one glyph at a time, so a new source does not rewrite the committed pngs of the others
+[glyphs.copy]
+items = [{ from = "app/icons/glyphs/src/copy.svg", name = "copy" }]
+out = "app/icons/glyphs"
+prefix = "glyph-"
+size = 24
+scales = [1, 2, 3]

@@ -2,10 +2,9 @@
 # static OpenSSL for the iOS 4.3 armv7 daemon slice
 set -euo pipefail
 
-THEOS="${THEOS:?set THEOS to theos root}"
 PREFIX="${SENKO_OSSL_V7:?set SENKO_OSSL_V7 to the armv7 openssl prefix}"
 BLD="${SENKO_OPENSSL_BLD7:-${PREFIX}/build-armv7-ios5}"
-TC="${SENKO_TC:-${THEOS}/toolchain/linux/iphone/bin}"
+TC="${SENKO_TC:?set SENKO_TC to the toolchain bin directory}"
 ARMV7_CLANG="${BLD}/armv7-clang"
 SDK="${SENKO_SDK_V7:?set SENKO_SDK_V7 to the armv7 sdk}"
 MARKER="${PREFIX}/.senko-ios-min-4.3"

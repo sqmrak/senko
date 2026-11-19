@@ -1,0 +1,2200 @@
+# host tests, one table per program, built with the host compiler and run in tests/
+# each runs in tests/ because the programs read fixtures by relative path
+
+[test.ctl_server]
+src = [
+  "tests/test_ctl_server.c",
+  "daemon/ctl_server.c",
+  "daemon/ctl_watch.c",
+  "daemon/core/ctl_engine.c",
+  "daemon/core/control.c",
+  "daemon/core/store.c",
+  "daemon/core/routing_sync.c",
+  "daemon/core/url.c",
+  "daemon/core/karing_backup.c",
+  "daemon/core/karing_zip.c",
+  "daemon/settings.c",
+  "daemon/egress.c",
+  "daemon/legacy_ios.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+  "daemon/core/dns_msg.c",
+  "daemon/helper_jobs.c",
+  "daemon/senkod_helper.c",
+  "daemon/route_socket.c",
+  "daemon/core/route_message.c",
+  "daemon/core/awg_config.c",
+  "daemon/core/awg_handshake.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_time.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon"]
+libs = ["ssl", "crypto", "z"]
+cwd = "tests"
+
+[test.autoconnect]
+src = [
+  "tests/test_autoconnect.c",
+  "daemon/ctl_server.c",
+  "daemon/ctl_watch.c",
+  "daemon/core/ctl_engine.c",
+  "daemon/core/control.c",
+  "daemon/core/store.c",
+  "daemon/core/routing_sync.c",
+  "daemon/core/url.c",
+  "daemon/core/karing_backup.c",
+  "daemon/core/karing_zip.c",
+  "daemon/settings.c",
+  "daemon/egress.c",
+  "daemon/legacy_ios.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+  "daemon/core/dns_msg.c",
+  "daemon/helper_jobs.c",
+  "daemon/senkod_helper.c",
+  "daemon/route_socket.c",
+  "daemon/core/route_message.c",
+  "daemon/core/awg_config.c",
+  "daemon/core/awg_handshake.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_time.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon"]
+libs = ["ssl", "crypto", "z"]
+cwd = "tests"
+
+[test.session_direct]
+src = [
+  "tests/test_session_direct.c",
+  "daemon/core/session.c",
+  "daemon/core/socks5.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/vless.c",
+  "daemon/core/vless_conn.c",
+  "daemon/core/socks5_client.c",
+  "daemon/core/http_client.c",
+  "daemon/core/vision.c",
+  "daemon/core/trojan_client.c",
+  "daemon/core/hy2_proto.c",
+  "daemon/core/blake2b256.c",
+  "daemon/core/shadowsocks_client.c",
+  "daemon/core/vmess_client.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+  "daemon/core/senko_time.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.config_compat]
+src = [
+  "tests/test_config_compat.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.transport_ws]
+src = [
+  "tests/test_transport_ws.c",
+  "daemon/core/transport_ws.c",
+  "daemon/core/transport_tcp.c",
+  "daemon/core/transport_tls.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.store_contract]
+src = [
+  "tests/test_store_contract.c",
+  "daemon/core/store.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.storefile]
+src = [
+  "tests/test_storefile.c",
+  "daemon/storefile.c",
+  "daemon/settings.c",
+  "daemon/core/store.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.reality_crypto]
+src = [
+  "tests/test_reality_crypto.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.tls13_kdf]
+src = [
+  "tests/test_tls13_kdf.c",
+  "daemon/core/tls13_kdf.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.tls13_keysched]
+src = [
+  "tests/test_tls13_keysched.c",
+  "daemon/core/tls13_keysched.c",
+  "daemon/core/tls13_kdf.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.tls13_record]
+src = [
+  "tests/test_tls13_record.c",
+  "daemon/core/tls13_record.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.tls_clienthello]
+src = ["tests/test_tls_clienthello.c", "daemon/core/tls_clienthello.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.vision]
+src = ["tests/test_vision.c", "daemon/core/vision.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.transport_pick]
+src = [
+  "tests/test_transport_pick.c",
+  "daemon/core/transport_pick.c",
+  "daemon/core/transport_enc.c",
+  "daemon/core/vlenc_conn.c",
+  "daemon/core/blake3.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+  "daemon/core/transport_tcp.c",
+  "daemon/core/transport_tls.c",
+  "daemon/core/transport_ws.c",
+  "daemon/core/transport_xhttp.c",
+  "daemon/core/hpack.c",
+  "daemon/core/reality_handshake.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/reality_auth.c",
+  "daemon/core/tls_clienthello.c",
+  "daemon/core/tls13_kdf.c",
+  "daemon/core/tls13_keysched.c",
+  "daemon/core/tls13_record.c",
+  "daemon/core/tls13_transcript.c",
+  "daemon/core/tls13_handshake.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+  "daemon/core/senko_time.c",
+  "daemon/core/grpc_core.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.awg_config]
+src = ["tests/test_awg_config.c", "daemon/core/awg_config.c", "daemon/core/b64.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["crypto"]
+cwd = "tests"
+
+[test.awg_handshake]
+src = [
+  "tests/test_awg_handshake.c",
+  "daemon/core/awg_handshake.c",
+  "daemon/core/awg_config.c",
+  "daemon/core/b64.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_time.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.awg_tunnel]
+src = [
+  "tests/test_awg_tunnel.c",
+  "daemon/core/awg_tunnel.c",
+  "daemon/core/awg_handshake.c",
+  "daemon/core/awg_config.c",
+  "daemon/core/b64.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_time.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.awg_route]
+src = ["tests/test_awg_route.c", "daemon/awg_route.c", "daemon/core/awg_config.c", "daemon/core/b64.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon"]
+libs = ["crypto"]
+cwd = "tests"
+
+[test.xray_json]
+src = [
+  "tests/test_xray_json.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.url_headers]
+src = ["tests/test_url_headers.c", "daemon/core/url.c", "daemon/core/net_safe.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.grpc_core]
+src = ["tests/test_grpc_core.c", "daemon/core/grpc_core.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.transport_grpc]
+src = [
+  "tests/test_transport_grpc.c",
+  "daemon/core/transport_pick.c",
+  "daemon/core/transport_enc.c",
+  "daemon/core/vlenc_conn.c",
+  "daemon/core/blake3.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+  "daemon/core/transport_tcp.c",
+  "daemon/core/transport_tls.c",
+  "daemon/core/transport_ws.c",
+  "daemon/core/transport_xhttp.c",
+  "daemon/core/hpack.c",
+  "daemon/core/reality_handshake.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/reality_auth.c",
+  "daemon/core/tls_clienthello.c",
+  "daemon/core/tls13_kdf.c",
+  "daemon/core/tls13_keysched.c",
+  "daemon/core/tls13_record.c",
+  "daemon/core/tls13_transcript.c",
+  "daemon/core/tls13_handshake.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+  "daemon/core/senko_time.c",
+  "daemon/core/grpc_core.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.hpack]
+src = ["tests/test_hpack.c", "daemon/core/hpack.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.app_proxy]
+src = ["tests/test_app_proxy.c", "senkotlsfix/stl_proxy.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-pthread", "-DSENKO_HOST_TEST", "-DC_PROXY_STATE=\"/tmp/senko-c-proxy-test\"", "-Isenkotlsfix", "-pthread"]
+ldflags = ["-pthread", "-pthread"]
+cwd = "tests"
+
+[test.senko_core_config]
+src = [
+  "tests/test_senko_core_config.c",
+  "daemon/senko_core_config.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.net_safe]
+src = ["tests/test_net_safe.c", "daemon/core/net_safe.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.legacy_ios]
+src = ["tests/test_legacy_ios.c", "daemon/legacy_ios.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon"]
+cwd = "tests"
+
+[test.subinfo]
+src = [
+  "tests/test_subinfo.c",
+  "daemon/core/subfetch.c",
+  "daemon/core/http.c",
+  "daemon/core/url.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/b64.c",
+  "daemon/core/senko_time.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-DSENKO_HOST_TEST", "-Idaemon"]
+libs = ["ssl", "crypto", "z"]
+cwd = "tests"
+
+[test.profiles]
+src = [
+  "tests/test_profiles.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.amnezia_bundle]
+src = [
+  "tests/test_amnezia_bundle.c",
+  "daemon/core/amnezia_bundle.c",
+  "daemon/core/awg_config.c",
+  "daemon/core/b64.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["z", "crypto"]
+cwd = "tests"
+
+[test.amnezia_qr]
+src = [
+  "tests/test_amnezia_qr.c",
+  "daemon/core/amnezia_qr.c",
+  "daemon/core/amnezia_bundle.c",
+  "daemon/core/awg_config.c",
+  "daemon/core/b64.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["z", "crypto"]
+cwd = "tests"
+
+[test.happ_links]
+src = [
+  "tests/test_happ_links.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.incy_links]
+src = [
+  "tests/test_incy_links.c",
+  "daemon/core/store.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.b64]
+src = ["tests/test_b64.c", "daemon/core/b64.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.traffic]
+src = ["tests/test_traffic.c", "daemon/core/control.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.loop_traffic]
+src = [
+  "tests/test_loop_traffic.c",
+  "daemon/core/session.c",
+  "daemon/core/socks5.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/vless.c",
+  "daemon/core/vless_conn.c",
+  "daemon/core/socks5_client.c",
+  "daemon/core/http_client.c",
+  "daemon/core/vision.c",
+  "daemon/core/transport_tcp.c",
+  "daemon/core/trojan_client.c",
+  "daemon/core/hy2_proto.c",
+  "daemon/core/blake2b256.c",
+  "daemon/core/shadowsocks_client.c",
+  "daemon/core/vmess_client.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+  "daemon/core/senko_time.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-pthread", "-DSENKO_RELEASE", "-Idaemon", "-pthread"]
+ldflags = ["-pthread", "-pthread"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.rules]
+src = ["tests/test_rules.c", "daemon/core/rules.c", "daemon/core/geo.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.karing_backup]
+src = [
+  "tests/test_karing_backup.c",
+  "daemon/core/karing_backup.c",
+  "daemon/core/karing_zip.c",
+  "daemon/core/store.c",
+  "daemon/core/url.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto", "z"]
+cwd = "tests"
+
+[test.device_model]
+src = ["tests/test_device_model.c", "app/device_model.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Iapp"]
+cwd = "tests"
+
+[test.iface_addr]
+src = ["tests/test_iface_addr.c", "daemon/core/iface_addr.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.motion]
+src = ["tests/test_motion.c", "app/senko_motion.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Iapp"]
+libs = ["m"]
+cwd = "tests"
+
+[test.blake3]
+src = ["tests/test_blake3.c", "daemon/core/blake3.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.vlenc_conn]
+src = [
+  "tests/test_vlenc_conn.c",
+  "tests/vlenc_server.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/blake3.c",
+  "daemon/core/b64.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_time.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-pthread", "-pthread"]
+ldflags = ["-pthread", "-pthread"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.transport_enc]
+src = [
+  "tests/test_transport_enc.c",
+  "tests/vlenc_server.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/blake3.c",
+  "daemon/core/b64.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_time.c",
+  "daemon/core/vlenc_conn.c",
+  "daemon/core/transport_tcp.c",
+  "daemon/core/transport_tls.c",
+  "daemon/core/transport_ws.c",
+  "daemon/core/transport_xhttp.c",
+  "daemon/core/hpack.c",
+  "daemon/core/grpc_core.c",
+  "daemon/core/h2_core.c",
+  "daemon/core/reality_handshake.c",
+  "daemon/core/reality_auth.c",
+  "daemon/core/tls_clienthello.c",
+  "daemon/core/tls13_kdf.c",
+  "daemon/core/tls13_keysched.c",
+  "daemon/core/tls13_record.c",
+  "daemon/core/tls13_transcript.c",
+  "daemon/core/tls13_handshake.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-pthread", "-pthread"]
+ldflags = ["-pthread", "-pthread"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.dns_msg]
+src = ["tests/test_dns_msg.c", "daemon/core/dns_msg.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.chacha_poly]
+src = ["tests/test_chacha_poly.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.awg_tunnel_neon]
+src = [
+  "tests/test_awg_tunnel.c",
+  "daemon/core/awg_tunnel.c",
+  "daemon/core/awg_handshake.c",
+  "daemon/core/awg_config.c",
+  "daemon/core/b64.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_time.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-DSENKO_FORCE_NEON_AEAD"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.dns_cache]
+src = ["tests/test_dns_cache.c", "daemon/core/dns_cache.c", "daemon/core/dns_msg.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.trojan]
+src = [
+  "tests/test_trojan.c",
+  "daemon/core/trojan_client.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.trojan_combos]
+src = [
+  "tests/test_trojan_combos.c",
+  "daemon/core/store.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.trojan_exchange]
+src = [
+  "tests/test_trojan_exchange.c",
+  "daemon/core/session.c",
+  "daemon/core/socks5.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/vless.c",
+  "daemon/core/vless_conn.c",
+  "daemon/core/socks5_client.c",
+  "daemon/core/http_client.c",
+  "daemon/core/vision.c",
+  "daemon/core/trojan_client.c",
+  "daemon/core/hy2_proto.c",
+  "daemon/core/blake2b256.c",
+  "daemon/core/shadowsocks_client.c",
+  "daemon/core/vmess_client.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+  "daemon/core/senko_time.c",
+  "daemon/core/transport_tcp.c",
+  "daemon/core/transport_tls.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.shadowsocks]
+src = [
+  "tests/test_shadowsocks.c",
+  "daemon/core/shadowsocks_client.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.vmess]
+src = [
+  "tests/test_vmess.c",
+  "daemon/core/vmess_client.c",
+  "daemon/core/vless.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.qr_zbar]
+src = [
+  "tests/test_qr_zbar.c",
+  "app/third_party/zbar/zbar/config.c",
+  "app/third_party/zbar/zbar/error.c",
+  "app/third_party/zbar/zbar/symbol.c",
+  "app/third_party/zbar/zbar/image.c",
+  "app/third_party/zbar/zbar/refcnt.c",
+  "app/third_party/zbar/zbar/img_scanner.c",
+  "app/third_party/zbar/zbar/scanner.c",
+  "app/third_party/zbar/zbar/decoder.c",
+  "app/third_party/zbar/zbar/misc.c",
+  "app/third_party/zbar/zbar/decoder/qr_finder.c",
+  "app/third_party/zbar/zbar/qrcode/qrdec.c",
+  "app/third_party/zbar/zbar/qrcode/qrdectxt.c",
+  "app/third_party/zbar/zbar/qrcode/rs.c",
+  "app/third_party/zbar/zbar/qrcode/isaac.c",
+  "app/third_party/zbar/zbar/qrcode/bch15_5.c",
+  "app/third_party/zbar/zbar/qrcode/binarize.c",
+  "app/third_party/zbar/zbar/qrcode/util.c",
+]
+cflags = ["-DSENKO_ZBAR_IOS", "-w", "-Iapp/third_party/zbar/include", "-Iapp/third_party/zbar/zbar", "-Iapp/third_party/zbar/zbar/decoder", "-Iapp/third_party/zbar/zbar/qrcode", "-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-fno-sanitize=shift-base"]
+cwd = "tests"
+
+[test.subfetch_budget]
+src = [
+  "tests/test_subfetch_budget.c",
+  "daemon/core/subfetch.c",
+  "daemon/core/http.c",
+  "daemon/core/url.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/b64.c",
+  "daemon/core/transport_tcp.c",
+  "daemon/core/transport_tls.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+  "daemon/core/senko_time.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-DSENKO_HOST_TEST", "-Idaemon"]
+libs = ["ssl", "crypto", "z", "pthread"]
+cwd = "tests"
+
+[test.amnezia_gateway]
+src = [
+  "tests/test_amnezia_gateway.c",
+  "daemon/core/amnezia_gateway.c",
+  "daemon/core/amnezia_bundle.c",
+  "daemon/core/awg_config.c",
+  "daemon/core/subfetch.c",
+  "daemon/core/http.c",
+  "daemon/core/url.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/b64.c",
+  "daemon/core/third_party/cJSON.c",
+  "daemon/core/transport_tcp.c",
+  "daemon/core/transport_tls.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+  "daemon/core/senko_time.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-DSENKO_HOST_TEST", "-Idaemon", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto", "z", "pthread"]
+cwd = "tests"
+
+[test.premium]
+src = [
+  "tests/test_premium.c",
+  "daemon/premium.c",
+  "daemon/core/amnezia_bundle.c",
+  "daemon/core/awg_config.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/b64.c",
+  "daemon/core/third_party/cJSON.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon"]
+libs = ["ssl", "crypto", "z"]
+cwd = "tests"
+
+[test.blake2b256]
+src = ["tests/test_blake2b256.c", "daemon/core/blake2b256.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.hy2_proto]
+src = ["tests/test_hy2_proto.c", "daemon/core/hy2_proto.c", "daemon/core/blake2b256.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.session_hy2]
+src = [
+  "tests/test_session_hy2.c",
+  "tests/fake_transport.c",
+  "daemon/core/session.c",
+  "daemon/core/socks5.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/vless.c",
+  "daemon/core/vless_conn.c",
+  "daemon/core/socks5_client.c",
+  "daemon/core/http_client.c",
+  "daemon/core/vision.c",
+  "daemon/core/trojan_client.c",
+  "daemon/core/hy2_proto.c",
+  "daemon/core/blake2b256.c",
+  "daemon/core/shadowsocks_client.c",
+  "daemon/core/vmess_client.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+  "daemon/core/senko_time.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Itests"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.tun_plan]
+src = ["tests/test_tun_plan.c", "daemon/core/tun_plan.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.endpoint_pool]
+src = ["tests/test_endpoint_pool.c", "daemon/core/endpoint_pool.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.utun_framing]
+src = ["tests/test_utun_framing.c", "daemon/core/utun_frame.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.backend_rollback]
+src = [
+  "tests/test_backend_rollback.c",
+  "daemon/utun_route.c",
+  "daemon/route_socket.c",
+  "daemon/core/route_message.c",
+  "daemon/core/tun_plan.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon"]
+cwd = "tests"
+
+[test.tun_flow]
+src = ["tests/test_tun_flow.c", "daemon/core/tun_flow.c", "daemon/core/rules.c", "daemon/core/geo.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.backend_state]
+src = ["tests/test_backend_state.c", "daemon/core/backend_state.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.handshake_latency]
+src = ["tests/test_handshake_latency.c", "daemon/core/probe_stats.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.failover_health]
+src = ["tests/test_failover_health.c", "daemon/core/probe_stats.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.route_message]
+src = ["tests/test_route_message.c", "daemon/core/route_message.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.route_socket]
+src = ["tests/test_route_socket.c", "daemon/route_socket.c", "daemon/core/route_message.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon"]
+cwd = "tests"
+
+[test.vpn_conflict]
+src = ["tests/test_vpn_conflict.c", "daemon/vpn_conflict.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon"]
+cwd = "tests"
+
+[test.lwip_smoke]
+src = [
+  "tests/test_lwip_smoke.c",
+  "daemon/third_party/lwip/src/core/altcp_alloc.c",
+  "daemon/third_party/lwip/src/core/altcp.c",
+  "daemon/third_party/lwip/src/core/altcp_tcp.c",
+  "daemon/third_party/lwip/src/core/def.c",
+  "daemon/third_party/lwip/src/core/dns.c",
+  "daemon/third_party/lwip/src/core/inet_chksum.c",
+  "daemon/third_party/lwip/src/core/init.c",
+  "daemon/third_party/lwip/src/core/ip.c",
+  "daemon/third_party/lwip/src/core/mem.c",
+  "daemon/third_party/lwip/src/core/memp.c",
+  "daemon/third_party/lwip/src/core/netif.c",
+  "daemon/third_party/lwip/src/core/pbuf.c",
+  "daemon/third_party/lwip/src/core/raw.c",
+  "daemon/third_party/lwip/src/core/stats.c",
+  "daemon/third_party/lwip/src/core/sys.c",
+  "daemon/third_party/lwip/src/core/tcp.c",
+  "daemon/third_party/lwip/src/core/tcp_in.c",
+  "daemon/third_party/lwip/src/core/tcp_out.c",
+  "daemon/third_party/lwip/src/core/timeouts.c",
+  "daemon/third_party/lwip/src/core/udp.c",
+  "daemon/third_party/lwip/src/core/ipv4/acd.c",
+  "daemon/third_party/lwip/src/core/ipv4/autoip.c",
+  "daemon/third_party/lwip/src/core/ipv4/dhcp.c",
+  "daemon/third_party/lwip/src/core/ipv4/etharp.c",
+  "daemon/third_party/lwip/src/core/ipv4/icmp.c",
+  "daemon/third_party/lwip/src/core/ipv4/igmp.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4_addr.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4_frag.c",
+  "daemon/third_party/lwip/src/core/ipv6/dhcp6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ethip6.c",
+  "daemon/third_party/lwip/src/core/ipv6/icmp6.c",
+  "daemon/third_party/lwip/src/core/ipv6/inet6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6_addr.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6_frag.c",
+  "daemon/third_party/lwip/src/core/ipv6/mld6.c",
+  "daemon/third_party/lwip/src/core/ipv6/nd6.c",
+  "daemon/lwip_port/lwip_sys.c",
+  "daemon/core/senko_time.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon/lwip_port", "-Idaemon/third_party/lwip/src/include", "-Idaemon"]
+cwd = "tests"
+
+[test.tun_stack]
+src = [
+  "tests/test_tun_stack.c",
+  "daemon/tun_stack.c",
+  "daemon/core/tun_nat.c",
+  "daemon/core/utun_frame.c",
+  "daemon/third_party/lwip/src/core/altcp_alloc.c",
+  "daemon/third_party/lwip/src/core/altcp.c",
+  "daemon/third_party/lwip/src/core/altcp_tcp.c",
+  "daemon/third_party/lwip/src/core/def.c",
+  "daemon/third_party/lwip/src/core/dns.c",
+  "daemon/third_party/lwip/src/core/inet_chksum.c",
+  "daemon/third_party/lwip/src/core/init.c",
+  "daemon/third_party/lwip/src/core/ip.c",
+  "daemon/third_party/lwip/src/core/mem.c",
+  "daemon/third_party/lwip/src/core/memp.c",
+  "daemon/third_party/lwip/src/core/netif.c",
+  "daemon/third_party/lwip/src/core/pbuf.c",
+  "daemon/third_party/lwip/src/core/raw.c",
+  "daemon/third_party/lwip/src/core/stats.c",
+  "daemon/third_party/lwip/src/core/sys.c",
+  "daemon/third_party/lwip/src/core/tcp.c",
+  "daemon/third_party/lwip/src/core/tcp_in.c",
+  "daemon/third_party/lwip/src/core/tcp_out.c",
+  "daemon/third_party/lwip/src/core/timeouts.c",
+  "daemon/third_party/lwip/src/core/udp.c",
+  "daemon/third_party/lwip/src/core/ipv4/acd.c",
+  "daemon/third_party/lwip/src/core/ipv4/autoip.c",
+  "daemon/third_party/lwip/src/core/ipv4/dhcp.c",
+  "daemon/third_party/lwip/src/core/ipv4/etharp.c",
+  "daemon/third_party/lwip/src/core/ipv4/icmp.c",
+  "daemon/third_party/lwip/src/core/ipv4/igmp.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4_addr.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4_frag.c",
+  "daemon/third_party/lwip/src/core/ipv6/dhcp6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ethip6.c",
+  "daemon/third_party/lwip/src/core/ipv6/icmp6.c",
+  "daemon/third_party/lwip/src/core/ipv6/inet6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6_addr.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6_frag.c",
+  "daemon/third_party/lwip/src/core/ipv6/mld6.c",
+  "daemon/third_party/lwip/src/core/ipv6/nd6.c",
+  "daemon/lwip_port/lwip_sys.c",
+  "daemon/core/senko_time.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon/lwip_port", "-Idaemon/third_party/lwip/src/include", "-pthread", "-Idaemon", "-pthread"]
+ldflags = ["-pthread", "-pthread"]
+cwd = "tests"
+
+[test.tun_nat]
+src = ["tests/test_tun_nat.c", "daemon/core/tun_nat.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.tun_loop]
+src = [
+  "tests/test_tun_loop.c",
+  "daemon/tun_loop.c",
+  "daemon/utun_device.c",
+  "daemon/tun_stack.c",
+  "daemon/core/tun_nat.c",
+  "daemon/core/utun_frame.c",
+  "daemon/third_party/lwip/src/core/altcp_alloc.c",
+  "daemon/third_party/lwip/src/core/altcp.c",
+  "daemon/third_party/lwip/src/core/altcp_tcp.c",
+  "daemon/third_party/lwip/src/core/def.c",
+  "daemon/third_party/lwip/src/core/dns.c",
+  "daemon/third_party/lwip/src/core/inet_chksum.c",
+  "daemon/third_party/lwip/src/core/init.c",
+  "daemon/third_party/lwip/src/core/ip.c",
+  "daemon/third_party/lwip/src/core/mem.c",
+  "daemon/third_party/lwip/src/core/memp.c",
+  "daemon/third_party/lwip/src/core/netif.c",
+  "daemon/third_party/lwip/src/core/pbuf.c",
+  "daemon/third_party/lwip/src/core/raw.c",
+  "daemon/third_party/lwip/src/core/stats.c",
+  "daemon/third_party/lwip/src/core/sys.c",
+  "daemon/third_party/lwip/src/core/tcp.c",
+  "daemon/third_party/lwip/src/core/tcp_in.c",
+  "daemon/third_party/lwip/src/core/tcp_out.c",
+  "daemon/third_party/lwip/src/core/timeouts.c",
+  "daemon/third_party/lwip/src/core/udp.c",
+  "daemon/third_party/lwip/src/core/ipv4/acd.c",
+  "daemon/third_party/lwip/src/core/ipv4/autoip.c",
+  "daemon/third_party/lwip/src/core/ipv4/dhcp.c",
+  "daemon/third_party/lwip/src/core/ipv4/etharp.c",
+  "daemon/third_party/lwip/src/core/ipv4/icmp.c",
+  "daemon/third_party/lwip/src/core/ipv4/igmp.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4_addr.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4_frag.c",
+  "daemon/third_party/lwip/src/core/ipv6/dhcp6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ethip6.c",
+  "daemon/third_party/lwip/src/core/ipv6/icmp6.c",
+  "daemon/third_party/lwip/src/core/ipv6/inet6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6_addr.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6_frag.c",
+  "daemon/third_party/lwip/src/core/ipv6/mld6.c",
+  "daemon/third_party/lwip/src/core/ipv6/nd6.c",
+  "daemon/lwip_port/lwip_sys.c",
+  "daemon/core/senko_time.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon/lwip_port", "-Idaemon/third_party/lwip/src/include", "-pthread", "-Idaemon", "-pthread"]
+ldflags = ["-pthread", "-pthread"]
+cwd = "tests"
+
+[test.tun_tcp]
+src = [
+  "tests/test_tun_tcp.c",
+  "daemon/tun_tcp.c",
+  "daemon/tun_opener.c",
+  "daemon/tun_loop.c",
+  "daemon/utun_device.c",
+  "daemon/tun_stack.c",
+  "daemon/core/tun_nat.c",
+  "daemon/core/utun_frame.c",
+  "daemon/core/dns_msg.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/tun_policy.c",
+  "daemon/core/dns_policy.c",
+  "daemon/core/dns_cache.c",
+  "daemon/direct_socket.c",
+  "daemon/route_socket.c",
+  "daemon/core/route_message.c",
+  "daemon/core/session.c",
+  "daemon/core/socks5.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/vless.c",
+  "daemon/core/vless_conn.c",
+  "daemon/core/socks5_client.c",
+  "daemon/core/http_client.c",
+  "daemon/core/vision.c",
+  "daemon/core/trojan_client.c",
+  "daemon/core/hy2_proto.c",
+  "daemon/core/blake2b256.c",
+  "daemon/core/shadowsocks_client.c",
+  "daemon/core/vmess_client.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+  "daemon/core/senko_time.c",
+  "daemon/core/transport_tcp.c",
+  "daemon/core/transport_tls.c",
+  "daemon/third_party/lwip/src/core/altcp_alloc.c",
+  "daemon/third_party/lwip/src/core/altcp.c",
+  "daemon/third_party/lwip/src/core/altcp_tcp.c",
+  "daemon/third_party/lwip/src/core/def.c",
+  "daemon/third_party/lwip/src/core/dns.c",
+  "daemon/third_party/lwip/src/core/inet_chksum.c",
+  "daemon/third_party/lwip/src/core/init.c",
+  "daemon/third_party/lwip/src/core/ip.c",
+  "daemon/third_party/lwip/src/core/mem.c",
+  "daemon/third_party/lwip/src/core/memp.c",
+  "daemon/third_party/lwip/src/core/netif.c",
+  "daemon/third_party/lwip/src/core/pbuf.c",
+  "daemon/third_party/lwip/src/core/raw.c",
+  "daemon/third_party/lwip/src/core/stats.c",
+  "daemon/third_party/lwip/src/core/sys.c",
+  "daemon/third_party/lwip/src/core/tcp.c",
+  "daemon/third_party/lwip/src/core/tcp_in.c",
+  "daemon/third_party/lwip/src/core/tcp_out.c",
+  "daemon/third_party/lwip/src/core/timeouts.c",
+  "daemon/third_party/lwip/src/core/udp.c",
+  "daemon/third_party/lwip/src/core/ipv4/acd.c",
+  "daemon/third_party/lwip/src/core/ipv4/autoip.c",
+  "daemon/third_party/lwip/src/core/ipv4/dhcp.c",
+  "daemon/third_party/lwip/src/core/ipv4/etharp.c",
+  "daemon/third_party/lwip/src/core/ipv4/icmp.c",
+  "daemon/third_party/lwip/src/core/ipv4/igmp.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4_addr.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4_frag.c",
+  "daemon/third_party/lwip/src/core/ipv6/dhcp6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ethip6.c",
+  "daemon/third_party/lwip/src/core/ipv6/icmp6.c",
+  "daemon/third_party/lwip/src/core/ipv6/inet6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6_addr.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6_frag.c",
+  "daemon/third_party/lwip/src/core/ipv6/mld6.c",
+  "daemon/third_party/lwip/src/core/ipv6/nd6.c",
+  "daemon/lwip_port/lwip_sys.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon/lwip_port", "-Idaemon/third_party/lwip/src/include", "-pthread", "-DSENKO_RELEASE", "-Idaemon", "-pthread"]
+ldflags = ["-pthread", "-pthread"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.session_reset]
+src = [
+  "tests/test_session_reset.c",
+  "daemon/core/session.c",
+  "daemon/core/socks5.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/vless.c",
+  "daemon/core/vless_conn.c",
+  "daemon/core/socks5_client.c",
+  "daemon/core/http_client.c",
+  "daemon/core/vision.c",
+  "daemon/core/trojan_client.c",
+  "daemon/core/hy2_proto.c",
+  "daemon/core/blake2b256.c",
+  "daemon/core/shadowsocks_client.c",
+  "daemon/core/vmess_client.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+  "daemon/core/senko_time.c",
+  "daemon/core/transport_tcp.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-DSENKO_RELEASE"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.transport_tls_shared]
+src = ["tests/test_transport_tls_shared.c", "daemon/core/transport_tls.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.tun_dialer]
+src = [
+  "tests/test_tun_dialer.c",
+  "daemon/tun_dialer.c",
+  "daemon/core/endpoint_pool.c",
+  "daemon/core/senko_time.c",
+  "daemon/route_socket.c",
+  "daemon/core/route_message.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-pthread", "-Idaemon", "-pthread"]
+ldflags = ["-pthread", "-pthread"]
+cwd = "tests"
+
+[test.vless_udp]
+src = ["tests/test_vless_udp.c", "daemon/core/vless_udp.c", "daemon/core/vless.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.tun_udp]
+src = [
+  "tests/test_tun_udp.c",
+  "daemon/tun_udp.c",
+  "daemon/tun_opener.c",
+  "daemon/tun_loop.c",
+  "daemon/utun_device.c",
+  "daemon/tun_stack.c",
+  "daemon/core/tun_nat.c",
+  "daemon/core/utun_frame.c",
+  "daemon/core/vless_udp.c",
+  "daemon/core/dns_msg.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/tun_policy.c",
+  "daemon/core/dns_policy.c",
+  "daemon/core/dns_cache.c",
+  "daemon/direct_socket.c",
+  "daemon/route_socket.c",
+  "daemon/core/route_message.c",
+  "daemon/core/session.c",
+  "daemon/core/socks5.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/vless.c",
+  "daemon/core/vless_conn.c",
+  "daemon/core/socks5_client.c",
+  "daemon/core/http_client.c",
+  "daemon/core/vision.c",
+  "daemon/core/trojan_client.c",
+  "daemon/core/hy2_proto.c",
+  "daemon/core/blake2b256.c",
+  "daemon/core/shadowsocks_client.c",
+  "daemon/core/vmess_client.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+  "daemon/core/senko_time.c",
+  "daemon/core/transport_tcp.c",
+  "daemon/core/transport_tls.c",
+  "daemon/third_party/lwip/src/core/altcp_alloc.c",
+  "daemon/third_party/lwip/src/core/altcp.c",
+  "daemon/third_party/lwip/src/core/altcp_tcp.c",
+  "daemon/third_party/lwip/src/core/def.c",
+  "daemon/third_party/lwip/src/core/dns.c",
+  "daemon/third_party/lwip/src/core/inet_chksum.c",
+  "daemon/third_party/lwip/src/core/init.c",
+  "daemon/third_party/lwip/src/core/ip.c",
+  "daemon/third_party/lwip/src/core/mem.c",
+  "daemon/third_party/lwip/src/core/memp.c",
+  "daemon/third_party/lwip/src/core/netif.c",
+  "daemon/third_party/lwip/src/core/pbuf.c",
+  "daemon/third_party/lwip/src/core/raw.c",
+  "daemon/third_party/lwip/src/core/stats.c",
+  "daemon/third_party/lwip/src/core/sys.c",
+  "daemon/third_party/lwip/src/core/tcp.c",
+  "daemon/third_party/lwip/src/core/tcp_in.c",
+  "daemon/third_party/lwip/src/core/tcp_out.c",
+  "daemon/third_party/lwip/src/core/timeouts.c",
+  "daemon/third_party/lwip/src/core/udp.c",
+  "daemon/third_party/lwip/src/core/ipv4/acd.c",
+  "daemon/third_party/lwip/src/core/ipv4/autoip.c",
+  "daemon/third_party/lwip/src/core/ipv4/dhcp.c",
+  "daemon/third_party/lwip/src/core/ipv4/etharp.c",
+  "daemon/third_party/lwip/src/core/ipv4/icmp.c",
+  "daemon/third_party/lwip/src/core/ipv4/igmp.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4_addr.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4_frag.c",
+  "daemon/third_party/lwip/src/core/ipv6/dhcp6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ethip6.c",
+  "daemon/third_party/lwip/src/core/ipv6/icmp6.c",
+  "daemon/third_party/lwip/src/core/ipv6/inet6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6_addr.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6_frag.c",
+  "daemon/third_party/lwip/src/core/ipv6/mld6.c",
+  "daemon/third_party/lwip/src/core/ipv6/nd6.c",
+  "daemon/lwip_port/lwip_sys.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon/lwip_port", "-Idaemon/third_party/lwip/src/include", "-pthread", "-DSENKO_RELEASE", "-Idaemon", "-pthread"]
+ldflags = ["-pthread", "-pthread"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.transport_tls_eof]
+src = ["tests/test_transport_tls_eof.c", "daemon/core/transport_tls.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-pthread", "-pthread"]
+ldflags = ["-pthread", "-pthread"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.dns_policy]
+src = ["tests/test_dns_policy.c", "daemon/core/dns_policy.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.tun_policy]
+src = [
+  "tests/test_tun_policy.c",
+  "daemon/core/tun_policy.c",
+  "daemon/core/dns_policy.c",
+  "daemon/core/dns_cache.c",
+  "daemon/core/dns_msg.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.tun_udp_policy]
+src = [
+  "tests/test_tun_udp_policy.c",
+  "daemon/tun_udp.c",
+  "daemon/tun_opener.c",
+  "daemon/tun_loop.c",
+  "daemon/utun_device.c",
+  "daemon/tun_stack.c",
+  "daemon/core/tun_nat.c",
+  "daemon/core/utun_frame.c",
+  "daemon/core/vless_udp.c",
+  "daemon/core/dns_msg.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/tun_policy.c",
+  "daemon/core/dns_policy.c",
+  "daemon/core/dns_cache.c",
+  "daemon/direct_socket.c",
+  "daemon/route_socket.c",
+  "daemon/core/route_message.c",
+  "daemon/core/session.c",
+  "daemon/core/socks5.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/vless.c",
+  "daemon/core/vless_conn.c",
+  "daemon/core/socks5_client.c",
+  "daemon/core/http_client.c",
+  "daemon/core/vision.c",
+  "daemon/core/trojan_client.c",
+  "daemon/core/hy2_proto.c",
+  "daemon/core/blake2b256.c",
+  "daemon/core/shadowsocks_client.c",
+  "daemon/core/vmess_client.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+  "daemon/core/senko_time.c",
+  "daemon/core/transport_tcp.c",
+  "daemon/core/transport_tls.c",
+  "daemon/third_party/lwip/src/core/altcp_alloc.c",
+  "daemon/third_party/lwip/src/core/altcp.c",
+  "daemon/third_party/lwip/src/core/altcp_tcp.c",
+  "daemon/third_party/lwip/src/core/def.c",
+  "daemon/third_party/lwip/src/core/dns.c",
+  "daemon/third_party/lwip/src/core/inet_chksum.c",
+  "daemon/third_party/lwip/src/core/init.c",
+  "daemon/third_party/lwip/src/core/ip.c",
+  "daemon/third_party/lwip/src/core/mem.c",
+  "daemon/third_party/lwip/src/core/memp.c",
+  "daemon/third_party/lwip/src/core/netif.c",
+  "daemon/third_party/lwip/src/core/pbuf.c",
+  "daemon/third_party/lwip/src/core/raw.c",
+  "daemon/third_party/lwip/src/core/stats.c",
+  "daemon/third_party/lwip/src/core/sys.c",
+  "daemon/third_party/lwip/src/core/tcp.c",
+  "daemon/third_party/lwip/src/core/tcp_in.c",
+  "daemon/third_party/lwip/src/core/tcp_out.c",
+  "daemon/third_party/lwip/src/core/timeouts.c",
+  "daemon/third_party/lwip/src/core/udp.c",
+  "daemon/third_party/lwip/src/core/ipv4/acd.c",
+  "daemon/third_party/lwip/src/core/ipv4/autoip.c",
+  "daemon/third_party/lwip/src/core/ipv4/dhcp.c",
+  "daemon/third_party/lwip/src/core/ipv4/etharp.c",
+  "daemon/third_party/lwip/src/core/ipv4/icmp.c",
+  "daemon/third_party/lwip/src/core/ipv4/igmp.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4_addr.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4_frag.c",
+  "daemon/third_party/lwip/src/core/ipv6/dhcp6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ethip6.c",
+  "daemon/third_party/lwip/src/core/ipv6/icmp6.c",
+  "daemon/third_party/lwip/src/core/ipv6/inet6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6_addr.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6_frag.c",
+  "daemon/third_party/lwip/src/core/ipv6/mld6.c",
+  "daemon/third_party/lwip/src/core/ipv6/nd6.c",
+  "daemon/lwip_port/lwip_sys.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon/lwip_port", "-Idaemon/third_party/lwip/src/include", "-pthread", "-DSENKO_RELEASE", "-Idaemon", "-pthread"]
+ldflags = ["-pthread", "-pthread"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.tun_udp_wait]
+src = [
+  "tests/test_tun_udp_wait.c",
+  "daemon/tun_opener.c",
+  "daemon/tun_loop.c",
+  "daemon/utun_device.c",
+  "daemon/tun_stack.c",
+  "daemon/core/tun_nat.c",
+  "daemon/core/utun_frame.c",
+  "daemon/core/vless_udp.c",
+  "daemon/core/dns_msg.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/tun_policy.c",
+  "daemon/core/dns_policy.c",
+  "daemon/core/dns_cache.c",
+  "daemon/direct_socket.c",
+  "daemon/route_socket.c",
+  "daemon/core/route_message.c",
+  "daemon/core/session.c",
+  "daemon/core/socks5.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/vless.c",
+  "daemon/core/vless_conn.c",
+  "daemon/core/socks5_client.c",
+  "daemon/core/http_client.c",
+  "daemon/core/vision.c",
+  "daemon/core/trojan_client.c",
+  "daemon/core/hy2_proto.c",
+  "daemon/core/blake2b256.c",
+  "daemon/core/shadowsocks_client.c",
+  "daemon/core/vmess_client.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+  "daemon/core/senko_time.c",
+  "daemon/core/transport_tcp.c",
+  "daemon/core/transport_tls.c",
+  "daemon/third_party/lwip/src/core/altcp_alloc.c",
+  "daemon/third_party/lwip/src/core/altcp.c",
+  "daemon/third_party/lwip/src/core/altcp_tcp.c",
+  "daemon/third_party/lwip/src/core/def.c",
+  "daemon/third_party/lwip/src/core/dns.c",
+  "daemon/third_party/lwip/src/core/inet_chksum.c",
+  "daemon/third_party/lwip/src/core/init.c",
+  "daemon/third_party/lwip/src/core/ip.c",
+  "daemon/third_party/lwip/src/core/mem.c",
+  "daemon/third_party/lwip/src/core/memp.c",
+  "daemon/third_party/lwip/src/core/netif.c",
+  "daemon/third_party/lwip/src/core/pbuf.c",
+  "daemon/third_party/lwip/src/core/raw.c",
+  "daemon/third_party/lwip/src/core/stats.c",
+  "daemon/third_party/lwip/src/core/sys.c",
+  "daemon/third_party/lwip/src/core/tcp.c",
+  "daemon/third_party/lwip/src/core/tcp_in.c",
+  "daemon/third_party/lwip/src/core/tcp_out.c",
+  "daemon/third_party/lwip/src/core/timeouts.c",
+  "daemon/third_party/lwip/src/core/udp.c",
+  "daemon/third_party/lwip/src/core/ipv4/acd.c",
+  "daemon/third_party/lwip/src/core/ipv4/autoip.c",
+  "daemon/third_party/lwip/src/core/ipv4/dhcp.c",
+  "daemon/third_party/lwip/src/core/ipv4/etharp.c",
+  "daemon/third_party/lwip/src/core/ipv4/icmp.c",
+  "daemon/third_party/lwip/src/core/ipv4/igmp.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4_addr.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4_frag.c",
+  "daemon/third_party/lwip/src/core/ipv6/dhcp6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ethip6.c",
+  "daemon/third_party/lwip/src/core/ipv6/icmp6.c",
+  "daemon/third_party/lwip/src/core/ipv6/inet6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6_addr.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6_frag.c",
+  "daemon/third_party/lwip/src/core/ipv6/mld6.c",
+  "daemon/third_party/lwip/src/core/ipv6/nd6.c",
+  "daemon/lwip_port/lwip_sys.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon/lwip_port", "-Idaemon/third_party/lwip/src/include", "-pthread", "-DSENKO_RELEASE", "-Idaemon", "-pthread"]
+ldflags = ["-pthread", "-pthread"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.helper_jobs]
+src = ["tests/test_helper_jobs.c", "daemon/helper_jobs.c", "daemon/route_socket.c", "daemon/core/route_message.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon"]
+cwd = "tests"
+
+[test.awg_link]
+src = [
+  "tests/test_awg_link.c",
+  "daemon/awg_link.c",
+  "daemon/utun_device.c",
+  "daemon/core/utun_frame.c",
+  "daemon/core/awg_tunnel.c",
+  "daemon/core/awg_handshake.c",
+  "daemon/core/awg_config.c",
+  "daemon/core/b64.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_time.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-pthread", "-Idaemon", "-pthread"]
+ldflags = ["-pthread", "-pthread"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.flow_split]
+src = ["tests/test_flow_split.c", "daemon/core/flow_split.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Itests"]
+cwd = "tests"
+
+[test.awg_split]
+src = [
+  "tests/test_awg_split.c",
+  "daemon/awg_split.c",
+  "daemon/awg_link.c",
+  "daemon/tun_tcp.c",
+  "daemon/tun_udp.c",
+  "daemon/tun_opener.c",
+  "daemon/tun_loop.c",
+  "daemon/utun_device.c",
+  "daemon/tun_stack.c",
+  "daemon/core/tun_nat.c",
+  "daemon/core/utun_frame.c",
+  "daemon/core/vless_udp.c",
+  "daemon/core/flow_split.c",
+  "daemon/core/dns_msg.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/awg_tunnel.c",
+  "daemon/core/awg_handshake.c",
+  "daemon/core/awg_config.c",
+  "daemon/core/b64.c",
+  "daemon/core/tun_policy.c",
+  "daemon/core/dns_policy.c",
+  "daemon/core/dns_cache.c",
+  "daemon/direct_socket.c",
+  "daemon/route_socket.c",
+  "daemon/core/route_message.c",
+  "daemon/core/session.c",
+  "daemon/core/socks5.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/vless.c",
+  "daemon/core/vless_conn.c",
+  "daemon/core/socks5_client.c",
+  "daemon/core/http_client.c",
+  "daemon/core/vision.c",
+  "daemon/core/trojan_client.c",
+  "daemon/core/hy2_proto.c",
+  "daemon/core/blake2b256.c",
+  "daemon/core/shadowsocks_client.c",
+  "daemon/core/vmess_client.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+  "daemon/core/senko_time.c",
+  "daemon/core/transport_tcp.c",
+  "daemon/core/transport_tls.c",
+  "daemon/third_party/lwip/src/core/altcp_alloc.c",
+  "daemon/third_party/lwip/src/core/altcp.c",
+  "daemon/third_party/lwip/src/core/altcp_tcp.c",
+  "daemon/third_party/lwip/src/core/def.c",
+  "daemon/third_party/lwip/src/core/dns.c",
+  "daemon/third_party/lwip/src/core/inet_chksum.c",
+  "daemon/third_party/lwip/src/core/init.c",
+  "daemon/third_party/lwip/src/core/ip.c",
+  "daemon/third_party/lwip/src/core/mem.c",
+  "daemon/third_party/lwip/src/core/memp.c",
+  "daemon/third_party/lwip/src/core/netif.c",
+  "daemon/third_party/lwip/src/core/pbuf.c",
+  "daemon/third_party/lwip/src/core/raw.c",
+  "daemon/third_party/lwip/src/core/stats.c",
+  "daemon/third_party/lwip/src/core/sys.c",
+  "daemon/third_party/lwip/src/core/tcp.c",
+  "daemon/third_party/lwip/src/core/tcp_in.c",
+  "daemon/third_party/lwip/src/core/tcp_out.c",
+  "daemon/third_party/lwip/src/core/timeouts.c",
+  "daemon/third_party/lwip/src/core/udp.c",
+  "daemon/third_party/lwip/src/core/ipv4/acd.c",
+  "daemon/third_party/lwip/src/core/ipv4/autoip.c",
+  "daemon/third_party/lwip/src/core/ipv4/dhcp.c",
+  "daemon/third_party/lwip/src/core/ipv4/etharp.c",
+  "daemon/third_party/lwip/src/core/ipv4/icmp.c",
+  "daemon/third_party/lwip/src/core/ipv4/igmp.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4_addr.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4.c",
+  "daemon/third_party/lwip/src/core/ipv4/ip4_frag.c",
+  "daemon/third_party/lwip/src/core/ipv6/dhcp6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ethip6.c",
+  "daemon/third_party/lwip/src/core/ipv6/icmp6.c",
+  "daemon/third_party/lwip/src/core/ipv6/inet6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6_addr.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6.c",
+  "daemon/third_party/lwip/src/core/ipv6/ip6_frag.c",
+  "daemon/third_party/lwip/src/core/ipv6/mld6.c",
+  "daemon/third_party/lwip/src/core/ipv6/nd6.c",
+  "daemon/lwip_port/lwip_sys.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon/lwip_port", "-Idaemon/third_party/lwip/src/include", "-pthread", "-DSENKO_RELEASE", "-Idaemon", "-Itests", "-pthread"]
+ldflags = ["-pthread", "-pthread"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.sub_links]
+src = [
+  "tests/test_sub_links.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+  "daemon/core/vless.c",
+  "daemon/core/store.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon/core"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.net_diag]
+src = ["tests/test_net_diag.c", "daemon/core/net_diag.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.senko_clock]
+src = ["tests/test_senko_clock.c", "daemon/core/senko_clock.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-pthread", "-pthread"]
+ldflags = ["-pthread", "-pthread"]
+cwd = "tests"
+
+[test.real_probe]
+src = [
+  "tests/test_real_probe.c",
+  "daemon/core/real_probe.c",
+  "daemon/core/net_diag.c",
+  "daemon/core/senko_clock.c",
+  "daemon/core/transport_pick.c",
+  "daemon/core/transport_enc.c",
+  "daemon/core/vlenc_conn.c",
+  "daemon/core/blake3.c",
+  "daemon/core/session.c",
+  "daemon/core/socks5.c",
+  "daemon/core/net_safe.c",
+  "daemon/core/vless.c",
+  "daemon/core/vless_conn.c",
+  "daemon/core/socks5_client.c",
+  "daemon/core/http_client.c",
+  "daemon/core/vision.c",
+  "daemon/core/trojan_client.c",
+  "daemon/core/hy2_proto.c",
+  "daemon/core/blake2b256.c",
+  "daemon/core/shadowsocks_client.c",
+  "daemon/core/vmess_client.c",
+  "daemon/core/reality_crypto.c",
+  "daemon/core/third_party/mlkem768/kem.c",
+  "daemon/core/third_party/mlkem768/indcpa.c",
+  "daemon/core/third_party/mlkem768/poly.c",
+  "daemon/core/third_party/mlkem768/polyvec.c",
+  "daemon/core/third_party/mlkem768/ntt.c",
+  "daemon/core/third_party/mlkem768/cbd.c",
+  "daemon/core/third_party/mlkem768/reduce.c",
+  "daemon/core/third_party/mlkem768/verify.c",
+  "daemon/core/third_party/mlkem768/symmetric-shake.c",
+  "daemon/core/third_party/mlkem768/fips202.c",
+  "daemon/core/third_party/mlkem768/randombytes.c",
+  "daemon/core/senko_trace.c",
+  "daemon/core/senko_replay.c",
+  "daemon/core/senko_upload.c",
+  "daemon/core/senko_time.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+  "daemon/core/transport_tcp.c",
+  "daemon/core/transport_tls.c",
+  "daemon/core/transport_ws.c",
+  "daemon/core/transport_xhttp.c",
+  "daemon/core/hpack.c",
+  "daemon/core/reality_handshake.c",
+  "daemon/core/reality_auth.c",
+  "daemon/core/tls_clienthello.c",
+  "daemon/core/tls13_kdf.c",
+  "daemon/core/tls13_keysched.c",
+  "daemon/core/tls13_record.c",
+  "daemon/core/tls13_transcript.c",
+  "daemon/core/tls13_handshake.c",
+  "daemon/core/grpc_core.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto", "pthread"]
+cwd = "tests"
+
+[test.direct_dns]
+src = [
+  "tests/test_direct_dns.c",
+  "daemon/direct_dns.c",
+  "daemon/direct_socket.c",
+  "daemon/route_socket.c",
+  "daemon/core/route_message.c",
+  "daemon/core/dns_msg.c",
+  "daemon/core/net_safe.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-pthread", "-Idaemon", "-pthread"]
+ldflags = ["-pthread", "-pthread"]
+cwd = "tests"
+
+[test.proc_detach]
+src = ["tests/test_proc_detach.c", "daemon/proc_detach.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+ldflags = ["-rdynamic"]
+libs = ["dl"]
+cwd = "tests"
+
+[test.geo]
+src = ["tests/test_geo.c", "daemon/core/geo.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.routing_profile]
+src = [
+  "tests/test_routing_profile.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.geo_update]
+src = [
+  "tests/test_geo_update.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.routing_sync]
+src = [
+  "tests/test_routing_sync.c",
+  "daemon/core/routing_sync.c",
+  "daemon/core/store.c",
+  "daemon/core/vlenc_conf.c",
+  "daemon/core/config.c",
+  "daemon/core/share_link.c",
+  "daemon/core/rules.c",
+  "daemon/core/geo.c",
+  "daemon/core/routing_profile.c",
+  "daemon/core/geo_update.c",
+  "daemon/core/happ.c",
+  "daemon/core/happ_crypt5.c",
+  "daemon/core/incy.c",
+  "daemon/core/b64.c",
+  "daemon/core/profiles.c",
+  "daemon/core/third_party/cJSON.c",
+]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+libs = ["ssl", "crypto"]
+cwd = "tests"
+
+[test.plist_bundle_id]
+src = ["tests/test_plist_bundle_id.c", "daemon/core/plist_bundle_id.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party"]
+cwd = "tests"
+
+[test.app_owner]
+src = ["tests/test_app_owner.c", "daemon/app_owner.c", "daemon/core/plist_bundle_id.c", "daemon/core/senko_time.c"]
+cflags = ["-std=c99", "-O2", "-Idaemon/core", "-Idaemon/core/third_party", "-Idaemon"]
+libs = ["dl"]
+cwd = "tests"
+
+[test.py_karing_zip]
+run = ["python3", "test_karing_zip.py"]
+cwd = "tests"
+inputs = ["tests/*.py", "tests/*.inc", "packaging/DEBIAN/*", "packaging/var/jb/usr/lib/senko/launchd.sh", "app/emoji/*"]
+
+[test.py_launchd_install]
+run = ["python3", "test_launchd_install.py"]
+cwd = "tests"
+inputs = ["tests/*.py", "tests/*.inc", "packaging/DEBIAN/*", "packaging/var/jb/usr/lib/senko/launchd.sh", "app/emoji/*"]
+
+[test.py_check_emoji_assets]
+run = ["python3", "check_emoji_assets.py"]
+cwd = "tests"
+inputs = ["tests/*.py", "tests/*.inc", "packaging/DEBIAN/*", "packaging/var/jb/usr/lib/senko/launchd.sh", "app/emoji/*"]
+

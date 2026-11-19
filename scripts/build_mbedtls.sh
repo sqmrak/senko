@@ -2,8 +2,7 @@
 # build static tls archives because the hook has no device-side dependency
 set -euo pipefail
 
-THEOS="${THEOS:?set THEOS to theos root}"
-TC="${SENKO_TC:-${THEOS}/toolchain/linux/iphone/bin}"
+TC="${SENKO_TC:?set SENKO_TC to the toolchain bin directory}"
 VERSION="${MBEDTLS_VERSION:-3.6.4}"
 TAG="mbedtls-${VERSION}"
 OUT="${1:-${SENKO_MBED:?set SENKO_MBED to the mbedtls output directory}}"
@@ -59,7 +58,7 @@ cp -a "${SRC}/include" "${OUT}/include"
 build_arch armv7 arm-apple-darwin11 "${SDK_V7}" armv7 4.3
 build_arch arm64 arm64-apple-darwin "${SDK_V64}" arm64 7.0
 build_arch arm64e arm64e-apple-darwin "${SDK_VE}" arm64e 12.0
-# build_deb.sh rebuilds when this is missing, so archives for an older armv7 target are not reused
+# meow rebuilds when this is missing, so archives for an older armv7 target are not reused
 touch "${OUT}/.senko-ios-min-4.3"
 
 echo "mbedtls static archives ready: ${OUT}"

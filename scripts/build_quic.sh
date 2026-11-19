@@ -3,8 +3,7 @@
 # output: ${SENKO_QUIC}/<armv7|arm64>/{lib,include}
 set -euo pipefail
 
-THEOS="${THEOS:?set THEOS to theos root}"
-TC="${SENKO_TC:-${THEOS}/toolchain/linux/iphone/bin}"
+TC="${SENKO_TC:?set SENKO_TC to the toolchain bin directory}"
 NGTCP2="${SENKO_NGTCP2_SRC:?set SENKO_NGTCP2_SRC to the ngtcp2 source directory}"
 NGHTTP3="${SENKO_NGHTTP3_SRC:?set SENKO_NGHTTP3_SRC to the nghttp3 source directory}"
 OUT="${SENKO_QUIC:?set SENKO_QUIC to the quic output directory}"

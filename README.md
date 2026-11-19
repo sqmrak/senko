@@ -57,7 +57,7 @@ links: `incy://add/`, `incy://import/` and `incy://crypt1/` open into a subscrip
 - 0rtt: the ticket a server hands out is kept in memory (8 slots, never written to disk), scoped to host, port and profile. a server that dropped it ends that one connection and the next one starts a full handshake
 - aes-256-gcm is used on arm64, chacha20-poly1305 on armv7 (no aes instructions there). the server accepts either
 - not done: the pauses between padding fragments are read and checked but not applied, the fragments themselves are sent. the handshake gives up after 20 seconds, checked on the next read or write
-- checks: `make -C tests test` (blake3 vectors, profile table, record layer against an in-tree server, transport over a socketpair), `tests/interop/run_vlenc_interop.sh` (the c client against xray's own `ServerInstance`), `tests/interop/run_vless_e2e.sh` (curl through senkod and the pinned core to a real xray inbound)
+- checks: `meow test` (blake3 vectors, profile table, record layer against an in-tree server, transport over a socketpair)
 
 ## karing backups
 
@@ -108,13 +108,14 @@ remove: `dpkg -r com.senko.daemon`
 ## build
 
 ```bash
-make -C tests test
-./build_deb.sh
+meow build deb
 ```
 
-needs `THEOS SENKO_SDK_V7 SENKO_SDK_V64 SENKO_SDK_VE SENKO_CRT_V7 SENKO_OSSL_V7 SENKO_OSSL_V64 SENKO_MBED SENKO_GO SENKO_CORE_SRC SENKO_NGTCP2_SRC SENKO_NGHTTP3_SRC SENKO_QUIC`, outputs `senko-v<version>.deb`.
+`meow build` with no name does the same. [meow](https://github.com/sqmrak/meow) compiles each source once per slice in parallel, keeps a content cache in `build/.meow`, and runs the host tests, the Go core tests, the dependency builds (openssl, quic, mbedtls), the packet tunnel extension, the packaging and the deb checks as one graph. `meow plan deb` prints the commands and what is stale, `meow build senkod-fat` builds one binary.
 
-`make -C tests test-native` runs the Go TUN tests with the race detector. set `SENKO_GO` and `SENKO_CORE_SRC` to the pinned toolchain and core checkout. the package build runs these tests too.
+needs `SENKO_TC SENKO_SDK_V7 SENKO_SDK_V64 SENKO_SDK_VE SENKO_CRT_V7 SENKO_OSSL_V7 SENKO_OSSL_V64 SENKO_MBED SENKO_GO SENKO_CORE_SRC SENKO_NGTCP2_SRC SENKO_NGHTTP3_SRC SENKO_QUIC`, outputs `senko-v<version>.deb` next to the sources, or in `SENKO_DEB_DIR`. openssl, quic and mbedtls build only while their outputs are missing, delete a marker to rebuild one.
+
+`meow build test-native` runs the Go TUN tests with the race detector. set `SENKO_GO` and `SENKO_CORE_SRC` to the pinned toolchain and core checkout. the package build runs these tests too.
 
 `scripts/patches/senko-core-tun-udp.patch` fixes the core's unbalanced gvisor packet clone, UDP deadlines, datagram sizes, queue bounds and flow teardown. builds apply it through a Go overlay without changing the core checkout.
 

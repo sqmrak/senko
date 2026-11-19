@@ -2,12 +2,11 @@
 # static openssl 3.x for ios arm64 (senkod tls stack)
 set -euo pipefail
 
-THEOS="${THEOS:?set THEOS to theos root}"
 PREFIX="${SENKO_OSSL_PREFIX:-${SENKO_OSSL_V64:?set SENKO_OSSL_V64 to the arm64 openssl prefix}}"
 OSSL_ARCH="${SENKO_OSSL_ARCH:-arm64}"
 OSSL_TRIPLE="${SENKO_OSSL_TRIPLE:-arm64-apple-darwin}"
 BLD="${SENKO_OSSL_BLD:-${SENKO_OPENSSL_BLD64:-${PREFIX}/build-${OSSL_ARCH}}}"
-TC="${SENKO_TC:-${THEOS}/toolchain/linux/iphone/bin}"
+TC="${SENKO_TC:?set SENKO_TC to the toolchain bin directory}"
 ARM64_CLANG="${SENKO_ARM64_CLANG:-${BLD}/arm64-clang}"
 SDK="${SENKO_OSSL_SDK:-${SENKO_SDK_V64:?set SENKO_SDK_V64 to the arm64 sdk}}"
 
