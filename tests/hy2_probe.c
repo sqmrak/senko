@@ -1,6 +1,6 @@
 /* integration probe: drives daemon/hy2_engine.c against a real hysteria2
-   server and a local tcp echo target. not part of `make test`, which must not
-   depend on another program; tests/hy2_probe.sh starts the server and runs it.
+   server and a local tcp echo target. not part of `meow test`, which must not
+   depend on another program; the server has to be started by hand.
 
    env: HY2_PORT HY2_AUTH HY2_CA and optionally HY2_SNI HY2_PIN HY2_OBFS.
    argv[1]: transfer (default), abort or reject */

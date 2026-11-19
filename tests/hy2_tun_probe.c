@@ -3,7 +3,7 @@
    utun descriptor (the same harness as test_tun_tcp.c); the bridge opens each
    flow as a hysteria2 stream through daemon/hy2_engine.c, and the server
    connects to services in this process. the services listen on 203.0.113.7,
-   so tests/hy2_tun_probe.sh runs all of it in a private network namespace.
+   so it has to run in a private network namespace.
 
    env: HY2_PORT HY2_AUTH HY2_CA */
 

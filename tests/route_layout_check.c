@@ -10,7 +10,7 @@
    arm64, namely padding and alignment. that the layout matches xnu itself is
    still only proven by those routes working on a device.
 
-   build it with tests/check_route_layout.sh */
+   build it as a plain host c file */
 
 #include <sys/types.h> /* u_char and u_short, which net/if_dl.h is written in */
 #include <net/if_dl.h>
