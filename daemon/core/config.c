@@ -1014,6 +1014,19 @@ static int xray_stream(const cJSON *ob, vl_server_t *s, char *why, size_t cap) {
     } else if (s->net == VL_NET_XHTTP) {
         const cJSON *xh = jobj(st, "xhttpSettings");
         if (!xh) xh = jobj(st, "splithttpSettings");
+        const cJSON *extra = jobj(xh, "extra");
+        const char *session = jstr(extra, "sessionIDPlacement");
+        const char *seq = jstr(extra, "seqPlacement");
+        const char *method = jstr(extra, "uplinkHTTPMethod");
+        const char *uplink = jstr(extra, "uplinkDataPlacement");
+        if ((session && session[0] && strcmp(session, "path") != 0) ||
+            (seq && seq[0] && strcmp(seq, "path") != 0) ||
+            (method && method[0] && strcasecmp(method, "POST") != 0) ||
+            (uplink && uplink[0] && strcmp(uplink, "auto") != 0 && strcmp(uplink, "body") != 0) ||
+            json_flag_on(extra, "xPaddingObfsMode")) {
+            snprintf(why, cap, "xhttp custom packet settings");
+            return -1;
+        }
         (void)jstr_copy(xh, "path", s->path, sizeof s->path);
         (void)jstr_copy(xh, "mode", s->mode, sizeof s->mode);
         (void)jstr_copy(xh, "host", s->ws_host, sizeof s->ws_host);

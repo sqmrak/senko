@@ -371,8 +371,26 @@ static void test_vless_encryption_json(void) {
     ok("a long unknown value is a refused node, not a plain one", n == 0 && stats.skipped == 1);
 }
 
+static void test_xhttp_packet_settings(void) {
+    static const char body[] =
+        "{\"outbounds\":[{\"protocol\":\"vless\",\"settings\":{\"vnext\":[{"
+        "\"address\":\"example.com\",\"port\":443,\"users\":[{"
+        "\"id\":\"11111111-1111-4111-8111-111111111111\",\"encryption\":\"none\"}]}]},"
+        "\"streamSettings\":{\"network\":\"xhttp\",\"security\":\"tls\","
+        "\"xhttpSettings\":{\"path\":\"/\",\"mode\":\"packet-up\",\"extra\":{"
+        "\"sessionIDPlacement\":\"query\",\"seqPlacement\":\"query\","
+        "\"uplinkHTTPMethod\":\"GET\",\"uplinkDataPlacement\":\"header\"}}}}]}";
+    vl_server_t nodes[2];
+    size_t n = 0;
+    cfg_import_stats_t stats;
+    cfg_parse_subscription_ex(body, strlen(body), nodes, 2, &n, &stats);
+    ok("custom xhttp packet settings are reported",
+       stats.skipped == 1 && strstr(stats.kinds[0].what, "xhttp custom packet settings") != NULL);
+}
+
 int main(void) {
     test_vless_encryption_json();
+    test_xhttp_packet_settings();
     test_ip_fronted_panel();
     vl_server_t srv[16];
     size_t n = 0;
