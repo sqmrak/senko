@@ -164,23 +164,15 @@ static CGFloat SenkoSubscriptionEditorMaxWidth(CGRect bounds) {
     NSString *header = [[_headerField text] stringByTrimmingCharactersInSet:
                         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (![name length] || ![url length]) {
-        UIAlertView *alert = [[[UIAlertView alloc]
-            initWithTitle:SenkoLocalizedText(@"Error")
-                  message:SenkoLocalizedText(@"name and url required")
-                 delegate:nil cancelButtonTitle:SenkoLocalizedText(@"OK")
-            otherButtonTitles:nil] autorelease];
-        [alert show];
+        SenkoDialogAlert(SenkoLocalizedText(@"Error"), SenkoLocalizedText(@"name and url required"),
+                         SenkoDialogMoodError);
         return;
     }
     BOOL compatible = YES;
     header = SenkoHeaderWithHWID(header, _hwidSwitch.on, &compatible);
     if (!compatible) {
-        UIAlertView *alert = [[[UIAlertView alloc]
-            initWithTitle:SenkoLocalizedText(@"Error")
-                  message:SenkoLocalizedText(@"HWID requires a Cookie request header")
-                 delegate:nil cancelButtonTitle:SenkoLocalizedText(@"OK")
-            otherButtonTitles:nil] autorelease];
-        [alert show];
+        SenkoDialogAlert(SenkoLocalizedText(@"Error"), SenkoLocalizedText(@"HWID requires a Cookie request header"),
+                         SenkoDialogMoodError);
         return;
     }
     if (_delegate)
@@ -368,12 +360,8 @@ static CGFloat SenkoSubscriptionEditorMaxWidth(CGRect bounds) {
     NSString *header = SenkoHeaderWithHWID(_headerField.text, sender.on, &compatible);
     if (!compatible) {
         sender.on = NO;
-        UIAlertView *alert = [[[UIAlertView alloc]
-            initWithTitle:SenkoLocalizedText(@"Error")
-                  message:SenkoLocalizedText(@"HWID requires a Cookie request header")
-                 delegate:nil cancelButtonTitle:SenkoLocalizedText(@"OK")
-            otherButtonTitles:nil] autorelease];
-        [alert show];
+        SenkoDialogAlert(SenkoLocalizedText(@"Error"), SenkoLocalizedText(@"HWID requires a Cookie request header"),
+                         SenkoDialogMoodError);
         return;
     }
     _headerField.text = header;

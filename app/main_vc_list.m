@@ -828,27 +828,19 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
         [self subMenuTapped:button];
         return;
     }
-    [self dismissCurrentActionSheetAnimated:NO];
-    NSMutableArray *choices = [NSMutableArray arrayWithCapacity:[_subs count]];
-    UIActionSheet *sheet = [[UIActionSheet alloc]
-        initWithTitle:SenkoLocalizedText(@"Subscription") delegate:self
-        cancelButtonTitle:SenkoLocalizedText(@"Cancel") destructiveButtonTitle:nil
-        otherButtonTitles:nil];
+    SenkoDialog *dialog = [SenkoDialog dialogWithTitle:@"Subscription" message:nil];
     for (SenkoSub *sub in _subs) {
-        [choices addObject:[NSNumber numberWithInt:sub->index]];
-        [sheet addButtonWithTitle:[sub->name length] ? sub->name :
-                                  SenkoLocalizedText(@"Subscription")];
+        int index = sub->index;
+        [dialog addItemWithTitle:[sub->name length] ? sub->name : SenkoLocalizedText(@"Subscription")
+                         handler:^(SenkoDialog *d) {
+            (void)d;
+            UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+            button.tag = 2000 + index;
+            [self subMenuTapped:button];
+        }];
     }
-    [_menuSubChoices release];
-    _menuSubChoices = [choices copy];
-    sheet.tag = 44;
-    _actionSheet = sheet;
-    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad &&
-        [sheet respondsToSelector:@selector(showFromRect:inView:animated:)])
-        [sheet showFromRect:_picker->subscriptionButton.bounds
-                    inView:_picker->subscriptionButton animated:YES];
-    else
-        [sheet showInView:self.view];
+    [dialog addButtonWithTitle:@"Cancel" style:SenkoDialogButtonCancel handler:nil];
+    [self presentDialog:dialog];
 }
 
 - (void)serverPickerSort {
@@ -902,27 +894,31 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
 /* sorting belongs to the list it sorts, and reordering the manual group is the
    same kind of choice, so both live in one menu there */
 - (void)showSortMenu {
-    [self dismissCurrentActionSheetAnimated:NO];
+    [self dismissCurrentDialog];
     SenkoServerSort mode = (SenkoServerSort)
         [[NSUserDefaults standardUserDefaults] integerForKey:SENKO_SERVER_SORT_KEY];
-    UIActionSheet *as = [[UIActionSheet alloc] initWithTitle:SenkoLocalizedText(@"Sort servers")
-                                                    delegate:self
-                                           cancelButtonTitle:nil
-                                      destructiveButtonTitle:nil
-                                           otherButtonTitles:nil];
     NSString *titles[3] = { SenkoLocalizedText(@"Stored order"),
                             SenkoLocalizedText(@"By name"),
                             SenkoLocalizedText(@"By latency") };
-    for (int i = 0; i < 3; ++i)
-        [as addButtonWithTitle:(int)mode == i
-            ? [NSString stringWithFormat:@"\u2713 %@", titles[i]] : titles[i]];
+    SenkoDialog *dialog = [SenkoDialog dialogWithTitle:@"Sort servers" message:nil];
+    for (int i = 0; i < 3; ++i) {
+        NSInteger index = i;
+        [dialog addItemWithTitle:(int)mode == i
+            ? [NSString stringWithFormat:@"\u2713 %@", titles[i]] : titles[i]
+                         handler:^(SenkoDialog *d) {
+            (void)d;
+            [self sortMenuPicked:index];
+        }];
+    }
     if (mode == SenkoSortManual && [self hasManualServers] && ![self isListMutationLocked])
-        [as addButtonWithTitle:_table.editing ? SenkoLocalizedText(@"Done reordering")
-                                              : SenkoLocalizedText(@"Reorder manual servers")];
-    as.cancelButtonIndex = [as addButtonWithTitle:SenkoLocalizedText(@"Cancel")];
-    as.tag = 43;
-    _actionSheet = as;
-    [as showInView:self.view];
+        [dialog addItemWithTitle:_table.editing ? SenkoLocalizedText(@"Done reordering")
+                                                : SenkoLocalizedText(@"Reorder manual servers")
+                         handler:^(SenkoDialog *d) {
+            (void)d;
+            [self sortMenuPicked:3];
+        }];
+    [dialog addButtonWithTitle:@"Cancel" style:SenkoDialogButtonCancel handler:nil];
+    [self presentDialog:dialog];
 }
 
 - (void)sortMenuPicked:(NSInteger)index {
@@ -1398,35 +1394,7 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
     if (_lastAlertErr && [_lastAlertErr isEqualToString:shown]) return;
     [_lastAlertErr release];
     _lastAlertErr = [shown copy];
-    /* ios 9+ draws UIAlertView through a compatibility shim, and the error
-       alert can arrive just after an import dismisses its own prompt */
-    Class controllerCls = NSClassFromString(@"UIAlertController");
-    Class actionCls = NSClassFromString(@"UIAlertAction");
-    SEL makeAlert = @selector(alertControllerWithTitle:message:preferredStyle:);
-    SEL makeAction = @selector(actionWithTitle:style:handler:);
-    if (controllerCls && actionCls &&
-        [controllerCls respondsToSelector:makeAlert] &&
-        [actionCls respondsToSelector:makeAction]) {
-        id alert = ((id (*)(id, SEL, id, id, NSInteger))objc_msgSend)(
-            controllerCls, makeAlert, SenkoLocalizedText(@"Connection failed"),
-            shown, 1 /* UIAlertControllerStyleAlert */);
-        id ok = ((id (*)(id, SEL, id, NSInteger, id))objc_msgSend)(
-            actionCls, makeAction, SenkoLocalizedText(@"OK"),
-            0 /* UIAlertActionStyleDefault */, nil);
-        if (alert && ok) {
-            ((void (*)(id, SEL, id))objc_msgSend)(alert, @selector(addAction:), ok);
-            UIViewController *presenter = self;
-            while (presenter.presentedViewController)
-                presenter = presenter.presentedViewController;
-            [presenter presentViewController:alert animated:YES completion:nil];
-            return;
-        }
-    }
-    UIAlertView *alert = [[[UIAlertView alloc]
-        initWithTitle:SenkoLocalizedText(@"Connection failed")
-              message:shown delegate:nil cancelButtonTitle:SenkoLocalizedText(@"OK")
-        otherButtonTitles:nil] autorelease];
-    [alert show];
+    SenkoDialogAlert(@"Connection failed", shown, SenkoDialogMoodError);
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv {
@@ -1468,17 +1436,10 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
         if (header && header->title) {
             header->title.text = [NSString stringWithFormat:@"%@ %@",
                                   collapse ? @"\u25B8" : @"\u25BE", title];
-            header->title.alpha = 0.32f;
-            header->title.transform = CGAffineTransformMakeTranslation(0.0f,
-                collapse ? -3.0f : 3.0f);
-            [UIView animateWithDuration:0.18
-                                  delay:0.0
-                                options:UIViewAnimationOptionBeginFromCurrentState |
-                                        UIViewAnimationOptionCurveEaseOut
-                             animations:^{
-                header->title.alpha = 1.0f;
-                header->title.transform = CGAffineTransformIdentity;
-            } completion:NULL];
+            header->title.alpha = 1.0f;
+            header->title.transform = CGAffineTransformIdentity;
+            SenkoMotionEnter(header->title, CGAffineTransformMakeTranslation(0.0f,
+                collapse ? -3.0f : 3.0f), 0.32f, SENKO_MOTION_SPRING, 0.0);
         }
         if (![paths count]) {
             button.enabled = YES;
@@ -2098,7 +2059,7 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
             EditServerVC *editor = [[[EditServerVC alloc] initWithLink:link
                                                                   index:index
                                                                delegate:self] autorelease];
-            UINavigationController *nav = [[[UINavigationController alloc]
+            UINavigationController *nav = [[[SenkoNavigationController alloc]
                                             initWithRootViewController:editor] autorelease];
             StyleNavBarClassic(nav);
             nav.modalPresentationStyle = UIModalPresentationFullScreen;
@@ -2248,26 +2209,27 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
     int subIdx = (int)btn.tag - 2000;
     if (subIdx < 0 || _subscriptionMutationBusy ||
         ![self subscriptionByIndex:subIdx]) return;
-    [self dismissCurrentActionSheetAnimated:NO];
+    [self dismissCurrentDialog];
     _menuSubIdx = subIdx;
     SenkoSub *entry = [self subscriptionByIndex:subIdx];
-    UIActionSheet *as = [[UIActionSheet alloc]
-                         initWithTitle:[entry->name length] ? entry->name : SenkoLocalizedText(@"Subscription")
-                         delegate:self
-                         cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-                         destructiveButtonTitle:SenkoLocalizedText(@"Remove")
-                         otherButtonTitles:SenkoLocalizedText(@"Refresh now"),
-                                           SenkoLocalizedText(@"Check ping"),
-                                           SenkoLocalizedText(@"Subscription details"),
-                                           SenkoLocalizedText(@"Edit details"), nil];
-    as.tag = 400000 + subIdx;
-    _actionSheet = as;
-    UIView *anchor = btn.superview ? btn : _picker->subscriptionButton;
-    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad &&
-        [as respondsToSelector:@selector(showFromRect:inView:animated:)])
-        [as showFromRect:anchor.bounds inView:anchor animated:YES];
-    else
-        [as showInView:self.view];
+    SenkoDialog *dialog = [SenkoDialog dialogWithTitle:[entry->name length] ? entry->name : @"Subscription"
+                                               message:nil];
+    NSArray *rows = [NSArray arrayWithObjects:@"Refresh now", @"Check ping",
+                     @"Subscription details", @"Edit details", nil];
+    for (int i = 0; i < 4; ++i) {
+        int action = i;
+        [dialog addItemWithTitle:[rows objectAtIndex:i] handler:^(SenkoDialog *d) {
+            (void)d;
+            [self runSubscriptionAction:action sub:subIdx];
+        }];
+    }
+    [dialog addButtonWithTitle:@"Cancel" style:SenkoDialogButtonCancel handler:nil];
+    [dialog addButtonWithTitle:@"Remove" style:SenkoDialogButtonDestructive
+                       handler:^(SenkoDialog *d) {
+        (void)d;
+        [self runSubscriptionAction:4 sub:subIdx];
+    }];
+    [self presentDialog:dialog];
 }
 
 - (void)awgRefreshTapped:(UIButton *)btn {
@@ -2354,7 +2316,7 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
     if (![_busyOverlay superview]) [self.view addSubview:_busyOverlay];
     [self.view bringSubviewToFront:_busyOverlay];
     [spinner startAnimating];
-    SenkoAnimate(0.18, ^{ _busyOverlay.alpha = 1.0f; }, NULL);
+    SenkoMotionAnimate(_busyOverlay, CGAffineTransformIdentity, 1.0f, SENKO_MOTION_ENTER, 0.0, nil);
 }
 
 /* the overlay first shows from viewWillAppear, where an ipad on ios 5 and 6
@@ -2378,7 +2340,7 @@ static BOOL SenkoServerMatchesQuery(SenkoServer *sv, NSString *shown, NSString *
 - (void)hideBusyOverlay {
     if (!_busyOverlay || _busyOverlay.alpha == 0.0f) return;
     UIView *overlay = _busyOverlay;
-    SenkoAnimate(0.18, ^{ overlay.alpha = 0.0f; }, ^(BOOL done) {
+    SenkoMotionAnimate(overlay, CGAffineTransformIdentity, 0.0f, SENKO_MOTION_EXIT, 0.0, ^(BOOL done) {
         if (done) [(UIActivityIndicatorView *)[overlay viewWithTag:88601] stopAnimating];
     });
 }

@@ -55,7 +55,6 @@ static BOOL SenkoThemeHasAccentChoice(void) {
 }
 
 @interface ThemeGroupVC : UIViewController <UITableViewDataSource, UITableViewDelegate,
-                                             UIActionSheetDelegate,
                                              FileImportDelegate> {
     UITableView *_tv;
     NSString *_groupId;
@@ -152,17 +151,12 @@ static BOOL SenkoThemeHasAccentChoice(void) {
 - (void)viewWillAppear:(BOOL)animated {
     SenkoCrashScreen("themes");
     [super viewWillAppear:animated];
+    SenkoMotionStaggerRows(_tv);
     if (_isCustomGroup) [self reloadIds];
 }
 
 - (void)showMessage:(NSString *)title body:(NSString *)body {
-    UIAlertView *a = [[UIAlertView alloc] initWithTitle:title
-                                                message:body
-                                               delegate:nil
-                                      cancelButtonTitle:SenkoLocalizedText(@"OK")
-                                      otherButtonTitles:nil];
-    [a show];
-    [a release];
+    SenkoDialogAlert(title, body, SenkoDialogMoodAuto);
 }
 
 - (void)editThemeId:(NSString *)tid {
@@ -193,21 +187,12 @@ static BOOL SenkoThemeHasAccentChoice(void) {
 
 - (void)addTapped {
     SenkoThemeSfxPlay();
-    UIActionSheet *sheet = [[UIActionSheet alloc]
-             initWithTitle:SenkoLocalizedText(@"New theme")
-                  delegate:self
-         cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-    destructiveButtonTitle:nil
-         otherButtonTitles:SenkoLocalizedText(@"Copy current theme"),
-                           SenkoLocalizedText(@"Import from Documents"), nil];
-    [sheet showInView:self.view];
-    [sheet release];
-}
-
-- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)idx {
-    if (idx == sheet.cancelButtonIndex) return;
-    if (idx == 0) [self createFromCurrent];
-    else if (idx == 1) [self importTheme];
+    NSArray *labels = [NSArray arrayWithObjects:SenkoLocalizedText(@"Copy current theme"),
+                       SenkoLocalizedText(@"Import from Documents"), nil];
+    SenkoDialogMenu(SenkoLocalizedText(@"New theme"), nil, labels, ^(NSInteger idx) {
+        if (idx == 0) [self createFromCurrent];
+        else if (idx == 1) [self importTheme];
+    });
 }
 
 - (void)fileImportVCDidCancel:(FileImportVC *)vc {

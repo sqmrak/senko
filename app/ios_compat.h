@@ -15,16 +15,20 @@ static inline void SenkoScrollViewUseManualInsets(UIScrollView *scroll) {
 /* ios 4.3 has only the modal calls that ios 5 replaced with completion blocks */
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+/* the app draws the modal slide itself, see senko_animation.m */
+extern void SenkoMotionPresent(UIViewController *host, UIViewController *vc);
+extern void SenkoMotionDismiss(UIViewController *vc, void (^completion)(void));
+
 static inline void SenkoPresentModal(UIViewController *host, UIViewController *vc) {
     if ([host respondsToSelector:@selector(presentViewController:animated:completion:)])
-        [host presentViewController:vc animated:YES completion:nil];
+        SenkoMotionPresent(host, vc);
     else
         [host presentModalViewController:vc animated:YES];
 }
 
 static inline void SenkoDismissModal(UIViewController *vc, void (^completion)(void)) {
     if ([vc respondsToSelector:@selector(dismissViewControllerAnimated:completion:)]) {
-        [vc dismissViewControllerAnimated:YES completion:completion];
+        SenkoMotionDismiss(vc, completion);
         return;
     }
     /* ios 4.3 has no completion block, and a follow up presenting over a modal

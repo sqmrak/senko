@@ -7,8 +7,7 @@
 
 /* the routing rule list. the daemon owns the rules, so this screen never keeps
    a copy of its own: every change is sent and the list is read back */
-@interface RulesVC : UIViewController <UITableViewDataSource, UITableViewDelegate,
-                                       UIActionSheetDelegate, UIAlertViewDelegate> {
+@interface RulesVC : UIViewController <UITableViewDataSource, UITableViewDelegate> {
     UITableView  *_tv;
     SenkoControl *_ctl;
     NSArray      *_rules;

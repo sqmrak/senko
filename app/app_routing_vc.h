@@ -10,7 +10,7 @@
    goes. an app rule is an ordinary rule of the daemon with the bundle identifier
    as its value, so this screen keeps no list of its own */
 @interface AppRoutingVC : UIViewController <UITableViewDataSource, UITableViewDelegate,
-                                            UISearchBarDelegate, UIActionSheetDelegate> {
+                                            UISearchBarDelegate> {
     UITableView       *_tv;
     UISearchBar       *_search;
     SenkoControl      *_ctl;

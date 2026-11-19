@@ -185,7 +185,7 @@
     }
     PremiumCountryVC *picker = [[[PremiumCountryVC alloc]
         initWithCountries:countries current:[self premiumCountryCode] delegate:self] autorelease];
-    UINavigationController *nav = [[[UINavigationController alloc]
+    UINavigationController *nav = [[[SenkoNavigationController alloc]
                                     initWithRootViewController:picker] autorelease];
     StyleNavBarClassic(nav);
     nav.modalPresentationStyle = UIModalPresentationFullScreen;

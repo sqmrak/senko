@@ -24,13 +24,11 @@
 #import "server_sheet.h"
 #import "update_install.h"
 #import "meow.h"
-#import "text_prompt.h"
 #import "empty_state.h"
 #import "app_common.h"
 #import "premium_country_vc.h"
 
 @interface MainVC () <UITableViewDataSource, UITableViewDelegate,
-                      UIActionSheetDelegate, UIAlertViewDelegate,
                       QRScanDelegate, EditSubscriptionDelegate,
                       FileImportDelegate, EditAWGDelegate, PremiumCountryDelegate,
                       EditServerDelegate, SenkoServerSheetDelegate,
@@ -121,10 +119,7 @@
     NSUInteger     _pingPending;
     NSUInteger     _pingCompleted;
     int            _pingSubIndex;
-    UIActionSheet *_actionSheet;
-    NSArray       *_menuSubChoices;
-    NSString      *_pendingUpdatePath;
-    NSString      *_pendingInsecureURL;
+    SenkoDialog   *_dialog;
     int            _dragSection;
     int            _sectionDragOrigin;
     BOOL           _sectionDragSending;
@@ -176,13 +171,14 @@
 - (NSString *)backgroundStatusKey;
 - (void)applyBackgroundForCurrentState:(BOOL)animated;
 - (void)addPressed;
-- (void)dismissCurrentActionSheetAnimated:(BOOL)animated;
-- (void)actionSheet:(UIActionSheet *)sheet didDismissWithButtonIndex:(NSInteger)idx;
+- (void)dismissCurrentDialog;
+- (void)presentDialog:(SenkoDialog *)dialog;
+- (void)runSubscriptionAction:(int)action sub:(int)sub;
+- (void)removeSubscriptionIndex:(int)sub;
 - (SenkoSub *)subscriptionByIndex:(int)subIdx;
 - (void)editSubscriptionIndex:(int)subIdx;
 - (void)pinSubscriptionIndex:(int)subIdx;
 - (void)editSubscriptionVC:(EditSubscriptionVC *)vc saveSubWithIndex:(int)idx name:(NSString *)name url:(NSString *)url header:(NSString *)header;
-- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)idx;
 - (BOOL)isNativeAWGText:(NSString *)s;
 - (BOOL)looksLikeAmneziaBundle:(NSData *)body;
 - (BOOL)importAmneziaBundleData:(NSData *)body;
@@ -194,10 +190,6 @@
 - (void)addSubscriptionURL:(NSString *)url name:(NSString *)name;
 - (int)trailingIntOf:(NSString *)reply;
 - (NSString *)nameFromURL:(NSString *)url;
-- (BOOL)promptTextWithTitle:(NSString *)title
-                    message:(NSString *)message
-                   keyboard:(UIKeyboardType)keyboard
-                    handler:(void (^)(NSString *text))handler;
 - (void)promptSubscription;
 - (void)pasteFromClipboard;
 - (void)confirmInsecureSubscriptionURL:(NSString *)url;
@@ -205,7 +197,6 @@
 - (void)fileImportVCDidCancel:(FileImportVC *)vc;
 - (void)fileImportVC:(FileImportVC *)vc didPickPath:(NSString *)path;
 - (void)presentUpdateForPath:(NSString *)path;
-- (void)alertView:(UIAlertView *)av clickedButtonAtIndex:(NSInteger)idx;
 - (void)openScanner;
 - (void)qrScanner:(QRScanVC *)s didDecode:(NSString *)text;
 - (void)qrScannerDidCancel:(QRScanVC *)s;

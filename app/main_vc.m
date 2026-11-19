@@ -24,9 +24,7 @@ static void SenkoDisableInjectedStatusBadge(void) {
     [_frutigerBg release];
     [_frutigerBgName release];
     [_ios26Bg release];
-    _actionSheet.delegate = nil;
-    [_actionSheet release];
-    [_menuSubChoices release];
+    [_dialog release];
     [_ctl release];
     [_nativeVPN release];
     [_servers release];
@@ -49,8 +47,6 @@ static void SenkoDisableInjectedStatusBadge(void) {
     [_chipKeys release];
     [_busyOverlay removeFromSuperview];
     [_busyOverlay release];
-    [_pendingUpdatePath release];
-    [_pendingInsecureURL release];
     [_sectionDragSnapshot removeFromSuperview];
     [_sectionDragSnapshot release];
     /* a drag that never ended still owns the header it was dragging */
@@ -400,8 +396,8 @@ static void SenkoDisableInjectedStatusBadge(void) {
 }
 
 - (void)presentInNavigation:(UIViewController *)root {
-    [self dismissCurrentActionSheetAnimated:YES];
-    UINavigationController *nav = [[[UINavigationController alloc]
+    [self dismissCurrentDialog];
+    UINavigationController *nav = [[[SenkoNavigationController alloc]
                                     initWithRootViewController:root] autorelease];
     if ([nav respondsToSelector:@selector(setEdgesForExtendedLayout:)])
         ((void (*)(id, SEL, NSUInteger))objc_msgSend)(nav, @selector(setEdgesForExtendedLayout:), 0);
@@ -420,7 +416,7 @@ static void SenkoDisableInjectedStatusBadge(void) {
 
 - (void)showServerPicker {
     if (_pickerShown) return;
-    [self dismissCurrentActionSheetAnimated:YES];
+    [self dismissCurrentDialog];
     _pickerShown = YES;
     SenkoCrashScreen("server list");
     [self rebuildSections];
@@ -435,11 +431,9 @@ static void SenkoDisableInjectedStatusBadge(void) {
     _picker.alpha = 0.0f;
     _picker.transform = CGAffineTransformMakeTranslation(0.0f, lift);
     [_home->power setRunning:NO];
-    SenkoAnimate(0.26, ^{
-        _picker.alpha = 1.0f;
-        _picker.transform = CGAffineTransformIdentity;
-        _home.alpha = 0.0f;
-    }, NULL);
+    SenkoMotionAnimate(_picker, CGAffineTransformIdentity, 1.0f, SENKO_MOTION_POPUP_ENTER, 0.0, nil);
+    SenkoMotionAnimate(_home, _home.transform, 0.0f, SENKO_MOTION_ENTER, 0.0, nil);
+    SenkoMotionRiseRows(_table);
 }
 
 - (void)hideServerPicker {
@@ -457,11 +451,9 @@ static void SenkoDisableInjectedStatusBadge(void) {
     }
     [_home->power setRunning:YES];
     CGFloat lift = floorf(self.view.bounds.size.height * 0.08f);
-    SenkoAnimate(0.22, ^{
-        _picker.alpha = 0.0f;
-        _picker.transform = CGAffineTransformMakeTranslation(0.0f, lift);
-        _home.alpha = 1.0f;
-    }, ^(BOOL finished) {
+    SenkoMotionAnimate(_home, _home.transform, 1.0f, SENKO_MOTION_ENTER, 0.0, nil);
+    SenkoMotionAnimate(_picker, CGAffineTransformMakeTranslation(0.0f, lift), 0.0f,
+                       SENKO_MOTION_POPUP_EXIT, 0.0, ^(BOOL finished) {
         (void)finished;
 /* a reopen during the fade owns the picker now */
         if (_pickerShown) return;

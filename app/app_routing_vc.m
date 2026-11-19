@@ -9,7 +9,6 @@
 
 #include <objc/message.h>
 
-#define APP_SHEET_ACTION 4401
 #define ICON_SIDE 40.0f
 
 /* the daemon's own words, as the rules screen sends them */
@@ -115,6 +114,7 @@ static NSString *const kAppActions[] = { @"proxy", @"direct", @"block" };
 - (void)viewWillAppear:(BOOL)animated {
     SenkoCrashScreen("apps");
     [super viewWillAppear:animated];
+    SenkoMotionStaggerRows(_tv);
     if (self.navigationController) StyleNavBarClassic(self.navigationController);
     [self reloadRules];
 }
@@ -167,13 +167,8 @@ static NSString *const kAppActions[] = { @"proxy", @"direct", @"block" };
 }
 
 - (void)showMessage:(NSString *)body {
-    UIAlertView *a = [[UIAlertView alloc] initWithTitle:SenkoLocalizedText(@"Apps")
-                                                message:SenkoHumanReadableError(body)
-                                               delegate:nil
-                                      cancelButtonTitle:@"OK"
-                                      otherButtonTitles:nil];
-    [a show];
-    [a release];
+    SenkoDialogAlert(SenkoLocalizedText(@"Apps"), SenkoHumanReadableError(body),
+                     SenkoDialogMoodError);
 }
 
 - (SenkoInstalledApp *)appAtIndexPath:(NSIndexPath *)ip {
@@ -292,38 +287,48 @@ static NSString *const kAppActions[] = { @"proxy", @"direct", @"block" };
     [_picked release];
     _picked = [app retain];
     SenkoRule *rule = [_rules objectForKey:app->bundleID];
-    UIActionSheet *sheet = [[UIActionSheet alloc]
-             initWithTitle:app->name
-                  delegate:self
-         cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-    destructiveButtonTitle:rule ? SenkoLocalizedText(@"Default") : nil
-         otherButtonTitles:SenkoActionTitle(kAppActions[0]),
-                           SenkoActionTitle(kAppActions[1]),
-                           SenkoActionTitle(kAppActions[2]), nil];
-    sheet.tag = APP_SHEET_ACTION;
-    [sheet showInView:self.view];
-    [sheet release];
+    SenkoDialog *dialog = [SenkoDialog dialogWithTitle:app->name message:nil];
+    for (int i = 0; i < 3; ++i) {
+        NSString *action = kAppActions[i];
+        [dialog addItemWithTitle:SenkoActionTitle(action) handler:^(SenkoDialog *d) {
+            (void)d;
+            [self applyAction:action];
+        }];
+    }
+    [dialog addButtonWithTitle:SenkoLocalizedText(@"Cancel")
+                         style:SenkoDialogButtonCancel handler:nil];
+    /* a rule can only be cleared when there is one */
+    if (rule) {
+        [dialog addButtonWithTitle:SenkoLocalizedText(@"Default")
+                             style:SenkoDialogButtonDestructive
+                           handler:^(SenkoDialog *d) {
+            (void)d;
+            [self clearRule];
+        }];
+    }
+    [dialog show];
 }
 
-/* the destructive button, when there is one, is index 0 and clears the rule; the
-   three actions follow it. without a rule they start at 0 */
-- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
-    if (sheet.tag != APP_SHEET_ACTION || !_picked || index == sheet.cancelButtonIndex) return;
-    SenkoRule *rule = [_rules objectForKey:_picked->bundleID];
-    NSInteger first = rule ? 1 : 0;
-    void (^done)(NSString *) = ^(NSString *reply) {
-        if (![reply hasPrefix:@"OK "])
-            [self showMessage:reply ? reply : SenkoLocalizedText(@"Daemon is unreachable")];
-        [self reloadRules];
-    };
-    if (rule && index == 0) {
-        /* removing a rule renumbers the ones after it, so the list is read back */
-        [_ctl deleteRuleIndex:rule->index reply:done];
-        return;
-    }
-    NSInteger pick = index - first;
-    if (pick < 0 || pick > 2) return;
-    [_ctl addRuleAction:kAppActions[pick] type:@"app" value:_picked->bundleID reply:done];
+- (void)reportRuleReply:(NSString *)reply {
+    if (![reply hasPrefix:@"OK "])
+        [self showMessage:reply ? reply : SenkoLocalizedText(@"Daemon is unreachable")];
+    [self reloadRules];
+}
+
+- (void)clearRule {
+    SenkoRule *rule = _picked ? [_rules objectForKey:_picked->bundleID] : nil;
+    if (!rule) return;
+    /* removing a rule renumbers the ones after it, so the list is read back */
+    [_ctl deleteRuleIndex:rule->index reply:^(NSString *reply) {
+        [self reportRuleReply:reply];
+    }];
+}
+
+- (void)applyAction:(NSString *)action {
+    if (!_picked) return;
+    [_ctl addRuleAction:action type:@"app" value:_picked->bundleID reply:^(NSString *reply) {
+        [self reportRuleReply:reply];
+    }];
 }
 
 #pragma mark search

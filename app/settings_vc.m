@@ -11,7 +11,6 @@
 #import "update_install.h"
 #import "app_common.h"
 #import "crash_report.h"
-#import "text_prompt.h"
 
 /* a backup is the config file itself, so there is no magic to check for and no
    format version to compare: the file is ours when one of its first lines is a
@@ -255,6 +254,7 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
 - (void)viewWillAppear:(BOOL)animated {
     SenkoCrashScreen("settings");
     [super viewWillAppear:animated];
+    SenkoMotionStaggerRows(_tv);
     if (self.navigationController)
         StyleNavBarClassic(self.navigationController);
     SenkoApplyScreenChrome(self.view);
@@ -619,19 +619,20 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
 }
 
 - (void)showAttemptMenu {
-    UIAlertView *pick = [[[UIAlertView alloc]
-        initWithTitle:SenkoLocalizedText(@"Reconnect attempts")
-              message:SenkoAttemptLimitName([_settings objectForKey:@"reconnect_max_attempts"])
-             delegate:self
-    cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-    otherButtonTitles:SenkoLocalizedText(@"Until it works"), @"3", @"5", @"10", nil] autorelease];
-    pick.tag = 4205;
-    [pick show];
+    NSArray *labels = [NSArray arrayWithObjects:SenkoLocalizedText(@"Until it works"),
+                       @"3", @"5", @"10", nil];
+    SenkoDialogMenu(SenkoLocalizedText(@"Reconnect attempts"),
+                    SenkoAttemptLimitName([_settings objectForKey:@"reconnect_max_attempts"]),
+                    labels, ^(NSInteger pick) {
+        static const char *const limits[] = { "0", "3", "5", "10" };
+        if (pick < 0 || pick >= (NSInteger)(sizeof limits / sizeof limits[0])) return;
+        [self applySetting:@"reconnect_max_attempts"
+                     value:[NSString stringWithUTF8String:limits[pick]]];
+    });
 }
 
-/* a plain text alert is the only input control that behaves the same from ios 5
-   to ios 15, and the daemon validates what comes out of it. ios 4.3 has no text
-   alert and gets a small screen */
+/* the daemon validates what comes out of the field, so the card only collects
+   the text */
 - (void)showEditorForRow:(SenkoSettingsRow)row {
     NSString *key = SenkoTextSettingKey(row);
     NSString *title =
@@ -641,30 +642,11 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
         : SenkoLocalizedText(@"A port number between 1 and 65535");
     [_editingKey release];
     _editingKey = [key copy];
-    if (![UIAlertView instancesRespondToSelector:@selector(setAlertViewStyle:)]) {
-        [SenkoTextPromptVC presentFrom:self
-                                 title:title
-                               message:message
-                                  text:[_settings objectForKey:key]
-                              keyboard:UIKeyboardTypeNumbersAndPunctuation
-                               confirm:SenkoLocalizedText(@"Save")
-                               handler:^(NSString *text) { [self applyEditedText:text]; }];
-        return;
-    }
-    UIAlertView *editor = [[[UIAlertView alloc]
-        initWithTitle:title
-              message:message
-             delegate:self
-    cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-    otherButtonTitles:SenkoLocalizedText(@"Save"), nil] autorelease];
-    editor.tag = 4206;
-    editor.alertViewStyle = UIAlertViewStylePlainTextInput;
-    UITextField *field = [editor textFieldAtIndex:0];
-    field.autocapitalizationType = UITextAutocapitalizationTypeNone;
-    field.autocorrectionType = UITextAutocorrectionTypeNo;
-    field.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
-    field.text = [_settings objectForKey:key];
-    [editor show];
+    SenkoDialogPrompt(title, message, [_settings objectForKey:key],
+                      UIKeyboardTypeNumbersAndPunctuation,
+                      SenkoLocalizedText(@"Save"), ^(NSString *text) {
+        [self applyEditedText:text];
+    });
 }
 
 - (void)applyEditedText:(NSString *)text {
@@ -674,41 +656,40 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
     if ([value length]) [self applySetting:_editingKey value:value];
 }
 
-/* the alert picker is the one control that exists unchanged from ios 5 to 15 */
 - (void)showRefreshMenu {
-    UIAlertView *pick = [[[UIAlertView alloc]
-        initWithTitle:SenkoLocalizedText(@"Update subscriptions")
-              message:SenkoRefreshIntervalName([_settings objectForKey:@"sub_refresh_hours"])
-             delegate:self
-    cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-    otherButtonTitles:SenkoLocalizedText(@"Off"), SenkoHoursText(6), SenkoHoursText(12),
-                      SenkoHoursText(24), nil] autorelease];
-    pick.tag = 4204;
-    [pick show];
+    NSArray *labels = [NSArray arrayWithObjects:SenkoLocalizedText(@"Off"), SenkoHoursText(6),
+                       SenkoHoursText(12), SenkoHoursText(24), nil];
+    SenkoDialogMenu(SenkoLocalizedText(@"Update subscriptions"),
+                    SenkoRefreshIntervalName([_settings objectForKey:@"sub_refresh_hours"]),
+                    labels, ^(NSInteger pick) {
+        static const char *const hours[] = { "0", "6", "12", "24" };
+        if (pick < 0 || pick >= (NSInteger)(sizeof hours / sizeof hours[0])) return;
+        [self applySetting:@"sub_refresh_hours"
+                     value:[NSString stringWithUTF8String:hours[pick]]];
+    });
 }
 
 - (void)showBackupMenu {
-    UIAlertView *pick = [[[UIAlertView alloc]
-        initWithTitle:SenkoLocalizedText(@"Backup")
-              message:SenkoLocalizedText(@"Karing export includes servers and subscriptions.")
-             delegate:self
-    cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-    otherButtonTitles:SenkoLocalizedText(@"Export backup"),
-                      SenkoLocalizedText(@"Restore backup"),
-                      SenkoLocalizedText(@"Export Karing backup"), nil] autorelease];
-    pick.tag = 4207;
-    [pick show];
+    NSArray *labels = [NSArray arrayWithObjects:SenkoLocalizedText(@"Export backup"),
+                       SenkoLocalizedText(@"Restore backup"),
+                       SenkoLocalizedText(@"Export Karing backup"), nil];
+    SenkoDialogMenu(SenkoLocalizedText(@"Backup"),
+                    SenkoLocalizedText(@"Karing export includes servers and subscriptions."),
+                    labels, ^(NSInteger pick) {
+        if (pick == 0) [self exportBackup];
+        else if (pick == 1) [self openBackupBrowser];
+        else [self exportKaringBackup];
+    });
 }
 
 - (void)showLanguageMenu {
-    UIAlertView *language = [[[UIAlertView alloc]
-        initWithTitle:SenkoLocalizedText(@"Language")
-              message:SenkoLanguageName()
-             delegate:self
-    cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-    otherButtonTitles:@"English", @"Русский", @"中文", nil] autorelease];
-    language.tag = 4202;
-    [language show];
+    NSArray *labels = [NSArray arrayWithObjects:@"English", @"Русский", @"中文", nil];
+    SenkoDialogMenu(SenkoLocalizedText(@"Language"), SenkoLanguageName(), labels,
+                    ^(NSInteger pick) {
+        if (pick == 0) SenkoSetLanguage(SenkoLanguageEnglish);
+        else if (pick == 1) SenkoSetLanguage(SenkoLanguageRussian);
+        else if (pick == 2) SenkoSetLanguage(SenkoLanguageChinese);
+    });
 }
 
 - (void)exportBackup {
@@ -742,12 +723,8 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
 }
 
 - (void)showBackupMessage:(NSString *)message {
-    UIAlertView *av = [[[UIAlertView alloc] initWithTitle:SenkoLocalizedText(@"Configuration backup")
-                                                   message:SenkoHumanReadableError(message)
-                                                  delegate:nil
-                                         cancelButtonTitle:@"OK"
-                                         otherButtonTitles:nil] autorelease];
-    [av show];
+    SenkoDialogAlert(SenkoLocalizedText(@"Configuration backup"),
+                     SenkoHumanReadableError(message), SenkoDialogMoodAuto);
 }
 
 - (void)fileImportVCDidCancel:(FileImportVC *)vc {
@@ -792,65 +769,21 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
         }
         [_pendingBackupPath release];
         _pendingBackupPath = [path copy];
-        UIAlertView *confirm = [[[UIAlertView alloc]
-            initWithTitle:SenkoLocalizedText(@"Replace configuration?")
-                  message:SenkoLocalizedText(@"The imported backup will replace all current servers and subscriptions.")
-                 delegate:self cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-        otherButtonTitles:SenkoLocalizedText(@"Replace"), nil] autorelease];
-        confirm.tag = 4201;
-        [confirm show];
+        SenkoDialogConfirm(SenkoLocalizedText(@"Replace configuration?"),
+                           SenkoLocalizedText(@"The imported backup will replace all current servers and subscriptions."),
+                           SenkoLocalizedText(@"Replace"), YES, ^{
+            [self restoreStagedBackup];
+        });
         return;
     }
     if ([[path pathExtension] caseInsensitiveCompare:@"deb"] != NSOrderedSame) {
-        UIAlertView *av = [[[UIAlertView alloc] initWithTitle:@"Update Senko"
-                                                       message:@"choose a .deb package"
-                                                      delegate:nil
-                                             cancelButtonTitle:@"OK"
-                                             otherButtonTitles:nil] autorelease];
-        [av show];
+        SenkoDialogAlert(@"Update Senko", @"choose a .deb package", SenkoDialogMoodAuto);
         return;
     }
     [self presentUpdateInstallForPath:path];
 }
 
-- (void)alertView:(UIAlertView *)alert clickedButtonAtIndex:(NSInteger)buttonIndex {
-    if (alert.tag == 4202) {
-        if (buttonIndex == 1) SenkoSetLanguage(SenkoLanguageEnglish);
-        else if (buttonIndex == 2) SenkoSetLanguage(SenkoLanguageRussian);
-        else if (buttonIndex == 3) SenkoSetLanguage(SenkoLanguageChinese);
-        return;
-    }
-    if (alert.tag == 4207) {
-        if (buttonIndex == alert.cancelButtonIndex) return;
-        if (buttonIndex == alert.firstOtherButtonIndex) [self exportBackup];
-        else if (buttonIndex == alert.firstOtherButtonIndex + 1) [self openBackupBrowser];
-        else [self exportKaringBackup];
-        return;
-    }
-    if (alert.tag == 4205) {
-        if (buttonIndex == alert.cancelButtonIndex) return;
-        static const char *const limits[] = { "0", "3", "5", "10" };
-        NSInteger pick = buttonIndex - 1;
-        if (pick < 0 || pick >= (NSInteger)(sizeof limits / sizeof limits[0])) return;
-        [self applySetting:@"reconnect_max_attempts"
-                     value:[NSString stringWithUTF8String:limits[pick]]];
-        return;
-    }
-    if (alert.tag == 4206) {
-        if (buttonIndex == alert.cancelButtonIndex) return;
-        [self applyEditedText:[[alert textFieldAtIndex:0] text]];
-        return;
-    }
-    if (alert.tag == 4204) {
-        if (buttonIndex == alert.cancelButtonIndex) return;
-        static const char *const hours[] = { "0", "6", "12", "24" };
-        NSInteger pick = buttonIndex - 1;
-        if (pick < 0 || pick >= (NSInteger)(sizeof hours / sizeof hours[0])) return;
-        [self applySetting:@"sub_refresh_hours"
-                     value:[NSString stringWithUTF8String:hours[pick]]];
-        return;
-    }
-    if (alert.tag != 4201 || buttonIndex == alert.cancelButtonIndex) return;
+- (void)restoreStagedBackup {
     NSData *data = [NSData dataWithContentsOfFile:_pendingBackupPath];
     NSString *dir = @"/var/mobile/Library/Preferences/Senko";
     [[NSFileManager defaultManager] createDirectoryAtPath:dir
@@ -921,12 +854,8 @@ static NSString *SenkoTextSettingKey(SenkoSettingsRow row) {
 - (void)editServerVC:(EditServerVC *)vc saveLink:(NSString *)link index:(int)idx {
     [_ctl replaceServerIndex:idx link:link reply:^(NSString *reply) {
         if (!reply || [reply hasPrefix:@"ERR"]) {
-            UIAlertView *alert = [[[UIAlertView alloc] initWithTitle:@"Could not update profile"
-                                                               message:reply ?: @"daemon offline"
-                                                              delegate:nil
-                                                     cancelButtonTitle:@"OK"
-                                                     otherButtonTitles:nil] autorelease];
-            [alert show];
+            SenkoDialogAlert(@"Could not update profile", reply ?: @"daemon offline",
+                             SenkoDialogMoodError);
             return;
         }
         SenkoDismissModal(vc, nil);

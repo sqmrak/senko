@@ -4,8 +4,6 @@
 #import "ui_theme.h"
 #import "app_common.h"
 
-#define DEV_CHECK_SHEET_MODE   4401
-#define DEV_CHECK_SHEET_SERVER 4402
 
 /* the daemon's own words, kept in one place so a renamed button cannot start
    sending a mode the check parser does not know */
@@ -153,64 +151,39 @@ static NSString *CheckModeTitle(NSString *mode) {
     else [self runCheck];
 }
 
-/* a sheet rather than an alert: an alert with nine buttons runs off a 3.5 inch
-   screen, which is the screen this section exists for */
-- (UIActionSheet *)sheetWithTitle:(NSString *)title tag:(NSInteger)tag {
-    UIActionSheet *sheet = [[[UIActionSheet alloc]
-             initWithTitle:title
-                  delegate:self
-         cancelButtonTitle:nil
-    destructiveButtonTitle:nil
-         otherButtonTitles:nil] autorelease];
-    sheet.tag = tag;
-    return sheet;
-}
-
-- (void)showSheet:(UIActionSheet *)sheet {
-    sheet.cancelButtonIndex = [sheet addButtonWithTitle:SenkoLocalizedText(@"Cancel")];
-    [sheet showInView:self.view];
-}
-
+/* a list rather than buttons: nine buttons run off a 3.5 inch screen, which is
+   the screen this section exists for, and the card scrolls its own list */
 - (void)showModePicker {
-    UIActionSheet *sheet = [self sheetWithTitle:SenkoLocalizedText(@"Mode")
-                                            tag:DEV_CHECK_SHEET_MODE];
+    NSMutableArray *labels = [NSMutableArray array];
     for (int i = 0; i < DEV_CHECK_MODE_COUNT; ++i)
-        [sheet addButtonWithTitle:CheckModeTitle(kCheckModes[i])];
-    [self showSheet:sheet];
+        [labels addObject:CheckModeTitle(kCheckModes[i])];
+    SenkoDialogMenu(SenkoLocalizedText(@"Mode"), nil, labels, ^(NSInteger index) {
+        if (index < 0 || index >= DEV_CHECK_MODE_COUNT) return;
+        [_mode release];
+        _mode = [kCheckModes[index] copy];
+        [_tv reloadData];
+    });
 }
 
-/* a sheet still has to fit, so a long catalog is picked from the server list
-   and only the head of it is offered here */
+/* a long catalog is picked from the server list and only the head of it is
+   offered here */
 #define DEV_CHECK_PICK_MAX 8
 
 - (void)showServerPicker {
     if (![_servers count]) return;
-    UIActionSheet *sheet = [self sheetWithTitle:SenkoLocalizedText(@"Server")
-                                            tag:DEV_CHECK_SHEET_SERVER];
     NSUInteger shown = MIN((NSUInteger)DEV_CHECK_PICK_MAX, [_servers count]);
+    NSMutableArray *labels = [NSMutableArray array];
     for (NSUInteger i = 0; i < shown; ++i) {
         SenkoServer *server = [_servers objectAtIndex:i];
-        [sheet addButtonWithTitle:[NSString stringWithFormat:@"#%d %@",
-                                   server->index, [server->remark length]
-                                       ? server->remark : server->host]];
+        [labels addObject:[NSString stringWithFormat:@"#%d %@",
+                           server->index, [server->remark length]
+                               ? server->remark : server->host]];
     }
-    [self showSheet:sheet];
-}
-
-- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
-    if (index == sheet.cancelButtonIndex || index < 0) return;
-    if (sheet.tag == DEV_CHECK_SHEET_MODE) {
-        if (index >= DEV_CHECK_MODE_COUNT) return;
-        [_mode release];
-        _mode = [kCheckModes[index] copy];
-        [_tv reloadData];
-        return;
-    }
-    if (sheet.tag == DEV_CHECK_SHEET_SERVER) {
-        if (index >= (NSInteger)[_servers count]) return;
+    SenkoDialogMenu(SenkoLocalizedText(@"Server"), nil, labels, ^(NSInteger index) {
+        if (index < 0 || index >= (NSInteger)[_servers count]) return;
         _serverIndex = ((SenkoServer *)[_servers objectAtIndex:index])->index;
         [_tv reloadData];
-    }
+    });
 }
 
 - (void)runCheck {

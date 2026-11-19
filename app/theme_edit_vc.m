@@ -263,12 +263,11 @@ static NSString * const kChannelNames[4] = { @"R", @"G", @"B", @"A" };
 @end
 
 @interface ThemeEditVC () <UITableViewDataSource, UITableViewDelegate,
-                           UITextFieldDelegate, UIAlertViewDelegate> {
+                           UITextFieldDelegate> {
     UITableView *_tv;
     NSString *_themeId;
     NSMutableDictionary *_draft;
     BOOL _light;
-    NSInteger _pendingAction; /* 1 delete */
 }
 @end
 
@@ -580,13 +579,7 @@ static ThemeControlCell *SenkoCellOf(UIView *view) {
 }
 
 - (void)showMessage:(NSString *)title body:(NSString *)body {
-    UIAlertView *a = [[UIAlertView alloc] initWithTitle:title
-                                                message:body
-                                               delegate:nil
-                                      cancelButtonTitle:SenkoLocalizedText(@"OK")
-                                      otherButtonTitles:nil];
-    [a show];
-    [a release];
+    SenkoDialogAlert(title, body, SenkoDialogMoodAuto);
 }
 
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
@@ -621,25 +614,12 @@ static ThemeControlCell *SenkoCellOf(UIView *view) {
         return;
     }
     if (ip.section == SecActions && ip.row == 1) {
-        _pendingAction = 1;
-        UIAlertView *a = [[UIAlertView alloc]
-            initWithTitle:SenkoLocalizedText(@"Delete theme?")
-                  message:SenkoCustomDraftName(_draft)
-                 delegate:self
-        cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-        otherButtonTitles:SenkoLocalizedText(@"Remove"), nil];
-        [a show];
-        [a release];
+        SenkoDialogConfirm(SenkoLocalizedText(@"Delete theme?"), SenkoCustomDraftName(_draft),
+                           SenkoLocalizedText(@"Remove"), YES, ^{
+            SenkoCustomDelete(_themeId);
+            [self.navigationController popViewControllerAnimated:YES];
+        });
     }
-}
-
-- (void)alertView:(UIAlertView *)alert clickedButtonAtIndex:(NSInteger)idx {
-    (void)alert;
-    if (_pendingAction == 1 && idx == 1) {
-        SenkoCustomDelete(_themeId);
-        [self.navigationController popViewControllerAnimated:YES];
-    }
-    _pendingAction = 0;
 }
 
 @end

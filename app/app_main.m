@@ -418,13 +418,7 @@ NSString *SenkoFormatRate(double bytesPerSecond) {
                                           "is running with the stock theme. The "
                                           "report is in Logs."),
                       SenkoCrashFailedLaunches()];
-    UIAlertView *a = [[[UIAlertView alloc]
-                       initWithTitle:SenkoLocalizedText(@"Safe mode")
-                             message:body
-                            delegate:nil
-                   cancelButtonTitle:SenkoLocalizedText(@"OK")
-                   otherButtonTitles:nil] autorelease];
-    [a show];
+    SenkoDialogAlert(SenkoLocalizedText(@"Safe mode"), body, SenkoDialogMoodError);
 }
 
 - (void)applyThemeAppearance:(NSNotification *)note {

@@ -4,14 +4,9 @@
 #import "ui_theme.h"
 #import "app_common.h"
 #import "crash_report.h"
-#import "text_prompt.h"
 
 #include <objc/message.h>
 
-#define RULES_ALERT_VALUE   4301
-#define RULES_ALERT_MESSAGE 4302
-#define RULES_SHEET_ACTION  4311
-#define RULES_SHEET_TYPE    4312
 
 /* the daemon's own vocabulary, kept in one place so a renamed button cannot
    start sending a word the rule parser does not know */
@@ -106,6 +101,7 @@ static NSString *RuleTypeTitle(NSString *type) {
 - (void)viewWillAppear:(BOOL)animated {
     SenkoCrashScreen("rules");
     [super viewWillAppear:animated];
+    SenkoMotionStaggerRows(_tv);
     if (self.navigationController)
         StyleNavBarClassic(self.navigationController);
     [self reloadRules];
@@ -133,46 +129,34 @@ static NSString *RuleTypeTitle(NSString *type) {
 }
 
 - (void)showMessage:(NSString *)body {
-    UIAlertView *a = [[UIAlertView alloc] initWithTitle:SenkoLocalizedText(@"Routing rules")
-                                                message:SenkoHumanReadableError(body)
-                                               delegate:nil
-                                      cancelButtonTitle:@"OK"
-                                      otherButtonTitles:nil];
-    a.tag = RULES_ALERT_MESSAGE;
-    [a show];
-    [a release];
+    SenkoDialogAlert(SenkoLocalizedText(@"Routing rules"), SenkoHumanReadableError(body),
+                     SenkoDialogMoodError);
 }
 
 - (void)addTapped {
-    UIActionSheet *sheet = [[UIActionSheet alloc]
-             initWithTitle:SenkoLocalizedText(@"What should happen to the traffic?")
-                  delegate:self
-         cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-    destructiveButtonTitle:nil
-         otherButtonTitles:RuleActionTitle(kRuleActions[0]),
-                           RuleActionTitle(kRuleActions[1]),
-                           RuleActionTitle(kRuleActions[2]), nil];
-    sheet.tag = RULES_SHEET_ACTION;
-    [sheet showInView:self.view];
-    [sheet release];
+    NSMutableArray *labels = [NSMutableArray array];
+    for (int i = 0; i < 3; ++i) [labels addObject:RuleActionTitle(kRuleActions[i])];
+    SenkoDialogMenu(SenkoLocalizedText(@"What should happen to the traffic?"), nil, labels,
+                    ^(NSInteger index) {
+        if (index < 0 || index > 2) return;
+        [_pendingAction release];
+        _pendingAction = [kRuleActions[index] copy];
+        [self askForType];
+    });
 }
 
 - (void)askForType {
-    UIActionSheet *sheet = [[UIActionSheet alloc]
-             initWithTitle:SenkoLocalizedText(@"What should it match?")
-                  delegate:self
-         cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-    destructiveButtonTitle:nil
-         otherButtonTitles:RuleTypeTitle(kRuleTypes[0]),
-                           RuleTypeTitle(kRuleTypes[1]),
-                           RuleTypeTitle(kRuleTypes[2]), nil];
-    sheet.tag = RULES_SHEET_TYPE;
-    [sheet showInView:self.view];
-    [sheet release];
+    NSMutableArray *labels = [NSMutableArray array];
+    for (int i = 0; i < 3; ++i) [labels addObject:RuleTypeTitle(kRuleTypes[i])];
+    SenkoDialogMenu(SenkoLocalizedText(@"What should it match?"), nil, labels,
+                    ^(NSInteger index) {
+        if (index < 0 || index > 2) return;
+        [_pendingType release];
+        _pendingType = [kRuleTypes[index] copy];
+        [self askForValue];
+    });
 }
 
-/* a plain text alert is the only input control that behaves the same from
-   ios 5 to ios 15; ios 4.3 has no text alert and gets a small screen */
 - (void)askForValue {
     NSString *hint = [_pendingType isEqualToString:@"ip-cidr"]
         ? SenkoLocalizedText(@"For example 10.0.0.0/8")
@@ -181,52 +165,14 @@ static NSString *RuleTypeTitle(NSString *type) {
             : SenkoLocalizedText(@"For example example.com");
     UIKeyboardType keyboard = [_pendingType isEqualToString:@"ip-cidr"]
         ? UIKeyboardTypeNumbersAndPunctuation : UIKeyboardTypeURL;
-    if (![UIAlertView instancesRespondToSelector:@selector(setAlertViewStyle:)]) {
-        [SenkoTextPromptVC presentFrom:self
-                                 title:RuleActionTitle(_pendingAction)
-                               message:hint
-                                  text:nil
-                              keyboard:keyboard
-                               confirm:SenkoLocalizedText(@"Add")
-                               handler:^(NSString *text) { [self addRuleValue:text]; }];
-        return;
-    }
-    UIAlertView *a = [[UIAlertView alloc]
-        initWithTitle:RuleActionTitle(_pendingAction)
-              message:hint
-             delegate:self
-    cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-    otherButtonTitles:SenkoLocalizedText(@"Add"), nil];
-    a.tag = RULES_ALERT_VALUE;
-    a.alertViewStyle = UIAlertViewStylePlainTextInput;
-    UITextField *field = [a textFieldAtIndex:0];
-    field.autocapitalizationType = UITextAutocapitalizationTypeNone;
-    field.autocorrectionType = UITextAutocorrectionTypeNo;
-    field.keyboardType = keyboard;
-    field.placeholder = SenkoLocalizedText(@"Value");
-    [a show];
-    [a release];
-}
-
-- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
-    if (index == sheet.cancelButtonIndex) return;
-    if (index < 0 || index > 2) return;
-    if (sheet.tag == RULES_SHEET_ACTION) {
-        [_pendingAction release];
-        _pendingAction = [kRuleActions[index] copy];
-        [self askForType];
-        return;
-    }
-    if (sheet.tag == RULES_SHEET_TYPE) {
-        [_pendingType release];
-        _pendingType = [kRuleTypes[index] copy];
-        [self askForValue];
-    }
-}
-
-- (void)alertView:(UIAlertView *)alert clickedButtonAtIndex:(NSInteger)index {
-    if (alert.tag != RULES_ALERT_VALUE || index == alert.cancelButtonIndex) return;
-    [self addRuleValue:[[alert textFieldAtIndex:0] text]];
+    SenkoDialog *dialog = [SenkoDialog dialogWithTitle:RuleActionTitle(_pendingAction)
+                                               message:hint];
+    [dialog addTextFieldWithText:nil placeholder:@"Value" keyboard:keyboard];
+    [dialog addButtonWithTitle:@"Cancel" style:SenkoDialogButtonCancel handler:nil];
+    [dialog addButtonWithTitle:@"Add" style:SenkoDialogButtonNormal handler:^(SenkoDialog *d) {
+        [self addRuleValue:d.textField.text];
+    }];
+    [dialog show];
 }
 
 - (void)addRuleValue:(NSString *)text {

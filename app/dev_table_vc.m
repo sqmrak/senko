@@ -116,6 +116,7 @@
 - (void)viewWillAppear:(BOOL)animated {
     SenkoCrashScreen([self devScreenName]);
     [super viewWillAppear:animated];
+    SenkoMotionStaggerRows(_tv);
     if (self.navigationController)
         StyleNavBarClassic(self.navigationController);
 }
@@ -241,32 +242,16 @@
 }
 
 - (void)devSay:(NSString *)title message:(NSString *)message {
-    UIAlertView *a = [[[UIAlertView alloc]
-        initWithTitle:title
-              message:message
-             delegate:nil
-    cancelButtonTitle:@"OK"
-    otherButtonTitles:nil] autorelease];
-    [a show];
+    SenkoDialogAlert(title, message, SenkoDialogMoodAuto);
 }
 
 /* nothing on these screens is undone by tapping again, so each one asks before
    it runs and names what it will remove */
 - (void)devConfirm:(NSString *)title message:(NSString *)message
             button:(NSString *)button tag:(NSInteger)tag {
-    UIAlertView *a = [[[UIAlertView alloc]
-        initWithTitle:title
-              message:message
-             delegate:self
-    cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-    otherButtonTitles:button, nil] autorelease];
-    a.tag = tag;
-    [a show];
-}
-
-- (void)alertView:(UIAlertView *)alert clickedButtonAtIndex:(NSInteger)index {
-    if (index == alert.cancelButtonIndex) return;
-    [self devConfirmed:alert.tag];
+    SenkoDialogConfirm(title, message, button, YES, ^{
+        [self devConfirmed:tag];
+    });
 }
 
 @end
@@ -339,13 +324,8 @@
 
 - (void)copyBody {
     [[UIPasteboard generalPasteboard] setString:_body ?: @""];
-    UIAlertView *done = [[[UIAlertView alloc]
-        initWithTitle:_pageTitle
-              message:SenkoLocalizedText(@"Copied to the clipboard.")
-             delegate:nil
-    cancelButtonTitle:@"OK"
-    otherButtonTitles:nil] autorelease];
-    [done show];
+    SenkoDialogAlert(_pageTitle, SenkoLocalizedText(@"Copied to the clipboard."),
+                     SenkoDialogMoodHappy);
 }
 
 @end

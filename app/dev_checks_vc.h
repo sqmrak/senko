@@ -6,7 +6,7 @@
 /* the four check modes exist already; the normal ui runs one of them behind a
    single button. here the mode is chosen by hand and the stage the path stops
    at is what the screen is for */
-@interface DevChecksVC : DevTableVC <UIActionSheetDelegate> {
+@interface DevChecksVC : DevTableVC {
     NSArray  *_servers;
     NSArray  *_stages;
     NSString *_mode;

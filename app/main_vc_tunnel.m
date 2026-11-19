@@ -472,7 +472,7 @@ static void senkoClearStatus(void) {
         return;
     }
     EditAWGVC *editor = [[[EditAWGVC alloc] initWithConfig:config delegate:self] autorelease];
-    UINavigationController *nav = [[[UINavigationController alloc]
+    UINavigationController *nav = [[[SenkoNavigationController alloc]
                                     initWithRootViewController:editor] autorelease];
     StyleNavBarClassic(nav);
     nav.modalPresentationStyle = UIModalPresentationFullScreen;
@@ -610,59 +610,46 @@ static void senkoClearStatus(void) {
 /* the manual group owns the saved amneziawg profile and the single step that
    empties the group, so both live in one flat sheet */
 - (void)showManualMenu {
-    [self dismissCurrentActionSheetAnimated:NO];
+    [self dismissCurrentDialog];
     BOOL canClear = [self hasManualServers];
     BOOL hasAWG = [self hasAWGProfile];
     if (!canClear && !hasAWG) return;
-    UIActionSheet *as = nil;
-    if (hasAWG && [self hasPremiumProfile]) {
-        /* the premium rows come last so the four amneziawg indexes keep their meaning */
-        NSString *country = [NSString stringWithFormat:@"%@: %@",
-                             SenkoLocalizedText(@"Premium country"),
-                             [self premiumCountryName] ? [self premiumCountryName] : @"-"];
-        as = [[UIActionSheet alloc]
-              initWithTitle:SenkoLocalizedText(@"Manual")
-              delegate:self
-              cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-              destructiveButtonTitle:canClear ? SenkoLocalizedText(@"Delete all servers") : nil
-              otherButtonTitles:SenkoLocalizedText(@"AmneziaWG: refresh"),
-                                SenkoLocalizedText(@"AmneziaWG: check ping"),
-                                SenkoLocalizedText(@"AmneziaWG: edit details"),
-                                SenkoLocalizedText(@"AmneziaWG: remove profile"),
-                                country,
-                                SenkoLocalizedText(@"Premium: new profile"), nil];
-    } else if (hasAWG) {
-        as = [[UIActionSheet alloc]
-              initWithTitle:SenkoLocalizedText(@"Manual")
-              delegate:self
-              cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-              destructiveButtonTitle:canClear ? SenkoLocalizedText(@"Delete all servers") : nil
-              otherButtonTitles:SenkoLocalizedText(@"AmneziaWG: refresh"),
-                                SenkoLocalizedText(@"AmneziaWG: check ping"),
-                                SenkoLocalizedText(@"AmneziaWG: edit details"),
-                                SenkoLocalizedText(@"AmneziaWG: remove profile"), nil];
-    } else {
-        as = [[UIActionSheet alloc]
-              initWithTitle:SenkoLocalizedText(@"Manual")
-              delegate:self
-              cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-              destructiveButtonTitle:SenkoLocalizedText(@"Delete all servers")
-              otherButtonTitles:nil];
+    SenkoDialog *dialog = [SenkoDialog dialogWithTitle:@"Manual" message:nil];
+    if (hasAWG) {
+        void (^awgRow)(NSString *, SEL) = ^(NSString *title, SEL action) {
+            [dialog addItemWithTitle:title handler:^(SenkoDialog *d) {
+                (void)d;
+                [self performSelector:action withObject:nil];
+            }];
+        };
+        awgRow(@"AmneziaWG: refresh", @selector(awgRefreshTapped:));
+        awgRow(@"AmneziaWG: check ping", @selector(awgPingTapped:));
+        awgRow(@"AmneziaWG: edit details", @selector(editAWGProfile));
+        awgRow(@"AmneziaWG: remove profile", @selector(removeSavedAWGProfile));
+        if ([self hasPremiumProfile]) {
+            NSString *country = [NSString stringWithFormat:@"%@: %@",
+                                 SenkoLocalizedText(@"Premium country"),
+                                 [self premiumCountryName] ? [self premiumCountryName] : @"-"];
+            awgRow(country, @selector(showPremiumCountries));
+            awgRow(@"Premium: new profile", @selector(refreshPremiumProfile));
+        }
     }
-    as.tag = 42;
-    _actionSheet = as;
-    [as showInView:self.view];
+    [dialog addButtonWithTitle:@"Cancel" style:SenkoDialogButtonCancel handler:nil];
+    if (canClear)
+        [dialog addButtonWithTitle:@"Delete all servers" style:SenkoDialogButtonDestructive
+                           handler:^(SenkoDialog *d) {
+            (void)d;
+            [self confirmClearManual];
+        }];
+    [self presentDialog:dialog];
 }
 
 - (void)confirmClearManual {
-    UIAlertView *av = [[[UIAlertView alloc]
-        initWithTitle:SenkoLocalizedText(@"Delete all servers")
-              message:SenkoLocalizedText(@"Every server in the Manual group is removed. Subscriptions are not touched.")
-             delegate:self
-    cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-    otherButtonTitles:SenkoLocalizedText(@"Delete"), nil] autorelease];
-    av.tag = 5;
-    [av show];
+    SenkoDialogConfirm(@"Delete all servers",
+                       @"Every server in the Manual group is removed. Subscriptions are not touched.",
+                       @"Delete", YES, ^{
+        [self clearManualServers];
+    });
 }
 
 - (void)clearManualServers {

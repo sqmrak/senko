@@ -14,13 +14,11 @@ static NSString * const kAboutGlyph = @"g";
 static NSString * const kAboutImage = @"i";
 static NSString * const kAboutAction = @"a";
 
-static NSString * const kAboutThanks =
-    @"@CookieValerka, @inraxx, @not_a_modder, @s3dativee, @Lineysom, @shizotoaster, "
-    @"@fly1ngangel, @anazerka, @fr0n1k, @vladosik228, @kfrom7, @ningmeng, @Vladus324";
 static NSString * const kAboutSponsors = @"@s3dativee, @shizotoaster, @not_a_modder";
 static NSString * const kAboutTesters =
-    @"@inraxx, @s3dativee, @rafal_official, @QuaIcomm, @belo4kaFLUNI, "
-    @"@Wolfer_QUIC, @koshdevv, @Lineysom, @Lime_iOS6, @ogeprint, @ra1n_developer";
+    @"@menstry,@kfrom7, @Lineysom, @inraxx, @LimeDev, @shizotoaster, "
+    @"@xaxaxaxaxxaxaxaxaxaxaxaxaxaxa, @fly1ngangel, @CookieValerka, @Siqvw, "
+    @"@rakamaqfo, @s3dativee, @appIebionic, @merwleem, @libertea, @not_a_modder";
 
 /* cap the width so ipad landscape rows do not stretch across the screen */
 static CGFloat AboutSideMargin(CGFloat width) {
@@ -377,9 +375,8 @@ static UILabel *AboutHeroLabel(UIView *host, UIFont *font) {
             SenkoLocalizedText(@"Credits"), kAboutTitle,
             [NSArray arrayWithObjects:
                 developer,
-                [self row:@"Special thanks" value:kAboutThanks glyph:@"glyph-bolt.png" action:NULL],
                 [self row:@"Sponsors" value:kAboutSponsors glyph:@"glyph-rocket.png" action:NULL],
-                [self row:@"Testers" value:kAboutTesters glyph:@"glyph-search.png" action:NULL],
+                [self row:@"Official testers" value:kAboutTesters glyph:@"glyph-search.png" action:NULL],
                 [self row:@"Emoji artwork"
                     value:SenkoLocalizedText(@"Twemoji by Twitter, Inc. and contributors (CC BY 4.0)")
                     glyph:@"glyph-palette.png" action:NULL],
@@ -413,6 +410,7 @@ static UILabel *AboutHeroLabel(UIView *host, UIFont *font) {
 - (void)viewWillAppear:(BOOL)animated {
     SenkoCrashScreen("about");
     [super viewWillAppear:animated];
+    SenkoMotionStaggerRows(_tv);
     SenkoApplyScreenChrome(self.view);
     [_field start];
 }
@@ -533,38 +531,24 @@ static UILabel *AboutHeroLabel(UIView *host, UIFont *font) {
     if ([action length]) [self performSelector:NSSelectorFromString(action)];
 }
 
-- (void)dismissHint:(UIAlertView *)hint {
-    [hint dismissWithClickedButtonIndex:0 animated:YES];
-}
-
 - (void)versionTapped {
     if (SenkoDevMenuEnabled()) return; /* the section turns itself off */
     int left = SenkoDevMenuTapsLeft();
     if (left > 0) {
 /* silence until the third tap, so an accidental double tap says nothing */
         if (left > 2) return;
-        UIAlertView *hint = [[[UIAlertView alloc]
-            initWithTitle:nil
-                  message:[NSString stringWithFormat:
-                           SenkoLocalizedText(@"%d more"), left]
-                 delegate:nil
-        cancelButtonTitle:nil
-        otherButtonTitles:nil] autorelease];
+        /* no button: the card closes itself, and a tap outside does nothing */
+        SenkoDialog *hint = [SenkoDialog dialogWithTitle:nil
+            message:[NSString stringWithFormat:SenkoLocalizedText(@"%d more"), left]];
+        hint.mood = SenkoDialogMoodHappy;
         [hint show];
-/* dismissWithClickedButtonIndex:animated: takes two scalars, which
-   performSelector:withObject: cannot pass, so the delay goes through a method
-   that takes the alert itself */
-        [self performSelector:@selector(dismissHint:) withObject:hint afterDelay:0.6];
+        [hint performSelector:@selector(dismiss) withObject:nil afterDelay:0.6];
         return;
     }
     SenkoSetDevMenuEnabled(YES);
-    UIAlertView *done = [[[UIAlertView alloc]
-        initWithTitle:SenkoLocalizedText(@"Developer settings")
-              message:SenkoLocalizedText(@"Developer settings are now visible in Settings. Tap the section heading five times to hide them again.")
-             delegate:nil
-    cancelButtonTitle:@"OK"
-    otherButtonTitles:nil] autorelease];
-    [done show];
+    SenkoDialogAlert(SenkoLocalizedText(@"Developer settings"),
+                     SenkoLocalizedText(@"Developer settings are now visible in Settings. Tap the section heading five times to hide them again."),
+                     SenkoDialogMoodHappy);
 }
 
 - (void)githubPressed {

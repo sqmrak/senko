@@ -143,9 +143,8 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"Token-authenticated control socket · subscription SSRF protection · secret redaction · real transport checks.", @"Control socket с токеном · защита подписок от SSRF · скрытие секретов в логах · настоящая проверка транспорта.");
     SenkoAddTranslation(@"Links", @"Ссылки");
     SenkoAddTranslation(@"Credits", @"Благодарности");
-    SenkoAddTranslation(@"Special thanks", @"Особая благодарность");
     SenkoAddTranslation(@"Sponsors", @"Спонсоры");
-    SenkoAddTranslation(@"Testers", @"Тестировали");
+    SenkoAddTranslation(@"Official testers", @"Официальные тестеры");
     SenkoAddTranslation(@"Emoji artwork", @"Эмодзи");
     SenkoAddTranslation(@"Twemoji by Twitter, Inc. and contributors (CC BY 4.0)", @"Twemoji от Twitter, Inc. и участников проекта (CC BY 4.0)");
     SenkoAddTranslation(@"system TLS, the compatibility hook is not injected", @"системный TLS, compatibility hook не внедряется");
@@ -526,6 +525,7 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"There was nothing to import.", @"Импортировать нечего.");
     SenkoAddTranslation(@"No configuration is selected. Pick a server first.", @"Ни одна конфигурация не выбрана. Сначала выберите сервер.");
     SenkoAddTranslation(@"The clipboard is empty.", @"Буфер обмена пуст.");
+    SenkoAddTranslation(@"The clipboard has content that Senko is not allowed to read. Allow pasting for Senko in Settings, or copy the link again.", @"В буфере обмена есть данные, но Senko не может их прочитать. Разрешите вставку для Senko в настройках или скопируйте ссылку заново.");
     SenkoAddTranslation(@"The file is empty or could not be read.", @"Файл пуст или его не удалось прочитать.");
     SenkoAddTranslation(@"The subscription refused this device.", @"Подписка отклонила это устройство.");
     SenkoAddTranslation(@"OK", @"ОК");
@@ -569,6 +569,7 @@ static void SenkoBuildTranslations(void) {
     SenkoAddTranslation(@"HWID requires a Cookie request header", @"HWID требует заголовок Cookie");
     SenkoAddTranslation(@"Request header", @"Заголовок запроса");
     SenkoAddTranslation(@"System Logs", @"Системные логи");
+    SenkoAddTranslation(@"Logs", @"Логи");
     SenkoAddTranslation(@"senkod + awg combined", @"senkod + awg вместе");
     SenkoAddTranslation(@"Themes", @"Темы");
     SenkoAddTranslation(@"Update", @"Обновить");
@@ -858,9 +859,8 @@ static void SenkoBuildTranslations(void) {
     SenkoAddChineseTranslation(@"Token-authenticated control socket · subscription SSRF protection · secret redaction · real transport checks.", @"带令牌认证的控制 socket · 防止订阅 SSRF · 日志隐藏密钥 · 真实传输检查。");
     SenkoAddChineseTranslation(@"Links", @"链接");
     SenkoAddChineseTranslation(@"Credits", @"致谢");
-    SenkoAddChineseTranslation(@"Special thanks", @"特别感谢");
     SenkoAddChineseTranslation(@"Sponsors", @"赞助者");
-    SenkoAddChineseTranslation(@"Testers", @"测试者");
+    SenkoAddChineseTranslation(@"Official testers", @"官方测试者");
     SenkoAddChineseTranslation(@"Emoji artwork", @"表情图案");
     SenkoAddChineseTranslation(@"Twemoji by Twitter, Inc. and contributors (CC BY 4.0)", @"Twitter, Inc. 及贡献者的 Twemoji（CC BY 4.0）");
     SenkoAddChineseTranslation(@"system TLS, the compatibility hook is not injected", @"系统 TLS，不注入兼容性 hook");
@@ -957,6 +957,7 @@ static void SenkoBuildTranslations(void) {
     SenkoAddChineseTranslation(@"Dark", @"深色");
     SenkoAddChineseTranslation(@"Light", @"浅色");
     SenkoAddChineseTranslation(@"System Logs", @"系统日志");
+    SenkoAddChineseTranslation(@"Logs", @"日志");
     SenkoAddChineseTranslation(@"senkod + awg combined", @"senkod + awg 合并日志");
     SenkoAddChineseTranslation(@"Karing export includes servers and subscriptions.", @"Karing 导出包含服务器和订阅。");
     SenkoAddChineseTranslation(@"Export Karing backup", @"导出 Karing 备份");
@@ -1366,6 +1367,7 @@ static void SenkoBuildTranslations(void) {
     SenkoAddChineseTranslation(@"The Happ crypt5 bundle on this page could not be opened. It is either damaged or sealed with a key this build does not carry.", @"无法打开此页面的 Happ crypt5 配置包。文件可能损坏，或使用了当前版本没有的密钥。");
     SenkoAddChineseTranslation(@"The Senko service is not responding. Restart it and try again.", @"Senko 服务没有响应。请重启后重试。");
     SenkoAddChineseTranslation(@"The clipboard is empty.", @"剪贴板为空。");
+    SenkoAddChineseTranslation(@"The clipboard has content that Senko is not allowed to read. Allow pasting for Senko in Settings, or copy the link again.", @"剪贴板中有内容，但 Senko 无权读取。请在设置中允许 Senko 粘贴，或重新复制链接。");
     SenkoAddChineseTranslation(@"The connect hook could not start. Check that senkotlsfix is installed, or pick another backend.", @"连接钩子无法启动。请检查是否已安装 senkotlsfix，或选择其他后端。");
     SenkoAddChineseTranslation(@"The connection attempt timed out. Check the network and try another server.", @"连接超时。请检查网络并尝试其他服务器。");
     SenkoAddChineseTranslation(@"The daemon runs these on its own, with the app closed.", @"即使应用关闭，守护进程也会自动执行这些操作。");
@@ -1718,6 +1720,8 @@ NSString *SenkoHumanReadableError(NSString *text) {
         message = @"No configuration is selected. Pick a server first.";
     else if ([raw isEqualToString:@"the clipboard is empty"])
         message = @"The clipboard is empty.";
+    else if ([raw isEqualToString:@"the clipboard is unreadable"])
+        message = @"The clipboard has content that Senko is not allowed to read. Allow pasting for Senko in Settings, or copy the link again.";
     else if ([raw isEqualToString:@"the file is empty or could not be read"])
         message = @"The file is empty or could not be read.";
     else if ([raw hasPrefix:kGatePrefix])

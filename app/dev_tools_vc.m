@@ -250,32 +250,22 @@ static NSString *BlockTitle(NSString *value) {
 - (void)showPicker:(NSInteger)tag {
     NSString *title = tag == DEV_SHEET_BACKEND ? SenkoLocalizedText(@"Backend")
                     : SenkoLocalizedText(@"Blocked answers");
-    UIActionSheet *sheet = [[[UIActionSheet alloc]
-             initWithTitle:title
-                  delegate:self
-         cancelButtonTitle:nil
-    destructiveButtonTitle:nil
-         otherButtonTitles:nil] autorelease];
+    NSMutableArray *labels = [NSMutableArray array];
     if (tag == DEV_SHEET_BACKEND) {
         for (int i = 0; i < DEV_BACKEND_COUNT; ++i)
-            [sheet addButtonWithTitle:BackendTitle(kBackendValues[i])];
+            [labels addObject:BackendTitle(kBackendValues[i])];
     } else {
         for (int i = 0; i < DEV_BLOCK_COUNT; ++i)
-            [sheet addButtonWithTitle:BlockTitle(kBlockValues[i])];
+            [labels addObject:BlockTitle(kBlockValues[i])];
     }
-    sheet.tag = tag;
-    sheet.cancelButtonIndex = [sheet addButtonWithTitle:SenkoLocalizedText(@"Cancel")];
-    [sheet showInView:self.view];
-}
-
-- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
-    if (index == sheet.cancelButtonIndex || index < 0) return;
-    if (sheet.tag == DEV_SHEET_BACKEND) {
-        if (index < DEV_BACKEND_COUNT) [self apply:@"force_backend" value:kBackendValues[index]];
-        return;
-    }
-    if (sheet.tag == DEV_SHEET_BLOCK && index < DEV_BLOCK_COUNT)
-        [self apply:@"block_response" value:kBlockValues[index]];
+    SenkoDialogMenu(title, nil, labels, ^(NSInteger index) {
+        if (tag == DEV_SHEET_BACKEND) {
+            if (index < DEV_BACKEND_COUNT) [self apply:@"force_backend" value:kBackendValues[index]];
+            return;
+        }
+        if (tag == DEV_SHEET_BLOCK && index < DEV_BLOCK_COUNT)
+            [self apply:@"block_response" value:kBlockValues[index]];
+    });
 }
 
 - (void)devConfirmed:(NSInteger)tag {
@@ -467,14 +457,12 @@ static NSString *BlockTitle(NSString *value) {
         [self writeBundle];
         return;
     }
-    UIActionSheet *sheet = [[[UIActionSheet alloc]
-        initWithTitle:SenkoLocalizedText(@"Test fixtures")
-              delegate:self cancelButtonTitle:SenkoLocalizedText(@"Cancel")
-        destructiveButtonTitle:nil otherButtonTitles:
-        SenkoLocalizedText(@"Long names"), SenkoLocalizedText(@"Duplicates"),
-        SenkoLocalizedText(@"Empty manual list"), nil] autorelease];
-    sheet.tag = DEV_SHEET_FIXTURES;
-    [sheet showInView:self.view];
+    NSArray *labels = [NSArray arrayWithObjects:SenkoLocalizedText(@"Long names"),
+                       SenkoLocalizedText(@"Duplicates"),
+                       SenkoLocalizedText(@"Empty manual list"), nil];
+    SenkoDialogMenu(SenkoLocalizedText(@"Test fixtures"), nil, labels, ^(NSInteger index) {
+        [self fixtureChosen:index];
+    });
 }
 
 - (void)addFixtureLinks:(NSArray *)links at:(NSUInteger)index {
@@ -491,8 +479,7 @@ static NSString *BlockTitle(NSString *value) {
     }];
 }
 
-- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
-    if (sheet.tag != DEV_SHEET_FIXTURES || index == sheet.cancelButtonIndex) return;
+- (void)fixtureChosen:(NSInteger)index {
     if (index == 2) {
         [self devConfirm:SenkoLocalizedText(@"Empty manual list")
                  message:SenkoLocalizedText(@"Only manually added servers are removed.")

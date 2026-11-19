@@ -499,28 +499,20 @@ static void ServerPingButtonBusy(UIButton *button, BOOL busy) {
     _card.transform = CGAffineTransformConcat(CGAffineTransformMakeTranslation(0, travel),
                                                CGAffineTransformMakeScale(0.985f, 0.985f));
     _card.alpha = 0.0f;
-    /* one short transform is smoother than a two-step overshoot on the older
-       gpu. limiting the travel also avoids moving the sheet's whole backing
-       store across the screen before its controls can be used. */
-    [UIView animateWithDuration:0.24
-                          delay:0
-                        options:UIViewAnimationOptionBeginFromCurrentState |
-                                UIViewAnimationOptionCurveEaseOut
-                     animations:^{
-        _backdrop.alpha = 1.0f;
-        _card.transform = CGAffineTransformIdentity;
-        _card.alpha = 1.0f;
-    } completion:NULL];
+    /* limiting the travel avoids moving the sheet's whole backing store across
+       the screen before its controls can be used */
+    SenkoMotionAnimate(_backdrop, CGAffineTransformIdentity, 1.0f, SENKO_MOTION_POPUP_ENTER, 0.0, nil);
+    SenkoMotionAnimate(_card, CGAffineTransformIdentity, 1.0f, SENKO_MOTION_POPUP_ENTER, 0.0, nil);
 }
 
 - (void)dismiss {
     if (_dismissing) return;
     _dismissing = YES;
     CGFloat travel = self.bounds.size.height - _card.frame.origin.y;
-    SenkoAnimate(0.18, ^{
-        _backdrop.alpha = 0.0f;
-        _card.transform = CGAffineTransformMakeTranslation(0, travel);
-    }, ^(BOOL done) {
+    SenkoMotionAnimate(_card, CGAffineTransformMakeTranslation(0, travel), _card.alpha,
+                       SENKO_MOTION_POPUP_EXIT, 0.0, nil);
+    SenkoMotionAnimate(_backdrop, CGAffineTransformIdentity, 0.0f, SENKO_MOTION_POPUP_EXIT, 0.0,
+                       ^(BOOL done) {
         (void)done;
         [self removeFromSuperview];
     });
@@ -579,10 +571,8 @@ static void ServerPingButtonBusy(UIButton *button, BOOL busy) {
             [self dismiss];
             return;
         }
-        SenkoAnimateSpring(0.34, 0, ^{
-            _card.transform = CGAffineTransformIdentity;
-            _backdrop.alpha = 1.0f;
-        }, NULL);
+        SenkoMotionAnimate(_card, CGAffineTransformIdentity, _card.alpha, SENKO_MOTION_SPRING, 0.0, nil);
+        SenkoMotionAnimate(_backdrop, CGAffineTransformIdentity, 1.0f, SENKO_MOTION_SPRING, 0.0, nil);
     }
 }
 

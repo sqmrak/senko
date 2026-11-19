@@ -5,12 +5,12 @@
 
 /* switches a normal install must not reach: each one either widens what senko
    listens on or stops a fallback from being tried */
-@interface DevTogglesVC : DevTableVC <UIActionSheetDelegate> {
+@interface DevTogglesVC : DevTableVC {
     NSMutableDictionary *_settings;
 }
 @end
 
-@interface DevRescueVC : DevTableVC <UIActionSheetDelegate> {
+@interface DevRescueVC : DevTableVC {
     NSString *_hwid;
 }
 @end

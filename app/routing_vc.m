@@ -87,6 +87,7 @@ typedef enum {
 - (void)viewWillAppear:(BOOL)animated {
     SenkoCrashScreen("routing");
     [super viewWillAppear:animated];
+    SenkoMotionStaggerRows(_tv);
     if (self.navigationController) StyleNavBarClassic(self.navigationController);
     [self reload];
 }

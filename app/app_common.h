@@ -3,6 +3,8 @@
 
 #import <Foundation/Foundation.h>
 #import "ios_compat.h"
+#import "senko_dialog.h"
+#import "senko_animation.h"
 #import "control_client.h"
 #include "../common/senko_paths.h"
 
@@ -135,14 +137,13 @@ void SenkoRelocalizeAllWindows(void);
 @end
 
 @interface SettingsVC : UIViewController <UITableViewDataSource, UITableViewDelegate,
-                                          FileImportDelegate, EditServerDelegate,
-                                          UIAlertViewDelegate>
+                                          FileImportDelegate, EditServerDelegate>
 @end
 
 @interface AboutVC : UIViewController
 @end
 
-@interface LogsVC : UIViewController <UISearchBarDelegate, UIActionSheetDelegate>
+@interface LogsVC : UIViewController <UISearchBarDelegate>
 @end
 
 /* the tunnel session and subscription usage, read from the daemon on its own */
