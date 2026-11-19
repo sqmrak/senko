@@ -38,7 +38,7 @@ typedef struct {
     utun_device_t *device;
     int udp_fd;  /* nonblocking, connected to the server */
     int wake_fd; /* readable when the owner wants the link to stop */
-    pthread_mutex_t *stats_lock; /* guards bytes_up and bytes_down, may be NULL */
+    pthread_mutex_t *stats_lock; /* guards link statistics, may be NULL */
 
     /* where packets from the server go. NULL writes them to the device; an
        owner that shares the device with another writer supplies its own */

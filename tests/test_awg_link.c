@@ -154,7 +154,13 @@ int main(void) {
     ok("bytes are counted both ways",
        link.bytes_up == sizeof ipv4_packet && link.bytes_down == 2 * sizeof ipv4_packet);
     pthread_mutex_unlock(&lock);
-    ok("the junk was counted as dropped", link.dropped >= 1);
+    ok("the junk was counted as an inbound drop",
+       link.dropped == 1 && link.dropped_inbound == 1 && link.dropped_udp == 0 &&
+       link.dropped_device == 0 && link.dropped_outbound == 0);
+    ok("an oversized packet is refused without ending the link",
+       awg_link_send_packet(&link, ipv4_packet, AWG_DATAGRAM_MAX) == 0);
+    ok("the refusal is counted as an outbound drop",
+       link.dropped == 2 && link.dropped_outbound == 1);
     awg_link_clear(&link);
 
     /* keys older than three minutes are refused even before any packet */
@@ -165,13 +171,13 @@ int main(void) {
     ok("a link whose server stopped answering ends",
        awg_link_run(&stale, reason, sizeof reason) == AWG_LINK_ERR_EXPIRED &&
        strstr(reason, "has not answered") != NULL);
+    awg_link_clear(&stale);
 
     /* the device going away ends the link instead of spinning on it */
     int wake2[2];
     pipe(wake2);
     static awg_link_t orphan;
     awg_link_init(&orphan, &cfg, &device, udp[0], wake2[0], &client.handshake, senko_now_ms());
-    awg_link_clear(&stale);
     close(dev[1]);
     runner_t r2 = { &orphan, AWG_LINK_STOPPED, "" };
     pthread_create(&thread, NULL, run, &r2);
@@ -182,13 +188,13 @@ int main(void) {
     if (!r2.reason[0]) write(wake2[1], &one, 1);
     pthread_join(thread, NULL);
     ok("a closed device ends the link", r2.status == AWG_LINK_ERR_DEVICE);
+    awg_link_clear(&orphan);
 
     utun_device_close(&device);
     if (failures) {
         fprintf(stderr, "%d awg link check(s) failed\n", failures);
         return 1;
     }
-    awg_link_clear(&orphan);
     puts("all awg link checks passed");
     return 0;
 }

@@ -498,8 +498,11 @@ int awg_backend_describe(awg_backend_t *backend, int index, char *key, size_t ke
         break;
     default:
         if (backend->link)
-            snprintf(value, value_cap, "%u key renewal(s), %u packet(s) dropped",
-                     (unsigned)backend->link->renewals, (unsigned)backend->link->dropped);
+            snprintf(value, value_cap, "%u key renewal(s), %u packet(s) dropped"
+                     " (udp %u, device %u, inbound %u, outbound %u)",
+                     (unsigned)backend->link->renewals, (unsigned)backend->link->dropped,
+                     (unsigned)backend->link->dropped_udp, (unsigned)backend->link->dropped_device,
+                     (unsigned)backend->link->dropped_inbound, (unsigned)backend->link->dropped_outbound);
         else
             snprintf(value, value_cap, "down");
         break;

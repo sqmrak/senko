@@ -74,6 +74,13 @@ static int transient_udp_error(int err) {
            err == EHOSTDOWN || err == ECONNREFUSED || err == EADDRNOTAVAIL;
 }
 
+static void count_drop(awg_link_t *link, uint32_t *reason) {
+    if (link->stats_lock) pthread_mutex_lock(link->stats_lock);
+    ++link->dropped;
+    ++*reason;
+    if (link->stats_lock) pthread_mutex_unlock(link->stats_lock);
+}
+
 /* 0 when sent or dropped for a transient reason, -1 when the socket is dead */
 static int send_datagram(awg_link_t *link, const uint8_t *data, size_t len) {
     ssize_t sent = send(link->udp_fd, data, len, 0);
@@ -82,7 +89,7 @@ static int send_datagram(awg_link_t *link, const uint8_t *data, size_t len) {
         return 0;
     }
     if (sent >= 0 || transient_udp_error(errno)) {
-        ++link->dropped;
+        count_drop(link, &link->dropped_udp);
         return 0;
     }
     return -1;
@@ -92,7 +99,7 @@ static int send_keepalive(awg_link_t *link) {
     size_t len = 0;
     if (awg_tunnel_seal(&link->current, NULL, 0, link->wire, sizeof link->wire,
                         &len) != AWG_TUN_OK) {
-        ++link->dropped;
+        count_drop(link, &link->dropped_outbound);
         return 0;
     }
     return send_datagram(link, link->wire, len);
@@ -112,7 +119,7 @@ static int seal_and_send(awg_link_t *link, const uint8_t *packet, size_t packet_
     size_t wire_len = 0;
     if (awg_tunnel_seal(&link->current, packet, packet_len, link->wire,
                         sizeof link->wire, &wire_len) != AWG_TUN_OK) {
-        ++link->dropped;
+        count_drop(link, &link->dropped_outbound);
         return 0;
     }
     return send_datagram(link, link->wire, wire_len);
@@ -137,7 +144,7 @@ static int pump_device(awg_link_t *link, uint64_t *up, int *udp_dead) {
         uint8_t address_len = 0;
         if (utun_frame_parse(link->frame, frame_len, &packet, &packet_len,
                              &address_len) != UTUN_FRAME_OK) {
-            ++link->dropped;
+            count_drop(link, &link->dropped_device);
             continue;
         }
         if (seal_and_send(link, packet, packet_len) != 0) {
@@ -156,14 +163,16 @@ static int accept_renewal(awg_link_t *link, const awg_handshake_t *answered) {
     link->have_previous = 1;
     awg_tunnel_init(&link->current, link->cfg);
     link->current.handshake = *answered;
+    link->current.crypto = link->crypto;
     link->handshake_ms = senko_now_ms();
     link->rekey_pending = 0;
     OPENSSL_cleanse(&link->pending, sizeof link->pending);
+    if (link->stats_lock) pthread_mutex_lock(link->stats_lock);
     ++link->renewals;
+    if (link->stats_lock) pthread_mutex_unlock(link->stats_lock);
     return 0;
 }
 
-    link->current.crypto = link->crypto;
 /* server to device. -1 when the socket or the device failed */
 static int pump_udp(awg_link_t *link, uint64_t *down, int *device_dead) {
     for (int i = 0; i < AWG_LINK_BURST; ++i) {
@@ -199,13 +208,13 @@ static int pump_udp(awg_link_t *link, uint64_t *down, int *device_dead) {
             tr = awg_tunnel_open(&link->previous, link->wire, (size_t)got,
                                  inner, inner_cap, &inner_len);
         if (tr != AWG_TUN_OK) {
-            ++link->dropped;
+            count_drop(link, &link->dropped_inbound);
             continue;
         }
         link->last_rx_ms = senko_now_ms();
         if (!inner_len) continue; /* keepalive */
         if (utun_frame_header(inner[0], link->frame) != UTUN_FRAME_OK) {
-            ++link->dropped;
+            count_drop(link, &link->dropped_inbound);
             continue;
         }
         if (link->on_inbound) link->on_inbound(link->inbound_ctx, inner, inner_len);
@@ -216,7 +225,7 @@ static int pump_udp(awg_link_t *link, uint64_t *down, int *device_dead) {
         if (st == UTUN_DEVICE_OK) {
             *down += inner_len;
         } else if (st == UTUN_DEVICE_AGAIN || st == UTUN_DEVICE_ERR_SHORT) {
-            ++link->dropped;
+            count_drop(link, &link->dropped_device);
         } else {
             *device_dead = 1;
             return 0;
@@ -240,15 +249,6 @@ static void start_renewal(awg_link_t *link, int64_t now) {
 
 awg_link_status_t awg_link_begin(awg_link_t *link, char *reason, size_t reason_cap) {
     if (reason && reason_cap) reason[0] = '\0';
-    if (pick_timers(link) != 0) {
-        if (reason && reason_cap)
-            snprintf(reason, reason_cap, "amneziawg timer random generation failed");
-        return AWG_LINK_ERR_EXPIRED;
-    }
-    /* a responder starts sending on new keys only after a packet sealed with
-       them arrives, so a link with nothing to send would leave the server's
-       first packets waiting for a timer */
-    if (send_keepalive(link) != 0) {
     if (!link->crypto) {
         link->crypto = rc_chacha20poly1305_ctx_new();
         if (!link->crypto) {
@@ -259,6 +259,15 @@ awg_link_status_t awg_link_begin(awg_link_t *link, char *reason, size_t reason_c
         link->current.crypto = link->crypto;
         link->previous.crypto = link->crypto;
     }
+    if (pick_timers(link) != 0) {
+        if (reason && reason_cap)
+            snprintf(reason, reason_cap, "amneziawg timer random generation failed");
+        return AWG_LINK_ERR_EXPIRED;
+    }
+    /* a responder starts sending on new keys only after a packet sealed with
+       them arrives, so a link with nothing to send would leave the server's
+       first packets waiting for a timer */
+    if (send_keepalive(link) != 0) {
         set_reason(reason, reason_cap, "the udp socket to the server failed (errno %d)", errno);
         return AWG_LINK_ERR_UDP;
     }
