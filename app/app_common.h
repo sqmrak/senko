@@ -9,7 +9,7 @@
 #include "../common/senko_paths.h"
 
 #define SENKO_SOCK @"/var/tmp/senkod.sock"
-#define SENKO_VERSION @"v4.3.0-stable"
+#define SENKO_VERSION @"v4.4.0-stable"
 /* quick connect: the connect button dials whichever server answers fastest */
 #define SENKO_AUTO_SERVER_KEY @"SenkoAutoServer"
 #define SENKO_SNOW_KEY @"SenkoFallingSnow"
