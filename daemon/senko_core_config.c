@@ -81,13 +81,17 @@ static const char *network_name(vl_net_t net) {
     }
 }
 
-static void append_grpc_service(json_out_t *j, const char *path) {
+static void append_grpc_service(json_out_t *j, const char *path, int multi) {
     char service[256];
     const char *start = path ? path : "";
     if (*start == '/') ++start;
     size_t len = strlen(start);
-    if (strcmp(start, "Tun") == 0) len = 0;
-    else if (len >= 4 && memcmp(start + len - 4, "/Tun", 4) == 0) len -= 4;
+    const char *method = multi ? "TunMulti" : "Tun";
+    size_t method_len = strlen(method);
+    if (strcmp(start, method) == 0) len = 0;
+    else if (len > method_len && start[len - method_len - 1] == '/' &&
+             memcmp(start + len - method_len, method, method_len) == 0)
+        len -= method_len + 1;
     if (len >= sizeof service) {
         j->failed = 1;
         return;
@@ -140,7 +144,8 @@ static int append_stream(json_out_t *j, const vl_server_t *s, const char *ca_fil
         append_raw(j, "}");
     } else if (s->net == VL_NET_GRPC) {
         append_raw(j, ",\"grpcSettings\":{\"serviceName\":");
-        append_grpc_service(j, s->path);
+        append_grpc_service(j, s->path, s->grpc_multi);
+        if (s->grpc_multi) append_raw(j, ",\"multiMode\":true");
         append_raw(j, "}");
     } else if (s->net == VL_NET_XHTTP) {
         append_raw(j, ",\"xhttpSettings\":{\"path\":");

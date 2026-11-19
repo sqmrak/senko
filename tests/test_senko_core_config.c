@@ -179,6 +179,13 @@ int main(int argc, char **argv) {
 
     root = render(
         "vless://11111111-1111-4111-8111-111111111111@example.com:443"
+        "?type=grpc&security=tls&sni=cdn.example.com&serviceName=senko&mode=multi",
+        json, sizeof json);
+    assert(strstr(json, "\"grpcSettings\":{\"serviceName\":\"senko\",\"multiMode\":true}") != NULL);
+    cJSON_Delete(root);
+
+    root = render(
+        "vless://11111111-1111-4111-8111-111111111111@example.com:443"
         "?type=grpc&security=tls&sni=cdn.example.com&serviceName=senko", json, sizeof json);
     assert(strstr(json, "\"grpcSettings\":{\"serviceName\":\"senko\"}") != NULL);
     if (argc == 2 && strcmp(argv[1], "--print-grpc") == 0) {
